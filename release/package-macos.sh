@@ -36,7 +36,7 @@ install -m 0755 "$repo_root/libexec/grads-termview" "$bundle_root/libexec/grads-
 # XQuartz. They are plug-ins, loaded only when asked for, so the archive does
 # not depend on XQuartz: without it, it runs headless, and Cairo still
 # provides the full hardcopy path (printim, print). The terminal display
-# (Term) needs no X server: it shows the picture in iTerm2 or WezTerm.
+# (Term) needs no X server: it shows the picture in the terminal.
 plugin_sources=()
 plugin_stems=()
 
@@ -276,8 +276,9 @@ for display in Cairo X11; do
 done
 
 # The terminal display draws without an X server: it writes the picture to a
-# directory, or prints it as an iTerm2 image sequence. With OPENGRADS_TERM=1,
-# as inside iTerm2 or WezTerm with no X server, the launcher picks it.
+# directory, or prints it as an iTerm2 image sequence (to a pipe, as here).
+# With OPENGRADS_TERM=1, as in a terminal that shows pictures with no X
+# server, the launcher picks it.
 for how in file inline picked; do
   case "$how" in
     file) term_args=(-l -d Term -g 400x300); term_env=(GA_TERM_MODE=file) ;;

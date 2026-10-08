@@ -14,8 +14,11 @@ and updates after each command.
 └──────────────────────────┴──────────────────────────┘
 ```
 
-Pictures are drawn with the iTerm2 inline image protocol, which iTerm2 and
-WezTerm support. Other terminals ignore it or print noise.
+It works in terminals that show pictures: iTerm2 and WezTerm, kitty and
+Ghostty, and those that show sixel (foot, mlterm, Windows Terminal, xterm
+started as `xterm -ti vt340`). GrADS finds out which kind the terminal is,
+and in one that shows none, `-d Term` says so and stops. See
+[Which terminals](#which-terminals).
 
 ## Quick start over ssh
 
@@ -30,10 +33,12 @@ there. When GrADS quits, the pane closes. Outside tmux, each picture is
 printed below the command that drew it instead.
 
 The launcher picks the terminal display when there is no `DISPLAY` and the
-terminal is iTerm2 or WezTerm. It detects iTerm2 from `LC_TERMINAL`, which
-iTerm2 sets and ssh forwards along with the other `LC_*` variables. If your
-ssh or server configuration does not forward it, ask for the terminal
-display explicitly:
+terminal says it shows pictures: iTerm2 sets `LC_TERMINAL`, which ssh
+forwards along with the other `LC_*` variables; WezTerm, kitty, Ghostty,
+mintty, foot and mlterm set `TERM_PROGRAM`, `TERM` or `KITTY_WINDOW_ID`. If
+it then turns out to show none, the pictures go to files. If your ssh or
+server configuration does not forward these, ask for the terminal display
+explicitly:
 
 ```bash
 OPENGRADS_TERM=1 ./opengrads     # or: ./opengrads -l -d Term
@@ -43,11 +48,64 @@ OPENGRADS_TERM=1 ./opengrads     # or: ./opengrads -l -d Term
 available (`ssh -X`), the launcher keeps using the X window unless
 `OPENGRADS_TERM=1` is set.
 
+## Which terminals
+
+When it starts, the display works out which pictures the terminal shows,
+and uses the first it can:
+
+| Pictures | Terminals |
+|---|---|
+| iTerm2 inline images | iTerm2, WezTerm, mintty, VS Code (with images turned on) |
+| kitty graphics | kitty, Ghostty |
+| sixel | foot, mlterm, Windows Terminal 1.22, xterm started as `xterm -ti vt340`, and others |
+
+iTerm2 and WezTerm say who they are in the environment (`LC_TERMINAL`,
+`TERM_PROGRAM`) and are not asked. Any other terminal is asked, with a
+kitty graphics query, XTVERSION (the terminal's name), the size of a
+character cell in pixels, and Device Attributes, which every terminal
+answers and which tell whether it shows sixel. The answers take
+milliseconds, two seconds at most over a very slow link, and nothing shows
+on the screen. Only when the terminal does not answer does GrADS go by
+`TERM` (`xterm-kitty`, `foot`, ...).
+
+Inside tmux the terminal cannot be asked, but tmux has asked it already:
+GrADS goes by the name tmux got back (tmux 3.2 and later), and by whether
+tmux shows sixel itself (tmux 3.4 built with sixel). `tmux -CC` means
+iTerm2.
+
+A terminal that shows none, such as a plain xterm, GNOME Terminal or the
+macOS Terminal, gets no pictures: `-d Term` says why and stops. When the
+launcher chose the terminal display by itself, the pictures go to files
+instead (`GA_TERM_MODE=file`), and GrADS says where. `GA_TERM_PROTOCOL`
+(`iterm2`, `kitty` or `sixel`) names the kind and skips the asking, for a
+terminal that shows pictures but does not say so: `xterm -ti vt340` inside
+a tmux without sixel, for one, which tmux cannot tell from a plain xterm.
+
+**kitty and Ghostty.** The picture is sent at the size of the cells it
+fills, often a tenth of the data. Inside tmux, kitty draws it wherever it
+finds its placeholder character, which GrADS writes into the pane as text
+(kitty 0.28 and later, Ghostty): tmux moves, hides and redraws it with the
+pane, like any text. This needs tmux to run in a UTF-8 locale, as it
+normally does.
+
+**sixel.** The picture goes in up to 256 colours, at the size of the cells
+it fills. tmux 3.4 built with sixel takes it into the pane and draws it
+itself, again whenever it redraws the pane; otherwise it goes through tmux
+to the terminal, as iTerm2's pictures do. tmux before 3.3 throws away
+anything over 8 bytes a cell of the terminal, and a sixel picture cannot be
+sent in parts, so through such a tmux it goes in fewer colours, or smaller,
+until it is under 6.
+
+The progress bar and looping GIFs are iTerm2's, so other terminals show
+neither: an animation is shown frame by frame, and the last frame stays.
+The viewer for `file` mode (`grads-termview`) draws iTerm2 inline images
+only.
+
 ## On a Mac
 
-The macOS archive carries the terminal display too, so in iTerm2 or WezTerm
-on the Mac itself `./opengrads` draws in the terminal, inside tmux as well,
-without XQuartz. XQuartz sets `DISPLAY` for the whole login session, so
+The macOS archive carries the terminal display too, so in iTerm2, WezTerm,
+kitty or Ghostty on the Mac itself `./opengrads` draws in the terminal,
+inside tmux as well, without XQuartz. XQuartz sets `DISPLAY` for the whole login session, so
 once it is installed the launcher opens an X window instead; ask for the
 terminal by name to keep the pictures in iTerm2:
 
@@ -104,8 +162,9 @@ The picture is redrawn to fit the smaller pane.
 | Variable | Meaning | Default |
 |---|---|---|
 | `GA_TERM_MODE` | `tmux` (picture pane), `inline` (print under the command), `file` (only write the PNG), or `auto` | `auto`: `tmux` inside tmux, `inline` elsewhere |
+| `GA_TERM_PROTOCOL` | `iterm2`, `kitty`, or `sixel`, to use those pictures without asking the terminal; see [Which terminals](#which-terminals) | `auto`: what the terminal shows |
 | `GA_TERM_PANE` | Width of the picture pane | `50%` |
-| `GA_TERM_WIDTH` | Width of an inline image, in iTerm2 terms (`70%`, `80` cells, `600px`) | `70%` |
+| `GA_TERM_WIDTH` | Width of an inline image: `70%` of the terminal, or `80` cells; with iTerm2 also `600px` | `70%` |
 | `GA_TERM_SCALE` | Pixels per point, 1 to 4. 2 keeps lines and text sharp on Retina screens | `2` |
 | `GA_TERM_ANIM` | `live`, `gif`, or `off`; see [Animation](#animation) | `live` |
 | `GA_TERM_PROGRESS` | `auto`, `on` (for every picture), or `off`; see [Progress bar](#progress-bar) | `auto` |
@@ -174,7 +233,7 @@ inside ssh (up to its 2 MB window) still has to drain, about 1.6 s at
 | Value | Frames as they are drawn | Afterwards |
 |---|---|---|
 | `live` (default) | yes | the last frame stays |
-| `gif` | yes | a command that swaps two or more frames also leaves a looping GIF, which iTerm2 plays on its own with nothing more sent over ssh |
+| `gif` | yes | a command that swaps two or more frames also leaves a looping GIF, which iTerm2 plays on its own with nothing more sent over ssh (other terminals keep the last frame) |
 | `off` | no | only the picture at the prompt |
 
 Inline mode prints no frames as they are drawn, which would fill the
@@ -232,10 +291,12 @@ Start GrADS with a log, draw something, and look at the log:
 GA_TERM_LOG=/tmp/grads-term.log ./opengrads
 ```
 
-The `start:` line gives the mode and which kind of tmux GrADS found. A
-`pane` line says where the picture pane is and which terminal shows it, and
-`tmux -CC` when iTerm2's integration is in use. Two `picture:` lines per
-picture say how it was sent and how long the link took. `tmux dropped` means
+The `protocol:` line says which pictures GrADS chose and why, and the cell
+size it found. The `start:` line gives the mode and which kind of tmux
+GrADS found. A `pane` line says where the picture pane is and which
+terminal shows it, and `tmux -CC` when iTerm2's integration is in use. Two
+`picture:` lines per picture say how it was sent and how long the link
+took. `tmux dropped` means
 tmux threw part of it away, as tmux before 3.3 does on a slow link, and
 `tmux passed on N bytes of the picture's M` that tmux skipped it; either way
 GrADS sends it again. `not on screen` means the picture waits for its pane
@@ -254,9 +315,11 @@ protocol. Pictures in parts need iTerm2 3.5 or newer.
   `screen` command need a window. They print a warning and do nothing, as
   they do with the Cairo X display.
 - `gxout imap` is not supported, as with the Cairo X display.
-- tmux redraws a pane from what it knows, and it does not know about the
-  picture. After switching tmux windows or reattaching, the pane is blank
-  until the next picture or a resize of the pane.
+- tmux redraws a pane from what it knows, and it does not know about an
+  iTerm2 picture, or a sixel one it did not draw itself. After switching
+  tmux windows or reattaching, the pane is blank until the next picture or
+  a resize of the pane. kitty's pictures in tmux, and sixel drawn by tmux
+  3.4, come back with the pane.
 - Inline mode is for use outside tmux: inside tmux the picture is not
   anchored to the scrolling text.
 - `gxprint` and `printim` work as usual and are not affected by the display.

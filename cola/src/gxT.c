@@ -7,8 +7,12 @@
    GrADS is about to wait for the user (the command prompt, a script "pull",
    a "q pos"), gxdidle hands a copy of the picture to a worker thread if it
    changed since the last time. The worker encodes it and sends it to the
-   terminal with the iTerm2 inline image protocol, so the prompt comes back
-   without waiting. Where the picture goes depends on GA_TERM_MODE:
+   terminal, so the prompt comes back without waiting: as an iTerm2 inline
+   image, with the kitty graphics protocol, or as sixel, whichever the
+   terminal shows (see "which image protocol" below; GA_TERM_PROTOCOL names
+   one). In a terminal that shows none, -d Term stops at start-up, unless
+   the launcher chose it (GA_TERM_AUTO=1): then the pictures are only
+   written, as in file mode. Where the picture goes depends on GA_TERM_MODE:
 
      tmux    A pane is split off beside GrADS (it runs GA_TERM_VIEWER --hold,
              normally libexec/grads-termview, only to keep the pane open) and
@@ -68,8 +72,9 @@
                         temporary one)
      GA_TERM_SCALE      Pixel density factor, 1 to 4 (default 2, for Retina)
      GA_TERM_PANE       Width of the tmux viewer pane, e.g. 45% (default 50%)
-     GA_TERM_WIDTH      Width of an inline image, as iTerm2 understands it
-                        (default 70%)
+     GA_TERM_WIDTH      Width of an inline image: a percentage of the
+                        terminal, or columns; px too for iTerm2 (default 70%)
+     GA_TERM_PROTOCOL   iterm2, kitty or sixel, without asking the terminal
      GA_TERM_PROGRESS   auto (default), on (for every picture), or off (no
                         progress bar, and pictures in one piece when they fit)
      GA_TERM_ANIM_DELAY Seconds per GIF frame (default 0.2)
@@ -109,6 +114,9 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
+#include <termios.h>
+#include <math.h>
+#include <strings.h>
 
 #include <cairo.h>
 #include <zlib.h>
@@ -116,6 +124,7 @@
 #include "gatypes.h"
 #include "gx.h"
 #include "gxC.h"
+#undef pi                                 /* gx.h names M_PI so; pi is a pane here */
 
 #ifdef __APPLE__
 #include <crt_externs.h>                    /* a dylib cannot reach environ itself */
@@ -478,6 +487,269 @@ gaint i;
   return (runcmd(argv,NULL,0)==0);
 }
 
+/* ---- which image protocol the terminal shows ---- */
+
+/* A picture reaches the screen one of three ways, the first the terminal
+   shows of:
+
+     iTerm2   inline images, OSC 1337: iTerm2, WezTerm, mintty, VS Code
+     kitty    the kitty graphics protocol: kitty, Ghostty
+     sixel    DEC sixel: foot, mlterm, xterm -ti vt340, Windows Terminal
+
+   In tmux, tmux says which terminal its client is in (client_termtype,
+   from the terminal's own XTVERSION) and whether it shows sixel
+   (client_termfeatures, tmux 3.4 built with sixel). Otherwise LC_TERMINAL,
+   TERM_PROGRAM and TERM may say, or the terminal is asked: a kitty
+   graphics query, XTVERSION, the cell size (CSI 16 t), and Primary Device
+   Attributes, which every terminal answers, and last. GA_TERM_PROTOCOL
+   names one instead. A terminal that shows none gets no -d Term. */
+
+#define PROTO_NONE  0
+#define PROTO_ITERM 1
+#define PROTO_KITTY 2
+#define PROTO_SIXEL 3
+
+static const char *protonames[4] = {"none","iTerm2","kitty","sixel"};
+static gaint proto=PROTO_ITERM;
+static char protowhy[300];                  /* how it was found out */
+static gaint cellw=0,cellh=0;               /* a character cell in pixels, if known */
+static gaint tmuxsixel=0;                   /* tmux draws sixel in the pane itself */
+
+static gaint hasword (const char *s, const char *w) {
+size_t n;
+  if (s==NULL) return (0);
+  n = strlen(w);
+  for (; *s; s++) if (!strncasecmp(s,w,n)) return (1);
+  return (0);
+}
+
+/* What a terminal of this name (XTVERSION, TERM_PROGRAM, TERM) shows best;
+   none when the name does not tell */
+
+static gaint protofor (const char *name) {
+  if (hasword(name,"iterm") || hasword(name,"wezterm") || hasword(name,"mintty"))
+    return (PROTO_ITERM);
+  if (hasword(name,"kitty") || hasword(name,"ghostty")) return (PROTO_KITTY);
+  if (hasword(name,"foot") || hasword(name,"mlterm") || hasword(name,"contour"))
+    return (PROTO_SIXEL);
+  return (PROTO_NONE);
+}
+
+/* Ask the terminal. name gets its XTVERSION; kitty and sixel say whether
+   it takes kitty graphics and shows sixel. Returns -1 when no answer came
+   within 2 s, as over a very slow link or from no terminal at all. */
+
+static gaint termask (char *name, size_t nlen, gaint *kitty, gaint *sixel) {
+static const char q[] = "\033_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\033\\"  /* kitty */
+                        "\033[>0q"                                    /* XTVERSION */
+                        "\033[16t"                                    /* cell size */
+                        "\033[c";                                     /* DA1 */
+struct termios old,raw;
+char buf[2048],*p,*e;
+gaint fd,n,got=0,done=0,a,b,c;
+fd_set rd;
+struct timeval tv;
+double t0;
+size_t k;
+
+  *name = '\0'; *kitty = 0; *sixel = 0;
+  fd = open("/dev/tty",O_RDWR|O_NOCTTY);
+  if (fd<0) return (-1);
+  if (fd>=FD_SETSIZE) { close(fd); return (-1); }
+  if (tcgetattr(fd,&old)) { close(fd); return (-1); }
+  raw = old;
+  raw.c_lflag &= ~(ICANON|ECHO);
+  raw.c_cc[VMIN] = 0;
+  raw.c_cc[VTIME] = 0;
+  tcsetattr(fd,TCSANOW,&raw);
+  if (write(fd,q,sizeof(q)-1)<0) done = 1;
+  t0 = now();
+  while (!done && now()-t0<2.0 && got<(gaint)sizeof(buf)-1) {
+    FD_ZERO(&rd);
+    FD_SET(fd,&rd);
+    tv.tv_sec = 0;
+    tv.tv_usec = 50000;
+    if (select(fd+1,&rd,NULL,NULL,&tv)<=0) continue;
+    n = read(fd,buf+got,sizeof(buf)-1-got);
+    if (n<=0) continue;
+    got += n;
+    buf[got] = '\0';
+    /* DA1, the last answer: ESC [ ? digits and ; ... c */
+    for (p=buf; (p=strstr(p,"\033[?"))!=NULL; p++) {
+      for (e=p+3; (*e>='0' && *e<='9') || *e==';'; e++) ;
+      if (*e=='c') { done = 1; break; }
+    }
+  }
+  tcsetattr(fd,TCSANOW,&old);
+  close(fd);
+  buf[got] = '\0';
+  tlogf("terminal answered %d bytes in %.3f s",got,now()-t0);
+  if (got==0) return (-1);
+
+  if (strstr(buf,"\033_Gi=31;OK")) *kitty = 1;
+  if ((p=strstr(buf,"\033P>|"))!=NULL) {
+    p += 4;
+    for (k=0; *p && *p!='\033' && k+1<nlen; k++) name[k] = *p++;
+    name[k] = '\0';
+  }
+  if ((p=strstr(buf,"\033[6;"))!=NULL && sscanf(p+4,"%d;%d",&a,&b)==2 && a>0 && b>0) {
+    cellh = a;
+    cellw = b;
+  }
+  for (p=buf; (p=strstr(p,"\033[?"))!=NULL; p++) {
+    for (e=p+3, c=-1; (*e>='0' && *e<='9') || *e==';'; e++) {
+      if (*e>='0' && *e<='9') c = (c<0 ? 0 : c*10) + (*e-'0');
+      else { if (c==4) *sixel = 1; c = -1; }
+    }
+    if (*e=='c') { if (c==4) *sixel = 1; break; }
+  }
+  return (0);
+}
+
+/* The cell size from the kernel, when the terminal has told it */
+
+static void cellsize (gaint fd) {
+struct winsize ws;
+  if (cellw>0 && cellh>0) return;
+  if (ioctl(fd,TIOCGWINSZ,&ws)==0 && ws.ws_col>0 && ws.ws_row>0 &&
+      ws.ws_xpixel>0 && ws.ws_ypixel>0) {
+    cellw = ws.ws_xpixel/ws.ws_col;
+    cellh = ws.ws_ypixel/ws.ws_row;
+  }
+}
+
+static void termproto (void) {
+char out[700],*f[8],*p,*a,*t,*argv[8],name[256];
+gaint i,n,kitty,sixel,envp,rc,named=PROTO_NONE;
+
+  tmuxsixel = 0;
+  a = getenv("GA_TERM_PROTOCOL");
+  if (a && *a && strcasecmp(a,"auto")) {
+    if (!strcasecmp(a,"iterm2") || !strcasecmp(a,"iterm")) named = PROTO_ITERM;
+    else if (!strcasecmp(a,"kitty")) named = PROTO_KITTY;
+    else if (!strcasecmp(a,"sixel")) named = PROTO_SIXEL;
+    else printf("Terminal display: unknown GA_TERM_PROTOCOL \"%s\"; use iterm2, kitty, or sixel\n",a);
+  }
+
+  t = getenv("TMUX");
+  if (t && *t) {
+    i = 0;
+    argv[i++] = "tmux"; argv[i++] = "display-message"; argv[i++] = "-p";
+    if ((p=getenv("TMUX_PANE"))!=NULL && *p) { argv[i++] = "-t"; argv[i++] = p; }
+    argv[i++] = "#{client_control_mode}|#{client_termtype}|#{client_termname}|"
+                "#{client_termfeatures}|#{client_cell_width}|#{client_cell_height}";
+    argv[i] = NULL;
+    /* In a session just started, its client may not be attached yet, or
+       its terminal not have answered tmux: give them a second */
+    for (rc=0; rc<6; rc++) {
+      if (rc) usleep(200000);
+      out[0] = '\0';
+      runcmd(argv,out,sizeof(out));
+      for (n=0, p=out; n<6; ) {
+        f[n++] = p;
+        p = strchr(p,'|');
+        if (p==NULL) break;
+        *p++ = '\0';
+      }
+      for (i=n; i<6; i++) f[i] = "";
+      a = getenv("LC_TERMINAL");
+      if (*f[1] || atoi(f[0])==1 || named!=PROTO_NONE || (a && !strcmp(a,"iTerm2"))) break;
+    }
+    cellw = atoi(f[4]);
+    cellh = atoi(f[5]);
+    a = getenv("LC_TERMINAL");
+    proto = protofor(f[1]);
+    if (atoi(f[0])==1) {
+      proto = PROTO_ITERM;
+      snprintf(protowhy,sizeof(protowhy),"tmux -CC, so iTerm2");
+    } else if (proto==PROTO_ITERM || proto==PROTO_KITTY) {
+      snprintf(protowhy,sizeof(protowhy),"tmux says the terminal is %s",f[1]);
+    } else if (hasword(f[3],"sixel")) {     /* tmux keeps it with the pane */
+      proto = PROTO_SIXEL;
+      tmuxsixel = 1;
+      snprintf(protowhy,sizeof(protowhy),"tmux draws sixel for %s",*f[1] ? f[1] : f[2]);
+    } else if (proto==PROTO_SIXEL) {
+      snprintf(protowhy,sizeof(protowhy),"tmux says the terminal is %s",f[1]);
+    } else if (a && !strcmp(a,"iTerm2")) {
+      proto = PROTO_ITERM;
+      snprintf(protowhy,sizeof(protowhy),"LC_TERMINAL=iTerm2");
+    } else if ((proto=protofor(f[2]))!=PROTO_NONE) {
+      snprintf(protowhy,sizeof(protowhy),"tmux client TERM=%s",f[2]);
+    } else {
+      proto = PROTO_NONE;
+      snprintf(protowhy,sizeof(protowhy),"tmux knows the terminal only as %s%sTERM=%s",
+               f[1],*f[1] ? ", " : "",*f[2] ? f[2] : "?");
+    }
+    if (hasword(f[1],"iterm2") || (a && !strcmp(a,"iTerm2")) || atoi(f[0])==1) iterm = 1;
+    if (named!=PROTO_NONE) {                 /* tmux still gave the cell size */
+      proto = named;
+      tmuxsixel = named==PROTO_SIXEL && hasword(f[3],"sixel");
+      snprintf(protowhy,sizeof(protowhy),"GA_TERM_PROTOCOL=%s",getenv("GA_TERM_PROTOCOL"));
+    }
+    return;
+  }
+  if (named!=PROTO_NONE) {
+    proto = named;
+    snprintf(protowhy,sizeof(protowhy),"GA_TERM_PROTOCOL=%s",getenv("GA_TERM_PROTOCOL"));
+    cellsize(1);
+    return;
+  }
+
+  /* outside tmux: what the environment says, then the terminal */
+  envp = PROTO_NONE;
+  a = getenv("LC_TERMINAL");
+  p = getenv("TERM_PROGRAM");
+  t = getenv("TERM");
+  if (a && !strcmp(a,"iTerm2")) {
+    envp = PROTO_ITERM;
+    snprintf(protowhy,sizeof(protowhy),"LC_TERMINAL=iTerm2");
+  } else if ((envp=protofor(p))!=PROTO_NONE) {
+    snprintf(protowhy,sizeof(protowhy),"TERM_PROGRAM=%s",p);
+  } else if ((envp=protofor(t))!=PROTO_NONE) {
+    snprintf(protowhy,sizeof(protowhy),"TERM=%s",t);
+  } else if (getenv("KITTY_WINDOW_ID")) {
+    envp = PROTO_KITTY;
+    snprintf(protowhy,sizeof(protowhy),"KITTY_WINDOW_ID");
+  }
+  if (hasword(p,"iterm") || (a && !strcmp(a,"iTerm2"))) iterm = 1;
+  if (envp==PROTO_ITERM) {                  /* nothing to ask */
+    proto = envp;
+    return;
+  }
+  if (!isatty(1) || (t && (!strcmp(t,"dumb") || !strcmp(t,"linux")))) {
+    /* pictures go to a file or pipe, or to a terminal that cannot be
+       asked: as iTerm2 inline images, unless the environment said */
+    proto = envp!=PROTO_NONE ? envp : (isatty(1) ? PROTO_NONE : PROTO_ITERM);
+    if (envp==PROTO_NONE)
+      snprintf(protowhy,sizeof(protowhy),isatty(1) ? "TERM=%s" : "output is no terminal",
+               t ? t : "");
+    cellsize(1);
+    return;
+  }
+  rc = termask(name,sizeof(name),&kitty,&sixel);
+  cellsize(1);
+  if (rc<0) {
+    proto = envp;
+    if (envp==PROTO_NONE) snprintf(protowhy,sizeof(protowhy),"the terminal did not answer");
+    return;
+  }
+  if (hasword(name,"iterm2")) iterm = 1;
+  if (protofor(name)==PROTO_ITERM || (hasword(name,"xterm.js") && sixel)) {
+    proto = PROTO_ITERM;
+    snprintf(protowhy,sizeof(protowhy),"the terminal is %s",name);
+  } else if (kitty) {                       /* the answer, rather than TERM */
+    proto = PROTO_KITTY;
+    snprintf(protowhy,sizeof(protowhy),"%s takes kitty graphics",*name ? name : "the terminal");
+  } else if (sixel) {
+    proto = PROTO_SIXEL;
+    snprintf(protowhy,sizeof(protowhy),"%s shows sixel",*name ? name : "the terminal");
+  } else {
+    proto = PROTO_NONE;
+    snprintf(protowhy,sizeof(protowhy),"%s shows neither sixel nor kitty graphics",
+             *name ? name : "the terminal");
+  }
+}
+
 /* ---- PNG ---- */
 
 struct mbuf {
@@ -519,9 +791,10 @@ uLong c;
   mput(b,crc,4);
 }
 
-/* Encode an ARGB32 picture as an RGB PNG. Rows are not filtered: for plots,
-   which are mostly flat colour, that is both faster and smaller than
-   letting the encoder try every filter, as cairo_surface_write_to_png does. */
+/* Encode an ARGB32 picture (or with stride 0, packed RGB) as an RGB PNG.
+   Rows are not filtered: for plots, which are mostly flat colour, that is
+   both faster and smaller than letting the encoder try every filter, as
+   cairo_surface_write_to_png does. */
 
 static gaint pngencode (const unsigned char *px, gaint w, gaint h, gaint stride, struct mbuf *b) {
 static const unsigned char sig[8] = {137,80,78,71,13,10,26,10};
@@ -547,12 +820,15 @@ const size_t outsz = 65536;
   zs.avail_out = outsz;
   for (y=0; y<=h && !err; y++) {
     if (y<h) {
-      p = (const unsigned int *)(px + (size_t)y*stride);
       row[0] = 0;
-      for (x=0; x<w; x++) {
-        row[1+3*x] = (p[x]>>16)&255;
-        row[2+3*x] = (p[x]>>8)&255;
-        row[3+3*x] = p[x]&255;
+      if (stride==0) memcpy(row+1,px+(size_t)y*3*w,3*(size_t)w);   /* already RGB */
+      else {
+        p = (const unsigned int *)(px + (size_t)y*stride);
+        for (x=0; x<w; x++) {
+          row[1+3*x] = (p[x]>>16)&255;
+          row[2+3*x] = (p[x]>>8)&255;
+          row[3+3*x] = p[x]&255;
+        }
       }
       zs.next_in = row;
       zs.avail_in = 1+3*w;
@@ -634,7 +910,7 @@ unsigned int ca = qcount[*(const gaint *)a], cb = qcount[*(const gaint *)b];
 }
 
 static gaint quantize (const unsigned char *rgb, gaint w, gaint x0, gaint y0, gaint bw, gaint bh,
-                       unsigned char *pal, unsigned char *idx) {
+                       gaint most, unsigned char *pal, unsigned char *idx) {
 gaint x,y,i,j,k,nused=0,npal=0,best,pass;
 long d,bd,dr,dg,db;
 const unsigned char *p;
@@ -656,7 +932,7 @@ unsigned int key,n;
     }
   }
   memset(pal,0,768);
-  if (nused<=256) {
+  if (nused<=most) {
     for (i=0; i<nused; i++) {
       key = qused[i]; n = qcount[key];
       pal[3*i] = qsum[3*key]/n; pal[3*i+1] = qsum[3*key+1]/n; pal[3*i+2] = qsum[3*key+2]/n;
@@ -664,8 +940,8 @@ unsigned int key,n;
     }
   } else {
     qsort(qused,nused,sizeof(gaint),qbycount);
-    for (pass=0; pass<2 && npal<256; pass++) {
-      for (i=0; i<nused && npal<256; i++) {
+    for (pass=0; pass<2 && npal<most; pass++) {
+      for (i=0; i<nused && npal<most; i++) {
         key = qused[i];
         if (qcount[key]==0) continue;          /* taken in the first pass */
         n = qcount[key];
@@ -835,7 +1111,7 @@ unsigned char pal[768],*idx;
   bw = x1-x0+1;
   bh = y1-y0+1;
   idx = (unsigned char *)malloc((size_t)bw*bh);
-  if (idx==NULL || quantize(rgb,w,x0,y0,bw,bh,pal,idx)) {
+  if (idx==NULL || quantize(rgb,w,x0,y0,bw,bh,256,pal,idx)) {
     free(idx);
     gif.failed = 1;
     return;
@@ -884,6 +1160,110 @@ unsigned long r,g,b,n;
     }
   }
   return (out);
+}
+
+/* ---- sixel ---- */
+
+/* An RGB picture at another size: each new pixel the average of the old
+   ones it covers when smaller, the nearest old one when larger */
+
+static unsigned char *rgbscale (const unsigned char *src, gaint w, gaint h, gaint w2, gaint h2) {
+unsigned char *dst,*o;
+gaint x,y,x0,x1,y0,y1,i,j,n;
+unsigned long sum[3];
+const unsigned char *q;
+
+  dst = (unsigned char *)malloc((size_t)w2*h2*3);
+  if (dst==NULL) return (NULL);
+  o = dst;
+  for (y=0; y<h2; y++) {
+    y0 = (gaint)((gadouble)y*h/h2);
+    y1 = (gaint)((gadouble)(y+1)*h/h2);
+    if (y1<=y0) y1 = y0+1;
+    if (y1>h) y1 = h;
+    for (x=0; x<w2; x++) {
+      x0 = (gaint)((gadouble)x*w/w2);
+      x1 = (gaint)((gadouble)(x+1)*w/w2);
+      if (x1<=x0) x1 = x0+1;
+      if (x1>w) x1 = w;
+      sum[0] = sum[1] = sum[2] = 0;
+      n = 0;
+      for (j=y0; j<y1; j++) {
+        q = src + ((size_t)j*w+x0)*3;
+        for (i=x0; i<x1; i++, q+=3, n++) {
+          sum[0] += q[0]; sum[1] += q[1]; sum[2] += q[2];
+        }
+      }
+      *o++ = (unsigned char)(sum[0]/n);
+      *o++ = (unsigned char)(sum[1]/n);
+      *o++ = (unsigned char)(sum[2]/n);
+    }
+  }
+  return (dst);
+}
+
+/* An RGB picture as sixel, into b: in up to most (256 at most) colours,
+   chosen as for a GIF frame. Each band of six rows goes colour by colour,
+   with runs compressed. */
+
+static gaint sixelencode (const unsigned char *rgb, gaint w, gaint h, gaint most, struct mbuf *b) {
+unsigned char *idx,*used,pal[768];
+gaint ncol=0,i,x,y,y0,c,run,bits,prev;
+char tmp[64];
+
+  idx = (unsigned char *)malloc((size_t)w*h);
+  used = (unsigned char *)malloc(256);
+  if (idx==NULL || used==NULL || quantize(rgb,w,0,0,w,h,most,pal,idx)) {
+    free(idx); free(used);
+    return (1);
+  }
+  for (i=0; i<w*h; i++) if (idx[i]>=ncol) ncol = idx[i]+1;
+
+  mput(b,"\033P0;1;0q",8);
+  snprintf(tmp,sizeof(tmp),"\"1;1;%d;%d",w,h);
+  mput(b,tmp,strlen(tmp));
+  for (i=0; i<ncol; i++) {
+    snprintf(tmp,sizeof(tmp),"#%d;2;%d;%d;%d",i,(pal[3*i]*100+127)/255,
+             (pal[3*i+1]*100+127)/255,(pal[3*i+2]*100+127)/255);
+    mput(b,tmp,strlen(tmp));
+  }
+  for (y0=0; y0<h; y0+=6) {
+    memset(used,0,256);
+    for (y=y0; y<y0+6 && y<h; y++)
+      for (x=0; x<w; x++) used[idx[(size_t)y*w+x]] = 1;
+    for (c=0; c<ncol; c++) {
+      if (!used[c]) continue;
+      snprintf(tmp,sizeof(tmp),"#%d",c);
+      mput(b,tmp,strlen(tmp));
+      prev = -1;
+      run = 0;
+      for (x=0; x<=w; x++) {
+        bits = -1;
+        if (x<w) {
+          bits = 0;
+          for (y=y0; y<y0+6 && y<h; y++)
+            if (idx[(size_t)y*w+x]==c) bits |= 1<<(y-y0);
+        }
+        if (bits==prev) { run++; continue; }
+        if (bits<0 && prev==0) break;           /* nothing more in this colour */
+        if (run>3) {
+          snprintf(tmp,sizeof(tmp),"!%d%c",run,63+prev);
+          mput(b,tmp,strlen(tmp));
+        } else {
+          for (i=0; i<run; i++) { tmp[i] = (char)(63+prev); }
+          if (run) mput(b,tmp,run);
+        }
+        prev = bits;
+        run = 1;
+      }
+      mput(b,"$",1);
+    }
+    mput(b,"-",1);
+  }
+  mput(b,"\033\\",2);
+  free(idx);
+  free(used);
+  return (b->failed);
 }
 
 /* ---- sending pictures to the terminal ---- */
@@ -1000,12 +1380,16 @@ static void wstr (struct wout *w, const char *s) {
 /* An escape sequence for the outer terminal. Through tmux it travels in a
    passthrough sequence, where each ESC is doubled; tmux -CC hands the
    pane's output to iTerm2 as it is. */
-static void wesc (struct wout *w, const char *s) {
-  if (w->via!=VIA_TMUX) { wstr(w,s); return; }
-  for (; *s; s++) {
+static void wescn (struct wout *w, const char *s, size_t n) {
+  if (w->via!=VIA_TMUX) { wraw(w,s,n); return; }
+  for (; n; s++, n--) {
     if (*s=='\033') wraw(w,"\033\033",2);
     else wraw(w,s,1);
   }
+}
+
+static void wesc (struct wout *w, const char *s) {
+  wescn(w,s,strlen(s));
 }
 
 static void ptopen (struct wout *w) {
@@ -1038,6 +1422,291 @@ unsigned long v;
   wraw(w,out,o);
 }
 
+/* Columns for a picture at the cursor (inline): GA_TERM_WIDTH as a
+   percentage of the terminal's width, or a number of columns */
+
+static gaint inlinecols (gaint fd, const char *iwidth) {
+struct winsize ws;
+gaint cols=80,n;
+  if (ioctl(fd,TIOCGWINSZ,&ws)==0 && ws.ws_col>0) cols = ws.ws_col;
+  n = atoi(iwidth);
+  if (n<=0) return (cols);
+  if (strchr(iwidth,'%')) n = cols*n/100;
+  if (n>cols) n = cols;
+  return (n<1 ? 1 : n);
+}
+
+/* How many columns and rows a picture of iw x ih pixels takes to fill, but
+   not overflow, bc x br cells */
+
+static void picfit (gaint iw, gaint ih, gaint bc, gaint br, gaint *c, gaint *r) {
+gadouble ca;
+  ca = (cellw>0 && cellh>0) ? (gadouble)cellh/cellw : 2.0;   /* cells are about twice as tall */
+  *c = bc;
+  *r = (gaint)ceil((gadouble)bc*ih/iw/ca);
+  if (*r>br) {
+    *r = br;
+    *c = (gaint)floor((gadouble)br*ca*iw/ih);
+  }
+  if (*c<1) *c = 1;
+  if (*r<1) *r = 1;
+}
+
+/* kitty graphics. Outside tmux the picture goes at the cursor, in parts
+   of 4096 characters, each its own sequence. tmux knows nothing of such
+   pictures, so would neither move nor hide one with its pane: there the
+   picture is only handed to kitty, which then draws it wherever it finds
+   its placeholder, U+10EEEE, as text. tmux keeps, moves, hides and
+   redraws that text as any other. The placeholder's colour (256 colours,
+   which tmux always passes on) and a third mark name the picture; marks
+   on the first cell of each row give the row. */
+
+static const unsigned long kittymarks[297] = {
+  0x0305,0x030d,0x030e,0x0310,0x0312,0x033d,0x033e,0x033f,0x0346,0x034a,0x034b,0x034c,
+  0x0350,0x0351,0x0352,0x0357,0x035b,0x0363,0x0364,0x0365,0x0366,0x0367,0x0368,0x0369,
+  0x036a,0x036b,0x036c,0x036d,0x036e,0x036f,0x0483,0x0484,0x0485,0x0486,0x0487,0x0592,
+  0x0593,0x0594,0x0595,0x0597,0x0598,0x0599,0x059c,0x059d,0x059e,0x059f,0x05a0,0x05a1,
+  0x05a8,0x05a9,0x05ab,0x05ac,0x05af,0x05c4,0x0610,0x0611,0x0612,0x0613,0x0614,0x0615,
+  0x0616,0x0617,0x0657,0x0658,0x0659,0x065a,0x065b,0x065d,0x065e,0x06d6,0x06d7,0x06d8,
+  0x06d9,0x06da,0x06db,0x06dc,0x06df,0x06e0,0x06e1,0x06e2,0x06e4,0x06e7,0x06e8,0x06eb,
+  0x06ec,0x0730,0x0732,0x0733,0x0735,0x0736,0x073a,0x073d,0x073f,0x0740,0x0741,0x0743,
+  0x0745,0x0747,0x0749,0x074a,0x07eb,0x07ec,0x07ed,0x07ee,0x07ef,0x07f0,0x07f1,0x07f3,
+  0x0816,0x0817,0x0818,0x0819,0x081b,0x081c,0x081d,0x081e,0x081f,0x0820,0x0821,0x0822,
+  0x0823,0x0825,0x0826,0x0827,0x0829,0x082a,0x082b,0x082c,0x082d,0x0951,0x0953,0x0954,
+  0x0f82,0x0f83,0x0f86,0x0f87,0x135d,0x135e,0x135f,0x17dd,0x193a,0x1a17,0x1a75,0x1a76,
+  0x1a77,0x1a78,0x1a79,0x1a7a,0x1a7b,0x1a7c,0x1b6b,0x1b6d,0x1b6e,0x1b6f,0x1b70,0x1b71,
+  0x1b72,0x1b73,0x1cd0,0x1cd1,0x1cd2,0x1cda,0x1cdb,0x1ce0,0x1dc0,0x1dc1,0x1dc3,0x1dc4,
+  0x1dc5,0x1dc6,0x1dc7,0x1dc8,0x1dc9,0x1dcb,0x1dcc,0x1dd1,0x1dd2,0x1dd3,0x1dd4,0x1dd5,
+  0x1dd6,0x1dd7,0x1dd8,0x1dd9,0x1dda,0x1ddb,0x1ddc,0x1ddd,0x1dde,0x1ddf,0x1de0,0x1de1,
+  0x1de2,0x1de3,0x1de4,0x1de5,0x1de6,0x1dfe,0x20d0,0x20d1,0x20d4,0x20d5,0x20d6,0x20d7,
+  0x20db,0x20dc,0x20e1,0x20e7,0x20e9,0x20f0,0x2cef,0x2cf0,0x2cf1,0x2de0,0x2de1,0x2de2,
+  0x2de3,0x2de4,0x2de5,0x2de6,0x2de7,0x2de8,0x2de9,0x2dea,0x2deb,0x2dec,0x2ded,0x2dee,
+  0x2def,0x2df0,0x2df1,0x2df2,0x2df3,0x2df4,0x2df5,0x2df6,0x2df7,0x2df8,0x2df9,0x2dfa,
+  0x2dfb,0x2dfc,0x2dfd,0x2dfe,0x2dff,0xa66f,0xa67c,0xa67d,0xa6f0,0xa6f1,0xa8e0,0xa8e1,
+  0xa8e2,0xa8e3,0xa8e4,0xa8e5,0xa8e6,0xa8e7,0xa8e8,0xa8e9,0xa8ea,0xa8eb,0xa8ec,0xa8ed,
+  0xa8ee,0xa8ef,0xa8f0,0xa8f1,0xaab0,0xaab2,0xaab3,0xaab7,0xaab8,0xaabe,0xaabf,0xaac1,
+  0xfe20,0xfe21,0xfe22,0xfe23,0xfe24,0xfe25,0xfe26,0x10a0f,0x10a38,0x1d185,0x1d186,
+  0x1d187,0x1d188,0x1d189,0x1d1aa,0x1d1ab,0x1d1ac,0x1d1ad,0x1d242,0x1d243,0x1d244
+};
+
+static unsigned char *lastrgb=NULL;          /* the latest picture's pixels: kitty, sixel */
+static gaint lastrw=0,lastrh=0;
+
+/* A copy of them, w x h, or NULL */
+
+static unsigned char *lastpixels (gaint *w, gaint *h) {
+unsigned char *rgb=NULL;
+  pthread_mutex_lock(&tlock);
+  *w = lastrw;
+  *h = lastrh;
+  if (lastrgb && lastrw>0 && lastrh>0) {
+    rgb = (unsigned char *)malloc((size_t)lastrw*lastrh*3);
+    if (rgb) memcpy(rgb,lastrgb,(size_t)lastrw*lastrh*3);
+  }
+  pthread_mutex_unlock(&tlock);
+  return (rgb);
+}
+
+static unsigned long kittyid=0;             /* the pane's picture */
+static gaint kittyshown=0;
+static gaint kittyn=0;                      /* pictures at the cursor in tmux */
+
+static void utf8put (struct wout *w, unsigned long c) {
+char o[4];
+  if (c<0x80) { o[0] = (char)c; wraw(w,o,1); }
+  else if (c<0x800) {
+    o[0] = (char)(0xc0|(c>>6)); o[1] = (char)(0x80|(c&0x3f));
+    wraw(w,o,2);
+  } else if (c<0x10000) {
+    o[0] = (char)(0xe0|(c>>12)); o[1] = (char)(0x80|((c>>6)&0x3f));
+    o[2] = (char)(0x80|(c&0x3f));
+    wraw(w,o,3);
+  } else {
+    o[0] = (char)(0xf0|(c>>18)); o[1] = (char)(0x80|((c>>12)&0x3f));
+    o[2] = (char)(0x80|((c>>6)&0x3f)); o[3] = (char)(0x80|(c&0x3f));
+    wraw(w,o,4);
+  }
+}
+
+/* The PNG, its keys with the first part */
+
+static void kittysend (struct wout *w, const unsigned char *data, size_t len, const char *keys) {
+char head[200];
+size_t off,n;
+gaint more;
+
+  for (off=0; off<len && !w->err; off+=n) {
+    n = len-off;
+    if (n>3072) n = 3072;
+    more = off+n<len;
+    if (off) room(w,(n+2)/3*4+64);
+    ptopen(w);
+    if (off==0) snprintf(head,sizeof(head),"\033_G%s,m=%d;",keys,more);
+    else snprintf(head,sizeof(head),"\033_Gm=%d;",more);
+    wesc(w,head);
+    b64put(w,data+off,n);
+    wesc(w,"\033\\");
+    ptclose(w);
+  }
+}
+
+static size_t kittypic (struct wout *w, const struct paneinfo *pi, const unsigned char *data,
+                        size_t len, const char *iwidth) {
+char keys[200],at[32];
+gaint iw,ih,c,r,x,y,lo,hi,rw,rh,tw,th;
+unsigned long id;
+unsigned char *rgb,*small;
+struct mbuf mb;
+
+  if (len<24) return (0);
+  iw = (data[16]<<24)|(data[17]<<16)|(data[18]<<8)|data[19];
+  ih = (data[20]<<24)|(data[21]<<16)|(data[22]<<8)|data[23];
+  if (iw<=0 || ih<=0) return (0);
+  if (pi) picfit(iw,ih,pi->cols,pi->rows>1 ? pi->rows-1 : 1,&c,&r);
+  else picfit(iw,ih,inlinecols(w->fd,iwidth),100000,&c,&r);
+
+  /* No more pixels than the cells show, when their size is known: a
+     tenth as much to send, often, and kitty takes it in 4 KB parts */
+  memset(&mb,0,sizeof(mb));
+  tw = c*cellw;
+  if (cellw>0 && cellh>0 && tw<iw && (rgb=lastpixels(&rw,&rh))!=NULL) {
+    th = (gaint)((gadouble)ih*tw/iw+0.5);
+    small = (rw==iw && rh==ih && th>0) ? rgbscale(rgb,iw,ih,tw,th) : NULL;
+    if (small && !pngencode(small,tw,th,0,&mb)) {
+      data = mb.p;
+      len = mb.n;
+    }
+    free(small);
+    free(rgb);
+  }
+
+  if (w->via!=VIA_TMUX) {                   /* at the cursor, which then moves past it */
+    snprintf(keys,sizeof(keys),"a=T,f=100,t=d,q=2,c=%d",c);   /* rows to match */
+    kittysend(w,data,len,keys);
+    free(mb.p);
+    return ((len+2)/3*4);
+  }
+
+  /* tmux: the id from the process, and for each picture at the cursor
+     another, so those above keep theirs. The low byte is the colour, 16
+     to 255, as tmux would write 0 to 15 as other colours; the high byte
+     any mark. */
+  lo = 16 + (gaint)((getpid() + (pi ? 0 : ++kittyn)) % 240);
+  hi = (gaint)((getpid()/255) % 256);
+  id = ((unsigned long)hi<<24) | (unsigned long)lo;
+  if (r>297) r = 297;
+  if (pi) {
+    if (kittyshown) {
+      snprintf(keys,sizeof(keys),"\033_Ga=d,d=I,i=%lu,q=2\033\\",kittyid);
+      ptopen(w); wesc(w,keys); ptclose(w);
+    }
+    kittyid = id;
+    kittyshown = 1;
+  }
+  snprintf(keys,sizeof(keys),"a=T,U=1,f=100,t=d,q=2,i=%lu,c=%d,r=%d",id,c,r);
+  kittysend(w,data,len,keys);
+  snprintf(keys,sizeof(keys),"\033[38;5;%dm",lo);
+  for (y=0; y<r && !w->err; y++) {
+    if (pi) {
+      snprintf(at,sizeof(at),"\033[%d;1H",y+1);   /* the pane's own row */
+      wstr(w,at);
+    } else if (y) wstr(w,"\r\n");
+    wstr(w,keys);
+    utf8put(w,0x10eeee);
+    utf8put(w,kittymarks[y]);
+    utf8put(w,kittymarks[0]);
+    utf8put(w,kittymarks[hi]);
+    for (x=1; x<c; x++) utf8put(w,0x10eeee);
+    wstr(w,"\033[39m");
+  }
+  free(mb.p);
+  return ((len+2)/3*4);
+}
+
+/* Take the pane's picture out of kitty, as GrADS ends */
+
+static void kittyclear (void) {
+struct wout *w;
+char head[100];
+  if (!kittyshown || panefd<0) return;
+  w = (struct wout *)calloc(1,sizeof(struct wout));
+  if (w==NULL) return;
+  w->fd = panefd;
+  w->pacefd = -1;
+  w->via = VIA_TMUX;
+  snprintf(head,sizeof(head),"\033_Ga=d,d=I,i=%lu,q=2\033\\",kittyid);
+  ptopen(w);
+  wesc(w,head);
+  ptclose(w);
+  wflush(w);
+  free(w);
+  kittyshown = 0;
+}
+
+/* sixel: the picture scaled to the pixels it is to fill, from the cell
+   size the terminal or tmux gave. tmux 3.4 built with sixel takes it into
+   the pane and draws it itself, by the cell size it gave the pane. When
+   none is known, cells of 6 x 12, smaller than most: a picture too large
+   would run over the panes below, or scroll the screen. Unlike the others
+   a sixel picture cannot go in parts, as tmux puts its own sequences
+   between them: through tmux before 3.3, which drops a sequence of more
+   than 8 bytes a cell, it goes in fewer colours, or smaller, until it is
+   three quarters of that (three steps). */
+
+static size_t sixelpic (struct wout *w, const struct paneinfo *pi, const char *pos,
+                        const char *back, const char *iwidth) {
+unsigned char *rgb,*small;
+gaint iw,ih,cw,ch,bw,bh,tw,th,tries,most=256;
+gadouble f;
+struct mbuf mb;
+size_t sent=0;
+
+  rgb = lastpixels(&iw,&ih);
+  if (rgb==NULL) return (0);
+  if (w->via==VIA_TMUX && tmuxsixel) cellsize(w->fd);
+  cw = cellw>0 && cellh>0 ? cellw : 6;
+  ch = cellw>0 && cellh>0 ? cellh : 12;
+  if (pi) { bw = pi->cols*cw; bh = (pi->rows>1 ? pi->rows-1 : 1)*ch; }
+  else { bw = inlinecols(w->fd,iwidth)*cw; bh = 1<<20; }
+  f = (gadouble)bw/iw;
+  if ((gadouble)bh/ih<f) f = (gadouble)bh/ih;
+  memset(&mb,0,sizeof(mb));
+  small = NULL;
+  for (tries=0; tries<8; tries++) {
+    tw = (gaint)(iw*f);
+    th = (gaint)(ih*f);
+    if (tw<1) tw = 1;
+    if (th<1) th = 1;
+    if (small!=rgb) free(small);
+    small = (tw==iw && th==ih) ? rgb : rgbscale(rgb,iw,ih,tw,th);
+    free(mb.p);
+    memset(&mb,0,sizeof(mb));
+    if (small==NULL || sixelencode(small,tw,th,most,&mb)) { mb.n = 0; break; }
+    if (!(w->via==VIA_TMUX && w->step && !tmuxsixel) || mb.n<=3*w->step) break;
+    tlogf("sixel: %dx%d in %d colours is %lu bytes, too many for tmux before 3.3",
+          tw,th,most,(unsigned long)mb.n);
+    if (most>16) most /= 4;                  /* fewer colours, then fewer pixels */
+    else f *= 0.95*sqrt((gadouble)3*w->step/mb.n);
+  }
+  if (mb.n) {
+    if (w->via==VIA_TMUX && tmuxsixel) {
+      if (pi) wstr(w,"\033[H\033[2J");       /* tmux lets go of the old one */
+      wraw(w,mb.p,mb.n);
+    } else {
+      ptopen(w);
+      wesc(w,pos);
+      wescn(w,(const char *)mb.p,mb.n);
+      wesc(w,back);
+      ptclose(w);
+      sent = mb.n;
+    }
+  }
+  free(mb.p);
+  if (small!=rgb) free(small);
+  free(rgb);
+  return (sent);
+}
+
 /* How much to hand tmux at a time. tmux before 3.3 drops all it holds for
    a client once that reaches 8 bytes per cell of the client's terminal,
    so stay at a quarter of that (an eighth on a slow link, see room); each
@@ -1061,6 +1730,8 @@ long cells,s;
    to the pane's own top left corner. Otherwise the picture goes where the
    cursor is, iwidth wide. */
 
+static size_t sentlen=0;                    /* what of the latest picture tmux is to pass on */
+
 static void sendpic (gaint fd, gaint pacefd, gaint via, size_t step, const struct paneinfo *pi,
                      gaint clear, const unsigned char *data, size_t len, const char *iwidth) {
 struct wout *w;
@@ -1076,6 +1747,7 @@ double t0;
   w->pacefd = pacefd;
   w->via = via;
   b64len = (len+2)/3*4;
+  sentlen = b64len;
   if (pi) snprintf(args,sizeof(args),"inline=1;size=%lu;width=%d;height=%d;preserveAspectRatio=1",
                    (unsigned long)len,pi->cols,pi->rows>1 ? pi->rows-1 : 1);
   else snprintf(args,sizeof(args),"inline=1;size=%lu;width=%s;preserveAspectRatio=1",
@@ -1103,8 +1775,10 @@ double t0;
      tmux, is split, which needs iTerm2 3.5 anyway. */
   parts = via==VIA_CC || (b64len+200 >= SEQ_LIMIT) || (step && b64len+200 > step) ||
           (iterm && progressopt);
-  showprog = parts && progressopt &&
-             (progressopt==2 || b64len>=PROGRESS_MIN || now()<slowuntil);
+  /* iTerm2's progress bar (OSC 9;4), which elsewhere may come out as a
+     notification: only iTerm2's, unless GA_TERM_PROGRESS=on */
+  showprog = parts && (progressopt==2 ||
+             (progressopt && iterm && (b64len>=PROGRESS_MIN || now()<slowuntil)));
   part = SEQ_PART;
   if (via==VIA_CC) part = CC_PART;
   else if (step) {                          /* half a step, so a slow link can take one */
@@ -1114,7 +1788,13 @@ double t0;
   part = part/4*3;                          /* raw bytes per part, whole base64 groups */
 
   if (pi && clear) wstr(w,"\033[H\033[2J");  /* tmux clears the pane's cells */
-  if (!parts) {
+  if (proto==PROTO_KITTY && via!=VIA_CC) {
+    parts = 1;
+    sentlen = kittypic(w,pi,data,len,iwidth);
+  } else if (proto==PROTO_SIXEL && via!=VIA_CC) {
+    parts = 0;
+    sentlen = sixelpic(w,pi,pos,back,iwidth);
+  } else if (!parts) {
     wstr(w,home);
     ptopen(w);
     wesc(w,pos);
@@ -1144,7 +1824,7 @@ double t0;
       wesc(w,"\a");
       ptclose(w);
       /* writing blocks on a slow link outside tmux: show progress */
-      if (!showprog && progressopt && w->waited>0.15) showprog = 1;
+      if (!showprog && progressopt && iterm && w->waited>0.15) showprog = 1;
       if (showprog) {
         pct = (gaint)((off+n)*100/len);
         if (pct!=lastpct) {
@@ -1266,7 +1946,7 @@ size_t want;
             clear || panefresh,lastpic,lastpiclen,NULL);
     panefresh = 0;
     if (via!=VIA_TMUX || quitting || stopping) return;
-    want = (lastpiclen+2)/3*4;
+    want = sentlen;
     got = passedon(&pi,&after,want);
     if (got<0 && tmuxkeeps!=1 && !tmuxinfo(pane,&after) && after.lost>pi.lost) got = 0;
     if (got!=0) return;
@@ -1342,7 +2022,10 @@ gaint ok;
     ok = fwrite(data,1,len,f)==len;
     if (fclose(f)) ok = 0;
   }
-  if (ok && !rename(tmp,fn)) {
+  if (ok && rename(tmp,fn)) ok = 0;
+  if (ok && mode!=3 && proto!=PROTO_ITERM && !strcmp(name,"plot.gif")) {
+    free(data);                              /* only iTerm2 plays a GIF; the last frame stays */
+  } else if (ok) {
     pthread_mutex_lock(&tlock);
     free(lastpic);
     lastpic = data;
@@ -1356,11 +2039,37 @@ gaint ok;
   }
 }
 
+/* sixel draws from the pixels, and kitty from them made smaller: keep them
+   with the picture */
+
+static void keeprgb (const struct tjob *j) {
+unsigned char *rgb;
+const unsigned int *p;
+gaint x,y;
+  rgb = (unsigned char *)malloc((size_t)j->w*j->h*3);
+  if (rgb==NULL) return;
+  for (y=0; y<j->h; y++) {
+    p = (const unsigned int *)(j->px + (size_t)y*j->stride);
+    for (x=0; x<j->w; x++) {
+      rgb[((size_t)y*j->w+x)*3]   = (p[x]>>16)&255;
+      rgb[((size_t)y*j->w+x)*3+1] = (p[x]>>8)&255;
+      rgb[((size_t)y*j->w+x)*3+2] = p[x]&255;
+    }
+  }
+  pthread_mutex_lock(&tlock);
+  free(lastrgb);
+  lastrgb = rgb;
+  lastrw = j->w;
+  lastrh = j->h;
+  pthread_mutex_unlock(&tlock);
+}
+
 static void dojob (struct tjob *j) {
 struct mbuf mb;
 unsigned char *rgb;
 
   if (j->kind==JOB_STILL || j->kind==JOB_FRAME) {
+    if (proto==PROTO_SIXEL || proto==PROTO_KITTY) keeprgb(j);
     memset(&mb,0,sizeof(mb));
     if (pngencode(j->px,j->w,j->h,j->stride,&mb)) free(mb.p);
     else publish("plot.png",mb.p,mb.n);
@@ -1635,6 +2344,8 @@ gaint before,frames;
   frames = ngif;
   if (ngif>=2) {
     post(snapshot(JOB_GIFEND));
+    /* only iTerm2 plays the GIF: elsewhere print the last frame */
+    if (mode==2 && proto!=PROTO_ITERM) post(snapshot(JOB_STILL));
     dirty = 0;
   } else {
     if (ngif==1) post(snapshot(JOB_GIFDROP));
@@ -1749,6 +2460,33 @@ gadouble f;
 
   m = getenv("GA_TERM_MODE");
   if (m==NULL || *m=='\0') m = "auto";
+
+  /* Pictures for the terminal need a terminal that shows them. When
+     the launcher chose this display by itself, write them to files
+     instead; when asked for by name, say so and stop. */
+  if (strcmp(m,"file")) {
+    termproto();
+    tlogf("protocol: %s (%s), cell %dx%d",protonames[proto],protowhy,cellw,cellh);
+    if (proto==PROTO_NONE) {
+      a = getenv("GA_TERM_AUTO");
+      if (a && !strcmp(a,"1")) {
+        printf("Terminal display: this terminal shows no pictures (%s);\n",protowhy);
+        printf("Terminal display: they go to files in %s instead\n",tdir);
+        m = "file";
+      } else {
+        printf("Terminal display: this terminal shows no pictures (%s).\n",protowhy);
+        printf("  -d Term needs a terminal that shows iTerm2 inline images (iTerm2, WezTerm),\n");
+        printf("  kitty graphics (kitty, Ghostty) or sixel (foot, mlterm, xterm -ti vt340).\n");
+        printf("  Otherwise use another display (-d Cairo or -d X11, with an X server), or\n");
+        printf("  write the pictures to files: GA_TERM_MODE=file. If the terminal does show\n");
+        printf("  one of them, name it: GA_TERM_PROTOCOL=iterm2, kitty or sixel.\n");
+        fflush(stdout);
+        if (fifopath[0]) unlink(fifopath);
+        if (ownsdir) rmdir(tdir);
+        exit(1);
+      }
+    }
+  }
   t = getenv("TMUX");
   v = viewer();
   pane[0] = '\0';
@@ -1775,8 +2513,9 @@ gadouble f;
     mode = 2;
   }
 
-  tlogf("start: mode %s, pane %s, tmux %s, iTerm2 %s, GA_TERM_TMUX_STEP %ld",
-        mode==1 ? "tmux" : (mode==2 ? "inline" : "file"),pane[0] ? pane : "(none)",
+  tlogf("start: mode %s, protocol %s, pane %s, tmux %s, iTerm2 %s, GA_TERM_TMUX_STEP %ld",
+        mode==1 ? "tmux" : (mode==2 ? "inline" : "file"),mode==3 ? "none needed" : protonames[proto],
+        pane[0] ? pane : "(none)",
         tmuxall ? "3.4 or later, passthrough all" :
         (tmuxkeeps==1 ? "3.3" : (tmuxkeeps==0 ? "before 3.3" : "not asked")),
         iterm ? "yes" : "no",(long)stepopt);
@@ -1845,6 +2584,7 @@ char fn[700];
 
   quitting = 1;                     /* finish writing pictures, send nothing more */
   stopworker();
+  if (proto==PROTO_KITTY && mode==1) kittyclear();
   gxCend();
   if (surface) {
     cairo_surface_finish (surface);

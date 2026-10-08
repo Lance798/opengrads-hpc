@@ -7,10 +7,12 @@
 # one picture per prompt, live frames, looping GIF animations (decoded by an
 # independent decoder when python3 is available), the inline image sequence,
 # cleanup, the viewer's FIFO wake-up, tmux wrapping and multipart transfer,
-# and, inside a real tmux (plain, in small steps, and -CC), that every
-# picture arrives whole at its pane, and that a picture for a pane in
-# another tmux window waits for it. Skipped when the build has no Cairo,
-# which the display needs.
+# which pictures a terminal gets (iTerm2's, kitty graphics, sixel, or none,
+# asked of a terminal that answers as each does), and, inside a real tmux
+# (plain, in small steps, and -CC), that every picture arrives whole at its
+# pane, that a picture for a pane in another tmux window waits for it, and
+# that tmux's word on its terminal picks the pictures. Skipped when the
+# build has no Cairo, which the display needs.
 
 set -euo pipefail
 
@@ -543,7 +545,266 @@ c="$(seq_number "$test_root/seq_c")"
 (( a == b )) || fail "pictures were still shown after Ctrl-C ($a, then $b)"
 (( c == b2 + 1 )) || fail "the next command after Ctrl-C showed $((c - b2)) pictures, expected 1"
 
-# 10. Inside tmux, with a client attached on a terminal read at 1 MB/s,
+# 10. Which pictures the terminal shows: GrADS asks it (a kitty graphics
+#     query, XTVERSION, the cell size, and Device Attributes, which every
+#     terminal answers), unless the environment says. Here a terminal that
+#     answers as kitty does gets the kitty graphics protocol, a picture of
+#     the cells it fills; one that answers as xterm -ti vt340 does gets sixel
+#     like the PNG; iTerm2 its own; a plain xterm, or a terminal that answers
+#     nothing, no -d Term at all (unless the launcher chose it: then files).
+#     LC_TERMINAL=iTerm2 and GA_TERM_PROTOCOL need no asking.
+cat > "$test_root/termkind.py" <<'PYTHON'
+import os, pty, fcntl, termios, struct, subprocess, time, select, re, sys, base64, zlib
+# termkind.py WHERE PROFILE LAUNCHER CTL ROOT TMUX [VAR=VALUE...]: run GrADS
+# on a terminal that answers as PROFILE does, outside tmux (WHERE=direct) or
+# as the terminal of a tmux client (WHERE=tmux); draw, and say what came out.
+where, profile, launcher, ctl, root, tmux = sys.argv[1:7]
+settings = dict(kv.split('=', 1) for kv in sys.argv[7:])
+draw = settings.pop('KIND_DRAW', 'd ts')    # the command that draws
+PROFILES = {   # kitty graphics, XTVERSION, cell size (CSI 16 t), DA1
+    'kitty':  (True, b'kitty(0.32.2)', (18, 9), b'?62;c'),
+    'vt340':  (False, b'XTerm(390)', None, b'?63;1;2;4;6;9;15;16;22;28c'),
+    'mlterm': (False, b'mlterm(3.9.3)', (19, 10), b'?63;1;2;3;4;6;7;15;18;22;29c'),
+    'iterm':  (False, b'iTerm2 3.5.0', None, b'?62;4c'),
+    'xterm':  (False, b'XTerm(390)', None, b'?64;1;2;6;9;15;16;17;18;21;22;28c'),
+    'silent': None,
+}
+P = PROFILES[profile]
+COLS, ROWS, CW, CH = 120, 40, 7, 14
+utf8 = 'en_US.UTF-8' if sys.platform == 'darwin' else 'C.UTF-8'
+log = root + '/kind-%s-%s.log' % (where, profile)
+if os.path.exists(log):
+    os.unlink(log)
+env = dict(os.environ, TERM='xterm-256color', OPENGRADS_COLOR='0', LANG=utf8, GA_TERM_LOG=log)
+for k in ('TMUX', 'TMUX_PANE', 'LC_TERMINAL', 'TERM_PROGRAM', 'KITTY_WINDOW_ID', 'GA_TERM_AUTO',
+          'GA_TERM_PROTOCOL', 'GA_TERM_MODE', 'GA_TERM_TMUX_STEP', 'LC_ALL', 'LC_CTYPE'):
+    env.pop(k, None)
+env.update(settings)
+if os.sep in tmux:
+    env['PATH'] = os.path.dirname(os.path.abspath(tmux)) + os.pathsep + env['PATH']
+size = struct.pack('HHHH', ROWS, COLS, COLS * CW, ROWS * CH)
+tm = [tmux, '-S', root + '/kind.sock', '-f', '/dev/null']
+if where == 'direct':
+    pid, fd = pty.fork()
+    if pid == 0:
+        fcntl.ioctl(0, termios.TIOCSWINSZ, size)
+        os.execve(launcher, [launcher, '-l', '-d', 'Term'], env)
+    def keys(c):
+        os.write(fd, (c + '\r').encode())
+else:
+    subprocess.run(tm + ['kill-server'], capture_output=True, env=env)
+    subprocess.run(tm + ['new-session', '-d', '-s', 'k', '-x', str(COLS), '-y', str(ROWS),
+                   launcher + ' -l -d Term; sleep 30'], env=env, check=True)
+    fd, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, size)
+    client = subprocess.Popen(tm + ['attach', '-t', 'k'], stdin=slave, stdout=slave,
+                              stderr=slave, env=env, start_new_session=True)
+    def keys(c):
+        subprocess.run(tm + ['send-keys', '-t', 'k:0.0', c, 'Enter'], env=env, check=True)
+out = bytearray()
+asked = []
+def pump(most, idle):
+    end = time.time() + most
+    last = time.time()
+    while time.time() < end and time.time() - last < idle:
+        r, _, _ = select.select([fd], [], [], 0.05)
+        if not r:
+            continue
+        try:
+            chunk = os.read(fd, 65536)
+        except OSError:
+            return
+        if not chunk:
+            return
+        n = len(out)
+        out.extend(chunk)
+        last = time.time()
+        new = bytes(out[max(0, n - 40):])
+        for q, what in ((b'\x1b_Gi=31,', 'kitty'), (b'\x1b[>0q', 'version'), (b'\x1b[>q', 'version'),
+                        (b'\x1b[16t', 'cell'), (b'\x1b[c', 'da')):
+            if q not in new or (where == 'direct' and what in asked):
+                continue
+            asked.append(what)
+            if P is None:
+                continue
+            if what == 'kitty' and P[0]:
+                os.write(fd, b'\x1b_Gi=31;OK\x1b\\')
+            if what == 'version':
+                os.write(fd, b'\x1bP>|' + P[1] + b'\x1b\\')
+            if what == 'cell' and P[2]:
+                os.write(fd, b'\x1b[6;%d;%dt' % P[2])
+            if what == 'da':
+                os.write(fd, b'\x1b[' + P[3])
+def screen():
+    if where == 'direct':
+        return out.decode('utf-8', 'replace')
+    return subprocess.run(tm + ['capture-pane', '-p', '-J', '-t', 'k:0.0'], capture_output=True,
+                          text=True, env=env).stdout
+def prompts():
+    return screen().count('ga->')
+end = time.time() + 30
+while time.time() < end and not prompts() and 'shows no pictures' not in screen():
+    pump(0.3, 0.3)                          # typed too soon, it may be lost
+said = [l for l in screen().splitlines() if 'Terminal display:' in l]
+for c in ('open ' + ctl, draw, 'quit') if prompts() else ():
+    n = prompts()
+    keys(c)
+    end = time.time() + 30
+    while time.time() < end and prompts() <= n and c != 'quit':
+        pump(0.3, 0.3)
+    pump(10, 1.5)
+if where == 'direct':
+    for _ in range(100):
+        done, status = os.waitpid(pid, os.WNOHANG)
+        if done:
+            print('exit', os.WEXITSTATUS(status) if os.WIFEXITED(status) else 'signal')
+            break
+        time.sleep(0.1)
+    else:
+        os.kill(pid, 9)
+        print('exit hung')
+else:
+    client.terminate()
+    subprocess.run(tm + ['kill-server'], capture_output=True, env=env)
+d = bytes(out)
+print('asked', ' '.join(sorted(set(asked))) or 'nothing')
+
+def png_size(png):
+    if not png.startswith(b'\x89PNG') or b'IEND' not in png[-12:]:
+        return None
+    return '%dx%d' % struct.unpack('>II', png[16:24])
+
+# kitty: the picture's parts, put together
+for m in re.finditer(rb'\x1b_G(a=T[^;]*);', d):
+    keys_, b64, p = m.group(1).decode(), b'', m.start()
+    for c in re.finditer(rb'\x1b_G(?:a=T[^;]*|m=\d);([A-Za-z0-9+/=]*)\x1b\\', d[p:]):
+        b64 += c.group(1)
+        if re.match(rb'\x1b_G[^;]*m=0;', d[p + c.start():]):
+            break
+    print('kitty', keys_, 'png', png_size(base64.b64decode(b64)))
+# kitty placeholders: the rows named by the first mark of each row
+marks = '̅̍̎̐̒̽̾̿͆͊͋͌͐͑͒͗͛ͣͤͥͦͧͨͩͪͫͬͭͮͯ҃҄҅҆҇֒֓֔֕֗֘֙֜֝֞֟֠֡֨֩'
+t = d.decode('utf-8', 'replace')
+rows = sorted(set(marks.index(m.group(1)) for m in
+                  re.finditer('\U0010eeee([%s])[%s]' % (marks, marks), t)))
+cells = len(re.findall('\U0010eeee(?=[\U0010eeee\x1b]|$)', t))
+if rows:
+    print('placeholders rows', len(rows), 'in order', rows == list(range(len(rows))),
+          'colour', ' '.join(sorted(set(re.findall(r'\x1b\[38;5;(\d+)m\U0010eeee', t)))))
+# sixel: decode, and compare with the PNG GrADS wrote
+pic = None
+for m in re.finditer(rb'\x1bP[0-9;]*q"1;1;(\d+);(\d+)([^\x1b]*)\x1b\\', d):
+    W, H, s = int(m.group(1)), int(m.group(2)), m.group(3)
+    pal, img = {}, [bytearray(W) for _ in range(H)]
+    painted = [bytearray(W) for _ in range(H)]
+    x = band = col = 0
+    p = 0
+    while p < len(s):
+        c = s[p]
+        if c == 35:
+            mm = re.match(rb'#(\d+)(?:;2;(\d+);(\d+);(\d+))?', s[p:])
+            col = int(mm.group(1))
+            if mm.group(2):
+                pal[col] = tuple(int(mm.group(k)) * 255 // 100 for k in (2, 3, 4))
+            p += mm.end()
+            continue
+        if c == 36 or c == 45:
+            x = 0
+            band += c == 45
+            p += 1
+            continue
+        if c == 33:
+            mm = re.match(rb'!(\d+)(.)', s[p:], re.S)
+            n, bits = int(mm.group(1)), mm.group(2)[0] - 63
+            p += mm.end()
+        else:
+            n, bits = 1, c - 63
+            p += 1
+        for _ in range(n):
+            for b in range(6):
+                y = band * 6 + b
+                if bits >> b & 1 and y < H and x < W:
+                    img[y][x] = col
+                    painted[y][x] = 1
+            x += 1
+    holes = sum(W - sum(r) for r in painted)
+    pic = (W, H, pal, img)
+    print('sixel %dx%d colours %d holes %d' % (W, H, len(pal), holes))
+pngs = [os.path.join(dp, f) for dp, _, fs in os.walk(settings.get('GA_TERM_DIR', '/nonexistent'))
+        for f in fs if f == 'plot.png']
+if pic and pngs:
+    png = open(pngs[0], 'rb').read()
+    pw, ph = struct.unpack('>II', png[16:24])
+    raw, p = b'', 8
+    while p < len(png):
+        n, = struct.unpack('>I', png[p:p + 4])
+        if png[p + 4:p + 8] == b'IDAT':
+            raw += png[p + 8:p + 8 + n]
+        p += 12 + n
+    raw = zlib.decompress(raw)              # GrADS writes rows unfiltered
+    W, H, pal, img = pic
+    alike = total = 0
+    for y in range(0, H, 3):
+        for x in range(0, W, 3):
+            o = (y * ph // H) * (1 + 3 * pw) + 1 + 3 * (x * pw // W)
+            total += 1
+            alike += all(abs(a - b) < 48 for a, b in zip(pal[img[y][x]], raw[o:o + 3]))
+    print('sixel like the PNG %d%%' % (100 * alike // total))
+print('iterm', len(re.findall(rb'\x1b\]1337;(?:File|MultipartFile)=', d)))
+for line in said:
+    print('said', line[line.index('Terminal display:'):].strip())
+PYTHON
+
+# kind WHERE PROFILE TMUX [VAR=VALUE...], and the log for a failure
+kind()
+{
+  local where="$1" profile="$2" tmux="$3"
+  shift 3
+  rm -rf "$test_root/kind-pics"
+  OPENGRADS_BUILD_ROOT="$build_root" GA_TERM_VIEWER="$viewer" \
+    python3 "$test_root/termkind.py" "$where" "$profile" "$launcher" "$model_ctl" \
+      "$test_root" "$tmux" GA_TERM_DIR="$test_root/kind-pics" "$@" 2>&1 || true
+  cat "$test_root/kind-$where-$profile.log" 2>/dev/null || true
+}
+
+# a terminal of 120 x 40 cells of 7 x 14 pixels: 70% of it is 84 columns
+result="$(kind direct kitty -)"
+grep -qx 'asked cell da kitty version' <<< "$result" ||
+  fail 'the terminal was not asked what it shows' "$result"
+grep -Eqx 'kitty a=T,f=100,t=d,q=2,c=84,m=1 png 756x[0-9]+' <<< "$result" ||
+  fail 'kitty did not get the picture, made for its cells of 9 pixels' "$result"
+result="$(kind direct vt340 -)"
+grep -Eqx 'sixel 588x[0-9]+ colours [0-9]+ holes 0' <<< "$result" ||
+  fail 'a sixel terminal did not get the picture as sixel' "$result"
+grep -Eqx 'sixel like the PNG (8[0-9]|9[0-9]|100)%' <<< "$result" ||
+  fail 'the sixel picture is not the plot' "$result"
+result="$(kind direct iterm -)"
+grep -qx 'iterm 1' <<< "$result" || fail 'iTerm2 did not get its own picture' "$result"
+# only iTerm2 plays a GIF: elsewhere the last frame stays
+result="$(kind direct kitty - GA_TERM_ANIM=gif "KIND_DRAW=run $test_root/dbuffloop.gs")"
+(( $(grep -c '^kitty a=T' <<< "$result") == 1 )) ||
+  fail 'kitty did not get the last frame of an animation, once' "$result"
+for profile in xterm silent; do
+  result="$(kind direct "$profile" -)"
+  grep -qx 'exit 1' <<< "$result" && grep -q '^said .*shows no pictures' <<< "$result" ||
+    fail "-d Term went on in a terminal that shows no pictures ($profile)" "$result"
+  if grep -q '^kitty \|^sixel \|^iterm [1-9]' <<< "$result"; then
+    fail "a picture went to a terminal that shows none ($profile)" "$result"
+  fi
+done
+grep -q 'did not answer' <<< "$result" || fail 'no word of a terminal that did not answer' "$result"
+result="$(kind direct xterm - GA_TERM_AUTO=1)"
+grep -qx 'exit 0' <<< "$result" && grep -q '^said .*they go to files in' <<< "$result" &&
+  [[ -s "$test_root/kind-pics/plot.png" ]] ||
+  fail 'chosen by the launcher, -d Term did not fall back to files' "$result"
+result="$(kind direct xterm - LC_TERMINAL=iTerm2)"
+grep -qx 'asked nothing' <<< "$result" && grep -qx 'iterm 1' <<< "$result" ||
+  fail 'with LC_TERMINAL=iTerm2 the terminal was asked, or got no picture' "$result"
+result="$(kind direct xterm - GA_TERM_PROTOCOL=sixel)"
+grep -qx 'asked nothing' <<< "$result" && grep -q '^sixel ' <<< "$result" ||
+  fail 'GA_TERM_PROTOCOL=sixel did not send sixel unasked' "$result"
+
+# 11. Inside tmux, with a client attached on a terminal read at 1 MB/s,
 #     like an ssh link: the pane says it is waiting until the first picture,
 #     every frame arrives whole, each is placed at the viewer pane, and the
 #     pane closes with GrADS. Three ways: plain tmux; plain tmux handed the
@@ -568,8 +829,10 @@ env = dict(os.environ, TERM='xterm-256color', OPENGRADS_COLOR='0',
            GA_TERM_LOG=root + '/term-' + how + '.log')
 if os.sep in tmux:
     env['PATH'] = os.path.dirname(os.path.abspath(tmux)) + os.pathsep + env['PATH']
-for k in ('TMUX', 'TMUX_PANE', 'LC_TERMINAL', 'GA_TERM_TMUX_STEP'):
+for k in ('TMUX', 'TMUX_PANE', 'LC_TERMINAL', 'GA_TERM_TMUX_STEP', 'GA_TERM_PROTOCOL'):
     env.pop(k, None)
+if how == 'plain':                          # this terminal answers nothing
+    env.update(GA_TERM_PROTOCOL='iterm2')
 if how == 'steps':
     env.update(GA_TERM_TMUX_STEP='4096', LC_TERMINAL='iTerm2')
 COLS, ROWS = 160, 45
@@ -701,14 +964,14 @@ for how in plain steps control; do
   printf '  in tmux (%s): %s\n' "$how" "$(grep '^tmux ' <<< "$result")"
 done
 
-# 11. A picture drawn while its pane is in another tmux window waits, and
+# 12. A picture drawn while its pane is in another tmux window waits, and
 #     appears when the window is shown again.
 cat > "$test_root/hidden.py" <<'PYTHON'
 import os, pty, fcntl, termios, struct, subprocess, time, select, sys
 launcher, ctl, root, viewer, build, tmux = sys.argv[1:7]
 sock = root + '/tmux-hidden.sock'
 env = dict(os.environ, TERM='xterm-256color', OPENGRADS_COLOR='0', OPENGRADS_BUILD_ROOT=build,
-           GA_TERM_VIEWER=viewer, GA_TERM_LOG=root + '/term-hidden.log')
+           GA_TERM_VIEWER=viewer, GA_TERM_LOG=root + '/term-hidden.log', GA_TERM_PROTOCOL='iterm2')
 if os.sep in tmux:
     env['PATH'] = os.path.dirname(os.path.abspath(tmux)) + os.pathsep + env['PATH']
 for k in ('TMUX', 'TMUX_PANE', 'LC_TERMINAL', 'GA_TERM_TMUX_STEP'):
@@ -755,5 +1018,31 @@ grep -qx 'hidden 0' <<< "$result" ||
   fail 'a picture was drawn while its pane was in another window' "$result"
 grep -qx 'back 1' <<< "$result" ||
   fail 'the held picture did not appear when its window came back' "$result"
+
+# 13. Inside tmux, tmux says which terminal its client is in, and whether
+#     it shows sixel (tmux 3.4 built with sixel, which then draws it in the
+#     pane itself): kitty gets the picture and draws it in place of
+#     placeholder characters, which tmux keeps with the pane; a sixel
+#     terminal gets sixel; iTerm2 its own; a plain xterm no -d Term.
+result="$(kind tmux kitty "$tmux_bin")"
+# the pane is half of 120 columns, of 7 pixels
+read -r cols rows width <<< "$(sed -n \
+  's/^kitty a=T,U=1,f=100,t=d,q=2,i=[0-9]*,c=\([0-9]*\),r=\([0-9]*\),m=1 png \([0-9]*\)x.*/\1 \2 \3/p' \
+  <<< "$result")"
+(( ${cols:-0} >= 58 && ${cols:-0} <= 60 && ${width:-0} == ${cols:-0} * 7 )) ||
+  fail 'kitty in tmux did not get the picture, made for the pane' "$result"
+grep -Eqx "placeholders rows $rows in order True colour (1[6-9]|[2-9][0-9]|1[0-9][0-9]|2[0-5][0-9])" \
+  <<< "$result" || fail 'the kitty placeholders do not cover the picture' "$result"
+result="$(kind tmux iterm "$tmux_bin")"
+grep -qx 'iterm 1' <<< "$result" || fail 'iTerm2 in tmux did not get its own picture' "$result"
+result="$(kind tmux xterm "$tmux_bin")"
+grep -q '^said .*shows no pictures' <<< "$result" ||
+  fail '-d Term went on in tmux in a terminal that shows no pictures' "$result"
+result="$(kind tmux mlterm "$tmux_bin")"
+grep -Eq '^sixel [0-9]+x[0-9]+ colours' <<< "$result" ||
+  fail 'a sixel terminal in tmux did not get sixel' "$result"
+how="$(sed -n 's/.*protocol: sixel (\(tmux draws\).*/tmux draws it/p' <<< "$result")"
+printf '  pictures by terminal: kitty, sixel, iTerm2, none; in tmux too (sixel: %s)\n' \
+  "${how:-passed through}"
 
 printf 'Terminal display checks passed\n'

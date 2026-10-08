@@ -235,9 +235,13 @@ else
   fi
 fi
 
-# Does the terminal show iTerm2 inline images? iTerm2 sets LC_TERMINAL, which
-# ssh forwards with the other LC_* variables, so this also holds on a remote
-# host and inside tmux there. OPENGRADS_TERM=1 or 0 overrides the guess.
+# Does the terminal show pictures? By what it says of itself: iTerm2 sets
+# LC_TERMINAL, which ssh forwards with the other LC_* variables, so this also
+# holds on a remote host and inside tmux there; WezTerm, kitty, Ghostty,
+# mintty, foot and mlterm set TERM_PROGRAM, TERM or KITTY_WINDOW_ID. The
+# terminal display then asks the terminal which pictures it shows, and when
+# it shows none (GA_TERM_AUTO), writes them to files. OPENGRADS_TERM=1 or 0
+# overrides the guess.
 terminal_shows_images()
 {
   case "${OPENGRADS_TERM:-}" in
@@ -245,8 +249,12 @@ terminal_shows_images()
     0) return 1 ;;
   esac
   [[ -t 1 ]] || return 1
+  [[ -n "${KITTY_WINDOW_ID:-}" ]] && return 0
   case "${LC_TERMINAL:-}:${TERM_PROGRAM:-}" in
-    iTerm2:*|*:iTerm.app|WezTerm:*|*:WezTerm) return 0 ;;
+    iTerm2:*|*:iTerm.app|WezTerm:*|*:WezTerm|*:ghostty|*:mintty) return 0 ;;
+  esac
+  case "${TERM:-}" in
+    xterm-kitty|xterm-ghostty|foot|foot-*|mlterm*) return 0 ;;
   esac
   return 1
 }
@@ -264,6 +272,7 @@ if [[ "$#" -eq 0 ]]; then
   if [[ "$runtime_kind" == local ]]; then
     if (( use_terminal_display )); then
       # The terminal shows the picture itself; no X server is needed.
+      [[ "${OPENGRADS_TERM:-}" == 1 ]] || export GA_TERM_AUTO=1
       set -- -l -d Term
     elif [[ -z "${DISPLAY:-}" ]]; then
       set -- -bl -d gxdummy -h gxdummy

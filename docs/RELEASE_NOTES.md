@@ -6,14 +6,16 @@ calculations, and native archives for Linux and macOS.
 ### Added in 1.0.10
 
 - **Plots in the terminal, without X.** A new display, `-d Term`, draws GrADS
-  pictures inside the terminal with the iTerm2 inline image protocol (iTerm2,
-  WezTerm), so a session on a cluster needs no X server and no `ssh -X`.
+  pictures inside the terminal (iTerm2, WezTerm, kitty, Ghostty, and sixel
+  terminals such as foot and mlterm), so a session on a cluster needs no X
+  server and no `ssh -X`.
   Inside tmux, GrADS splits a pane off beside the prompt and draws each
   picture there, sized to the pane; outside tmux it prints the picture below
   the command. Pictures are encoded in a background thread, so the prompt
   comes back at once. The launcher picks this display when there is no
-  `DISPLAY` and the terminal is iTerm2 or WezTerm, which it learns from
-  `LC_TERMINAL` (ssh forwards it); `OPENGRADS_TERM=1` or `0` overrides the
+  `DISPLAY` and the terminal says it shows pictures (iTerm2 through
+  `LC_TERMINAL`, which ssh forwards; kitty, Ghostty, WezTerm and others
+  through `TERM` or `TERM_PROGRAM`); `OPENGRADS_TERM=1` or `0` overrides the
   choice. Both ordinary tmux and iTerm2's tmux integration (`tmux -CC`)
   work, tmux before 3.3 (3.2a, as on RHEL 9 and many clusters) included:
   there, since such a tmux throws away output a slow terminal cannot take,
@@ -25,12 +27,25 @@ calculations, and native archives for Linux and macOS.
   `GA_TERM_LOG=file` records which kind of tmux GrADS found and how each
   picture was sent, for tracking down a picture that does not appear.
   Linux and macOS archives. See [TERMINAL.md](TERMINAL.md).
+- **The terminal display finds out what the terminal shows.** It asks the
+  terminal (a kitty graphics query, its name, its cell size, and Device
+  Attributes), or inside tmux goes by what tmux learnt of it, and draws with
+  iTerm2's inline images, kitty graphics, or sixel accordingly. kitty gets
+  the picture at the size of the cells it fills, often a tenth of the data,
+  and inside tmux draws it in place of placeholder characters, which tmux
+  keeps with the pane as it switches windows. Sixel goes in up to 256
+  colours; tmux 3.4 built with sixel draws it in the pane itself. In a
+  terminal that shows none (a plain xterm, the macOS Terminal) `-d Term`
+  says so and stops, instead of filling the screen with escape codes; when
+  the launcher chose it, the pictures go to files instead.
+  `GA_TERM_PROTOCOL=iterm2`, `kitty` or `sixel` names the kind and skips the
+  asking.
 - **Animations play frame by frame in the terminal.** `set looping on`, or a
   `set dbuff on` loop, shows every frame in order as it is drawn, as an X
   window does. On a slow link the drawing waits for it rather than piling
   pictures up, and Ctrl-C stops the animation and sends nothing more.
   `GA_TERM_ANIM=gif` also leaves a looping GIF, which iTerm2 plays on its
-  own.
+  own (other terminals keep the last frame).
 - **How long a calculation will take.** A calculation that runs for more
   than a second shows a progress line on the terminal: what runs, how far
   along it is, the calculation threads at work, the time taken and about
@@ -58,9 +73,10 @@ calculations, and native archives for Linux and macOS.
   record for the display plug-in`. The packager checks that both load from
   the archive, and draws with them on XQuartz's virtual X server.
 - **macOS: plots in the terminal.** The macOS archive also carries the
-  terminal display, `-d Term`, so in iTerm2 or WezTerm on a Mac pictures
-  appear in the terminal, inside tmux too, without XQuartz. The launcher
-  picks it when there is no `DISPLAY` and the terminal is iTerm2 or WezTerm;
+  terminal display, `-d Term`, so in iTerm2, WezTerm, kitty or Ghostty on a
+  Mac pictures appear in the terminal, inside tmux too, without XQuartz. The
+  launcher picks it when there is no `DISPLAY` and the terminal shows
+  pictures;
   with XQuartz installed the X window wins, and `-d Term` or
   `OPENGRADS_TERM=1` asks for the terminal instead. The terminal display's
   tests, tmux included, now run on macOS too.
@@ -438,8 +454,9 @@ built with `ADIOS2_USE_MPI=OFF`.
 - **OpenMP-threaded calculations.** Defaults to 4 threads; `-j N` or
   `GA_NUM_THREADS` override it, and `q threads` reports the active count.
 - **`sdfopen` / `xdfopen`** against NetCDF-4 and HDF5.
-- **Plots in the terminal** over plain ssh, from iTerm2 or WezTerm, in a
-  tmux pane beside the prompt; no X server needed (Linux and macOS).
+- **Plots in the terminal** over plain ssh, from iTerm2, WezTerm, kitty,
+  Ghostty or a sixel terminal, in a tmux pane beside the prompt; no X server
+  needed (Linux and macOS).
 - **Three native archives**, each self-contained: Linux x86_64 and aarch64,
   and macOS arm64. No dependency installation and no library paths to set.
 
@@ -454,7 +471,8 @@ which constrains what each platform can carry:
 | macOS | `Cairo`, `X11` (with XQuartz), `Term`, `gxdummy` | `Cairo`, `gxdummy` |
 
 On macOS the `Cairo` and `X11` displays draw in a window through XQuartz,
-and `Term` draws in iTerm2 or WezTerm. Without either the archive runs
+and `Term` draws in a terminal that shows pictures (iTerm2, WezTerm, kitty,
+Ghostty). Without either the archive runs
 headless but keeps the full Cairo hardcopy path, so `printim` and `print`
 produce PNG, PS, PDF, and SVG.
 
@@ -471,8 +489,9 @@ cd opengrads-hpc-1.0.10-linux-x86_64
 ```
 
 On macOS start `./opengrads`. The launcher opens a GrADS window when
-XQuartz is installed (it sets `DISPLAY`), draws in the terminal in iTerm2 or
-WezTerm otherwise, and runs headless elsewhere, so no extra flags are needed.
+XQuartz is installed (it sets `DISPLAY`), draws in the terminal in iTerm2,
+WezTerm, kitty or Ghostty otherwise, and runs headless elsewhere, so no
+extra flags are needed.
 `./opengrads -l -d Term` draws in the terminal even with XQuartz.
 
 ### Known limitations
@@ -484,7 +503,8 @@ WezTerm otherwise, and runs headless elsewhere, so no extra flags are needed.
   but is not yet covered by the regression suite.
 - The terminal display is tested through tmux 3.2a, 3.4, and 3.7c, plain and
   `-CC`, with a terminal emulator standing in for iTerm2, not yet on iTerm2
-  itself. If no picture appears, `GA_TERM_LOG=/tmp/grads-term.log` records
+  itself; kitty, xterm (`-ti vt340`) and mlterm were checked on screen, by
+  themselves and in tmux 3.2a and 3.4. If no picture appears, `GA_TERM_LOG=/tmp/grads-term.log` records
   what happened; `GA_TERM_PROGRESS=off` sends each picture in the oldest form
   of the protocol. Pictures in parts, which tmux before 3.3 and `tmux -CC`
   always use, need iTerm2 3.5 or newer.
