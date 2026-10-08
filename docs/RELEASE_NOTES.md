@@ -83,6 +83,12 @@ calculations, and native archives for Linux and macOS.
 
 ### Changed in 1.0.10
 
+- **Undo is on from the start.** GrADS starts as after `set undo 10`: the
+  last ten commands that changed the picture can be undone without turning
+  undo on first. `set undo <steps>` keeps another number, and `set undo off`
+  turns it off, as before. A step costs a few KB; a `clear` keeps the
+  cleared picture (at least 1 MB) until its step is undone or dropped. See
+  [UNDO.md](UNDO.md).
 - **Axes of very small or large values carry one power of ten.** As in
   matplotlib, a plain numeric axis whose labels would have gone to
   e-notation (below 1e-4, or from 1e6) now shows them as plain numbers with

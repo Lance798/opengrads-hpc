@@ -67,8 +67,9 @@ libraries are available.
   progress bar. The launcher picks it automatically, on Linux and on a Mac.
   See [terminal display](docs/TERMINAL.md).
 
-- **Undo for the plot.** Step the picture back one command at a time, off by
-  default: `set undo 10` turns it on and keeps ten steps, `undo` rewinds one,
+- **Undo for the plot.** Step the picture back one command at a time, on
+  from start-up with ten steps kept: `undo` rewinds one, `undo <n>` several,
+  `set undo <steps>` keeps another number and `set undo off` turns it off,
   a whole script counts as a single step, and `clear` can be undone too. The
   picture comes back with what GrADS knows about it (axis ranges, scaling,
   shading levels); settings and open files stay. See

@@ -58,6 +58,9 @@ output="$(
   run_grads gxdummy <<GRADS_COMMANDS
 q undo
 undo
+set undo off
+q undo
+undo
 set undo 2
 q undo
 draw line 1 1 5 5
@@ -113,7 +116,8 @@ check_count()
   fi
 }
 
-# Off by default, and the error says how to turn it on.
+# On by default, keeping ten steps; off, the error says how to turn it on.
+check_text 'Undo is on, 0 of 10 steps available, 7 meta buffer words used by the current plot'
 check_text 'Undo is off, 7 meta buffer words used by the current plot'
 check_text "UNDO error:  undo is off.  Turn it on with 'set undo <steps>'"
 
@@ -143,9 +147,10 @@ check_text 'Undo is on, keeping up to 3 steps'
 check_text 'Undo is on, 0 of 3 steps available, 0 meta buffer words used by the current plot'
 check_text 'Undo is off'
 
-# Exactly one 'undo' ran with the feature on and nothing to rewind: the one
-# after double buffering. The other two report the 'undo is off' error.
-check_count 'Nothing to undo' 1
+# Two 'undo's ran with the feature on and nothing to rewind: the first, at
+# start-up, and the one after double buffering. The two after 'set undo off'
+# report the 'undo is off' error.
+check_count 'Nothing to undo' 2
 check_count "UNDO error:  undo is off.  Turn it on with 'set undo <steps>'" 2
 
 # Undo puts back what GrADS knows about the picture along with it, as the
@@ -292,7 +297,7 @@ collect plotted 'd ts+0'
   state_fail 'undoing a display did not give back the cint it used'
 
 if [[ "$hardcopy" == gxdummy ]]; then
-  printf 'Undo state test passed: default off, step accounting, script as one step, clear as a step, frame resets, plot state.\n'
+  printf 'Undo state test passed: on by default (10 steps), off, step accounting, script as one step, clear as a step, frame resets, plot state.\n'
   printf 'Rendered-output comparison skipped: this build has no printing plug-in.\n'
   exit 0
 fi
@@ -401,5 +406,5 @@ for pair in rewound:direct unclear:direct unscript:direct unmask:mask; do
   fi
 done
 
-printf 'Undo test passed: default off, step accounting, script as one step, clear as a step, frame resets, plot state, and byte-identical plots after undoing draws, a clear, a script that clears, and with masked labels (%s).\n' \
+printf 'Undo test passed: on by default (10 steps), off, step accounting, script as one step, clear as a step, frame resets, plot state, and byte-identical plots after undoing draws, a clear, a script that clears, and with masked labels (%s).\n' \
   "$hardcopy"

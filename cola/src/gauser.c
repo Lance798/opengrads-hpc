@@ -5506,7 +5506,7 @@ static char *kwds[130] = {"X","Y","Z","T","LON","LAT","LEV","TIME",
       return(1);
     }
     if (cmpwrd("off",cmd)) itt = 0;
-    else if (cmpwrd("on",cmd)) itt = 10;        /* Default depth */
+    else if (cmpwrd("on",cmd)) itt = UNDODEFAULT;
     else if (intprs(cmd,&itt) == NULL || itt<0) {
       gaprnt(0,"SET UNDO Error: operand must be on, off, or a step count\n");
       return(1);
