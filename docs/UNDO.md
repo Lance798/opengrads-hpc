@@ -9,13 +9,19 @@ ga-> set gxout shaded
 ga-> display ts
 ga-> display ps
 ga-> undo
-Undid 1 step, 1 of 10 still available
+Undid 1 step; 1 more can be undone (up to 10 kept)
 ga-> clear
 ga-> undo
-Undid 1 step, 1 of 10 still available
+Undid 1 step; 1 more can be undone (up to 10 kept)
 ```
 
 The last `undo` brings back the `ts` plot that `clear` removed.
+
+`set undo 10` means the last ten commands that changed the picture can be
+undone, one `undo` at a time. Each such command is kept as a step, the
+oldest dropping out once there are ten; each `undo` takes the newest step
+back, and there is no redo. "1 more can be undone" counts the steps left
+now, and "up to 10 kept" is the setting.
 
 ## Commands
 
@@ -27,10 +33,10 @@ The last `undo` brings back the `ts` plot that `clear` removed.
 | `set undo 0` | Same as `set undo off`. |
 | `undo` | Step the plot back one step. |
 | `undo <n>` | Step back up to `n` steps, stopping when none are left. |
-| `q undo` | Report whether undo is on, how many steps are available, and how much of the graphics buffer the current plot occupies. |
+| `q undo` | Report whether undo is on, how many steps can be undone now, and how much of the graphics buffer the current plot occupies. |
 
-Changing the step count starts a fresh stack: the steps stored under the old
-setting are released.
+Changing the step count keeps the steps already stored; when the new count
+is smaller, only the newest that fit stay. `set undo off` releases them.
 
 ## What a step is
 

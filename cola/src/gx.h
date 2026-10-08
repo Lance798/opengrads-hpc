@@ -430,7 +430,7 @@ struct gxdsubs *getdsubs(void);
    gxhwri: Write buffer to metafile
    gxhfrm: Handle new frame action
    gxhdrw: Handle redraw operation
-   gxhundoset:  Set how many undo steps to keep; below one turns undo off
+   gxhundoset:  Set how many undo steps to keep (the newest stay); below one turns undo off
    gxhundoclr:  Forget the saved undo steps
    gxhundofn:   Name the routine that frees the state a step carries
    gxhundomark: Note where the plot ends before a command runs

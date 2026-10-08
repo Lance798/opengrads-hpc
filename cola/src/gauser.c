@@ -837,7 +837,7 @@ FILE *pdefid=NULL;
     if (rc==0) gaprnt (1,"Nothing to undo\n");
     else {
       gxhundoq (&fnum,&j,NULL);
-      snprintf(pout,1255,"Undid %i step%s, %i of %i still available\n",
+      snprintf(pout,1255,"Undid %i step%s; %i more can be undone (up to %i kept)\n",
                rc,rc==1?"":"s",j,fnum);
       gaprnt (2,pout);
     }
@@ -3314,8 +3314,8 @@ gadouble minvals[4], maxvals[4],dval;
                "Undo is off, %i meta buffer words used by the current plot\n",cnt);
     else
       snprintf(pout,1255,
-               "Undo is on, %i of %i step%s available, %i meta buffer words used by the current plot\n",
-               j,i,i==1?"":"s",cnt);
+               "Undo is on: %i step%s can be undone (up to %i kept), %i meta buffer words used by the current plot\n",
+               j,j==1?"":"s",i,cnt);
     gaprnt(2,pout);
   }
   else if (cmpwrd(arg,"threads")) {
@@ -5517,8 +5517,9 @@ static char *kwds[130] = {"X","Y","Z","T","LON","LAT","LEV","TIME",
     }
     if (itt<1) gaprnt(2,"Undo is off\n");
     else {
-      gxhundoq(&i1,NULL,NULL);
-      snprintf(pout,1255,"Undo is on, keeping up to %i step%s\n",i1,i1==1?"":"s");
+      gxhundoq(&i1,&i2,NULL);
+      snprintf(pout,1255,"Undo is on, keeping up to %i step%s; %i can be undone now\n",
+               i1,i1==1?"":"s",i2);
       gaprnt(2,pout);
     }
     return(0);
