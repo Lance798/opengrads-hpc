@@ -3030,6 +3030,75 @@ static struct gavar *ave_plain_var (char *expr, struct gastat *pst,
   return pvar;
 }
 
+/* An average over x, y or z of a bare variable whose result varies in
+   one dimension at most (a profile, a section's line, a point): every
+   position it averages over is read at once, as one grid in which the
+   averaged dimension varies too, rather than a read for each position.
+   Read one at a time, a profile averaged over x and y is a read of a
+   column for every point of the plane, each of which costs a file format
+   such as BP5 the whole block it lies in. Returns that grid, or NULL to
+   read a position at a time; its values are the ones those reads give.
+   pgr1 is the grid read for the first position. */
+#define AVE_SECTION_MAX 33554432.0     /* values in one such read, 256 MB */
+static struct gagrid *ave_section (struct gafunc *pfc, struct gastat *pst,
+                                   struct gafile *pfi, gaint dim, gaint d1, gaint d2,
+                                   struct gagrid *pgr1) {
+  struct gagrid *sec;
+  gadouble (*conv) (gadouble *, gadouble);
+  gadouble smin, smax;
+  gaint sidim, sjdim, r, rc;
+
+  if (dim>2 || d2<=d1 || pgr1->jdim>=0) return NULL;
+  if ((gadouble)(d2-d1+1)*pgr1->isiz > AVE_SECTION_MAX) return NULL;
+  if (ave_plain_var(pfc->argpnt[0],pst,pgr1)==NULL) return NULL;
+  r = pgr1->idim;
+  if (r==dim) return NULL;
+  sidim = pst->idim;
+  sjdim = pst->jdim;
+  smin = pst->dmin[dim];
+  smax = pst->dmax[dim];
+  conv = pfi->gr2ab[dim];
+  pst->dmin[dim] = conv(pfi->grvals[dim],(gadouble)d1);
+  pst->dmax[dim] = conv(pfi->grvals[dim],(gadouble)d2);
+  if (r<0)        { pst->idim = dim; pst->jdim = -1; }
+  else if (r<dim) { pst->idim = r;   pst->jdim = dim; }
+  else            { pst->idim = dim; pst->jdim = r; }
+  rc = gaexpr(pfc->argpnt[0],pst);
+  pst->idim = sidim;
+  pst->jdim = sjdim;
+  pst->dmin[dim] = smin;
+  pst->dmax[dim] = smax;
+  if (rc) return NULL;
+  if (pst->type!=1) {
+    gafree(pst);
+    return NULL;
+  }
+  sec = pst->result.pgr;
+  /* it holds every position, and the rest is laid out as the first grid */
+  if (sec->dimmin[dim]!=d1 || sec->dimmax[dim]!=d2 ||
+      (r>=0 && (sec->dimmin[r]!=pgr1->dimmin[r] || sec->dimmax[r]!=pgr1->dimmax[r])) ||
+      sec->isiz*sec->jsiz != (d2-d1+1)*pgr1->isiz*pgr1->jsiz ||
+      (r<0 ? sec->idim!=dim : (sec->idim!=(r<dim ? r : dim) || sec->jdim!=(r<dim ? dim : r)))) {
+    gagfre(sec);
+    return NULL;
+  }
+  return sec;
+}
+
+/* The grid at position k (from the first) of a section: siz values */
+static void ave_section_at (struct gagrid *sec, gaint dim, gaint k, gaint siz,
+                            gadouble *val, char *valu) {
+  gaint i;
+  size_t o;
+  for (i=0; i<siz; i++) {
+    if (sec->jdim<0) o = (size_t)k;                                /* a point */
+    else if (sec->idim==dim) o = (size_t)i*sec->isiz + k;          /* dim varies faster */
+    else o = (size_t)k*sec->isiz + i;
+    val[i] = sec->grid[o];
+    valu[i] = sec->umask[o];
+  }
+}
+
 static gaint ave_run (struct gafunc *, struct gastat *, gaint);
 
 /* ave and its kin, with their progress shown while they run */
@@ -3054,8 +3123,9 @@ gaint i, rc, siz, dim, d, d1, d2, dim2, ilin, incr, bndflg, normerr;
 gaint k, nstep, chunk, ib, ie, ndone;
 char *ch,*fnam,*sumu,*cntu,*valu;
 struct gavar *direct;
-gadouble *steps=NULL, *wts=NULL;
-char *stepsu=NULL;
+gadouble *steps=NULL, *wts=NULL, *secv=NULL;
+char *stepsu=NULL, *secu=NULL;
+struct gagrid *sect=NULL;
 
   d2r = M_PI/180;
   fnam=avenam[sel-1];
@@ -3433,6 +3503,15 @@ char *stepsu=NULL;
   d+=incr;
   rc = 0;
   direct = (dim==3) ? ave_plain_var(pfc->argpnt[0],pst,pgr1) : NULL;
+  if (d<=d2) sect = ave_section(pfc,pst,pfi,dim,d1,d2,pgr1);
+  if (sect) {
+    secv = (gadouble *)galloc(sizeof(gadouble)*(size_t)siz,"avesecv");
+    secu = (char *)galloc((size_t)siz,"avesecu");
+    if (!secv || !secu) {
+      gagfre(sect);
+      sect = NULL;
+    }
+  }
   chunk = 1;
   if (direct) {
     chunk = (gaint)((64.0*1024.0*1024.0) / ((gadouble)siz*(sizeof(gadouble)+1)));
@@ -3558,14 +3637,25 @@ char *stepsu=NULL;
       }
     }
 
-    rc = gaexpr(pfc->argpnt[0],pst);
-    if (!rc && pst->type==0) rc = -1;
+    pgr = NULL;
+    if (sect) {                        /* read already, with the others */
+      ave_section_at(sect,dim,d-d1,siz,secv,secu);
+      val = secv;
+      valu = secu;
+      if (gaqsig()) rc = 1;            /* Ctrl-C, as gaexpr would notice */
+    }
+    else {
+      rc = gaexpr(pfc->argpnt[0],pst);
+      if (!rc && pst->type==0) rc = -1;
+      if (!rc) {
+        pgr = pst->result.pgr;
+        val = pgr->grid;
+        valu = pgr->umask;
+      }
+    }
     if (!rc) {
-      pgr = pst->result.pgr;
-      val = pgr->grid;
       cnt = pgr2->grid;
       sum = pgr1->grid;
-      valu = pgr->umask;
       cntu = pgr2->umask;
       sumu = pgr1->umask;
 #if USEOPENMP == 1
@@ -3574,7 +3664,7 @@ char *stepsu=NULL;
       for (i=0; i<siz; i++) {
         ave_accumulate(sel, d, wt, &sum[i], &sumu[i], &cnt[i], &cntu[i], val[i], valu[i]);
       }
-      gagfre(pgr);
+      if (pgr) gagfre(pgr);
       gaprogstep(++ndone);
     }
   }
@@ -3582,6 +3672,9 @@ char *stepsu=NULL;
   if (steps)  gree(steps,"avesteps");
   if (stepsu) gree(stepsu,"avestepsu");
   if (wts)    gree(wts,"avewts");
+  if (sect)   gagfre(sect);
+  if (secv)   gree(secv,"avesecv");
+  if (secu)   gree(secu,"avesecu");
   if (rc) {
     if (rc==-1) gafree (pst);
     gagfre(pgr1);

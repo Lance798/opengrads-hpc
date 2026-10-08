@@ -104,6 +104,38 @@ The 3-D `define` evaluates the average one level at a time, so it remains
 bounded by reading 300 separate planes per batch of steps; with one thread it
 takes 4.0 s.
 
+## Averages over x, y and z
+
+An average over x, y or z also evaluates its expression once per position:
+`ave(ave(th,x=1,x=256),y=1,y=256)` drawn as a profile read a column of `th`
+for every point of the plane, 65,536 reads, and with BP5 each of them went
+through the whole block the column lies in. Calculation threads do not help
+with that, since the time goes into the reads. Now, when the expression is a
+plain variable of the default file and the result varies in one dimension at
+most (a horizontal-mean profile, a zonal-mean line, a single value), every
+position is read at once, as one section of up to 256 MB, and averaged from
+memory. Every file format takes this path. Weights (latitude, `-b` bounds),
+wrap-around in longitude and positions outside the file are handled as
+before, and `pytests/TestAveSection.sh` checks that each result matches, to
+the last bit, the one taken a position at a time. Any other expression, or a
+map or section as the result, still reads a position at a time.
+
+On a BP5 dataset of 256 × 256 × 100, the profile
+`d ave(ave(th,x=1,x=256),y=1,y=256)` with `set z 1 100` took 12.8 s at one
+thread and at four; it now takes 0.6 s, start-up included.
+
+For a time-mean profile, average over time first and over the plane after:
+
+```text
+ga-> define tm = ave(th,t=1,t=241)
+ga-> set x 1
+ga-> set y 1
+ga-> d ave(ave(tm,x=1,x=96),y=1,y=96)
+```
+
+The `define` reads many times at once (see above), and the profile is then
+taken from memory.
+
 ## Reproducibility of parallel reductions
 
 Parallel reductions can differ from a one-thread result in the last few
