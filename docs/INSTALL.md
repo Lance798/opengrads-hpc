@@ -135,8 +135,9 @@ The startup line should contain `readline netcdf adios2-bp5 openmp`.
 ```
 
 With an X display the launcher selects the Cairo plug-ins, falling back to X11
-and then to headless `gxdummy`. Without one, in iTerm2 or WezTerm, it selects
-the [terminal display](TERMINAL.md). Opening BP5 data needs no descriptor file:
+and then to headless `gxdummy`. Without one, in a terminal that shows
+pictures (iTerm2, WezTerm, kitty, Ghostty), it selects the
+[terminal display](TERMINAL.md). Opening BP5 data needs no descriptor file:
 
 ```text
 bpopen /path/to/output.bp
@@ -168,8 +169,9 @@ Avoid `make -B`, which can trigger unnecessary Autotools regeneration.
 missing, repeat step 2; if it lives elsewhere, set `OPENGRADS_BUILD_ROOT`.
 
 **No X window.** Check `echo "$DISPLAY"`. Remote sessions need `ssh -X` or
-`-Y`. Headless mode needs no X. From iTerm2 or WezTerm, the terminal display
-shows plots without X; see [TERMINAL.md](TERMINAL.md).
+`-Y`. Headless mode needs no X. From iTerm2, WezTerm, kitty, Ghostty or a
+sixel terminal, the terminal display shows plots without X; see
+[TERMINAL.md](TERMINAL.md).
 
 **ADIOS2 not detected.** Confirm `"$adios2_root/bin/adios2-config" --serial
 --c-flags` works, then reconfigure with that exact prefix.

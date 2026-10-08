@@ -76,11 +76,11 @@ On macOS the X displays draw in a window through XQuartz. They are loaded
 only when asked for, with X libraries bundled in the archive, so the archive
 needs XQuartz only for a window: without it, it runs headless and keeps the
 full Cairo hardcopy path, so `printim` and `print` produce PNG, PS, PDF, and
-SVG output. The terminal display, `Term`, needs no X server: it draws in
-iTerm2 or WezTerm, as on Linux, and its tmux pane viewer is bundled as
-`libexec/grads-termview`. The macOS launcher opens a window when `DISPLAY`
+SVG output. The terminal display, `Term`, needs no X server: it draws in a
+terminal that shows pictures, as on Linux, and its tmux pane viewer is
+bundled as `libexec/grads-termview`. The macOS launcher opens a window when `DISPLAY`
 is set, which XQuartz does for the login session, draws in the terminal in
-iTerm2 or WezTerm otherwise, and runs headless elsewhere. Both
+one that shows pictures otherwise, and runs headless elsewhere. Both
 launchers pass the drivers their archive actually carries, so `./opengrads`
 and `opengrads.cmd` work without extra flags; anything the caller passes
 still wins.

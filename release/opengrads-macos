@@ -25,18 +25,23 @@ fi
 
 # The default display, Cairo, draws in an X window, which needs an X server:
 # XQuartz provides one and sets DISPLAY for the login session (it starts on
-# demand). Without one, in iTerm2 or WezTerm, the terminal display (Term)
-# shows the pictures in the terminal itself, here or over ssh; elsewhere the
-# archive runs headless on gxdummy, and pictures go to files with printim
-# and print. Fill in the drivers unless the caller named them.
+# demand). Without one, in a terminal that shows pictures (iTerm2, WezTerm,
+# kitty, Ghostty), the terminal display (Term) shows them in the terminal
+# itself, here or over ssh; elsewhere the archive runs headless on gxdummy,
+# and pictures go to files with printim and print. Fill in the drivers
+# unless the caller named them.
 have_x=0
 if [[ -n "${DISPLAY:-}" && -r "$GA_ROOT/libgxdCairo.dylib" ]]; then
   have_x=1
 fi
 
-# Does the terminal show iTerm2 inline images? iTerm2 sets LC_TERMINAL, which
-# ssh forwards with the other LC_* variables. OPENGRADS_TERM=1 or 0 overrides
-# the guess.
+# Does the terminal show pictures? By what it says of itself: iTerm2 sets
+# LC_TERMINAL, which ssh forwards with the other LC_* variables, so this also
+# holds on a remote host and inside tmux there; WezTerm, kitty, Ghostty,
+# mintty, foot and mlterm set TERM_PROGRAM, TERM or KITTY_WINDOW_ID. The
+# terminal display then asks the terminal which pictures it shows, and when
+# it shows none (GA_TERM_AUTO), writes them to files. OPENGRADS_TERM=1 or 0
+# overrides the guess.
 terminal_shows_images()
 {
   case "${OPENGRADS_TERM:-}" in
@@ -44,8 +49,12 @@ terminal_shows_images()
     0) return 1 ;;
   esac
   [[ -t 1 ]] || return 1
+  [[ -n "${KITTY_WINDOW_ID:-}" ]] && return 0
   case "${LC_TERMINAL:-}:${TERM_PROGRAM:-}" in
-    iTerm2:*|*:iTerm.app|WezTerm:*|*:WezTerm) return 0 ;;
+    iTerm2:*|*:iTerm.app|WezTerm:*|*:WezTerm|*:ghostty|*:mintty) return 0 ;;
+  esac
+  case "${TERM:-}" in
+    xterm-kitty|xterm-ghostty|foot|foot-*|mlterm*) return 0 ;;
   esac
   return 1
 }
@@ -79,6 +88,7 @@ done
 if (( ! have_display )); then
   if (( use_term )); then
     args+=(-d Term)
+    [[ "${OPENGRADS_TERM:-}" == 1 ]] || export GA_TERM_AUTO=1
   elif (( ! have_x )); then
     args+=(-d gxdummy)
   fi
