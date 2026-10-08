@@ -586,10 +586,15 @@ PROFILES = {   # kitty graphics, XTVERSION, cell size (CSI 16 t), DA1
     'mlterm': (False, b'mlterm(3.9.3)', (19, 10), b'?63;1;2;3;4;6;7;15;18;22;29c'),
     'iterm':  (False, b'iTerm2 3.5.0', None, b'?62;4c'),
     'xterm':  (False, b'XTerm(390)', None, b'?64;1;2;6;9;15;16;17;18;21;22;28c'),
+    # Windows Terminal: no XTVERSION, sixel by cells of 10 x 20 whatever its
+    # font, and from Windows (ssh, WSL) no pixel size reaches the kernel
+    'winterm': (False, None, (20, 10), b'?61;4;6;7;14;21;22;23;24;28;32;42c'),
     'silent': None,
 }
 P = PROFILES[profile]
 COLS, ROWS, CW, CH = 120, 40, 7, 14
+if profile == 'winterm':
+    CW, CH = 0, 0
 utf8 = 'en_US.UTF-8' if sys.platform == 'darwin' else 'C.UTF-8'
 log = root + '/kind-%s-%s.log' % (where, profile)
 if os.path.exists(log):
@@ -642,7 +647,8 @@ def pump(most, idle):
         last = time.time()
         new = bytes(out[max(0, n - 40):])
         for q, what in ((b'\x1b_Gi=31,', 'kitty'), (b'\x1b[>0q', 'version'), (b'\x1b[>q', 'version'),
-                        (b'\x1b[16t', 'cell'), (b'\x1b[c', 'da')):
+                        (b'\x1b[16t', 'cell'), (b'\x1b[18t', 'chars'), (b'\x1b[14t', 'area'),
+                        (b'\x1b[c', 'da')):
             if q not in new or (where == 'direct' and what in asked):
                 continue
             asked.append(what)
@@ -650,10 +656,14 @@ def pump(most, idle):
                 continue
             if what == 'kitty' and P[0]:
                 os.write(fd, b'\x1b_Gi=31;OK\x1b\\')
-            if what == 'version':
+            if what == 'version' and P[1]:
                 os.write(fd, b'\x1bP>|' + P[1] + b'\x1b\\')
             if what == 'cell' and P[2]:
                 os.write(fd, b'\x1b[6;%d;%dt' % P[2])
+            if what == 'area' and P[2]:      # tmux 3.6 and later ask
+                os.write(fd, b'\x1b[4;%d;%dt' % (ROWS * P[2][0], COLS * P[2][1]))
+            if what == 'chars':
+                os.write(fd, b'\x1b[8;%d;%dt' % (ROWS, COLS))
             if what == 'da':
                 os.write(fd, b'\x1b[' + P[3])
 def screen():
@@ -1063,6 +1073,14 @@ result="$(kind tmux mlterm "$tmux_bin")"
 grep -Eq '^sixel [0-9]+x[0-9]+ colours' <<< "$result" ||
   fail 'a sixel terminal in tmux did not get sixel' "$result"
 how="$(sed -n 's/.*protocol: sixel (\(tmux draws\).*/tmux draws it/p' <<< "$result")"
+# Windows Terminal draws sixel by cells of 10 x 20 pixels, and tmux before
+# 3.6 does not learn that, so GrADS takes cells of that size when it is not
+# told: the picture fills the half of 120 columns, rather than six tenths of
+# it (tmux 3.4 does not see sixel in it at all, hence GA_TERM_PROTOCOL).
+result="$(kind tmux winterm "$tmux_bin" GA_TERM_PROTOCOL=sixel)"
+width="$(sed -n 's/^sixel \([0-9]*\)x[0-9]* colours.*/\1/p' <<< "$result" | head -1)"
+(( ${width:-0} >= 570 && ${width:-0} <= 600 )) ||
+  fail 'Windows Terminal in tmux did not get the picture made for the pane' "$result"
 printf '  pictures by terminal: kitty, sixel, iTerm2, none; in tmux too (sixel: %s)\n' \
   "${how:-passed through}"
 

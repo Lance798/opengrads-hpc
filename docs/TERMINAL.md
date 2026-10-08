@@ -97,6 +97,17 @@ anything over 8 bytes a cell of the terminal, and a sixel picture cannot be
 sent in parts, so through such a tmux it goes in fewer colours, or smaller,
 until it is under 6.
 
+The picture is made for the cells it fills, so GrADS needs their size in
+pixels: from tmux, which has it from the terminal, or from the terminal
+itself. When neither knows it, GrADS takes cells of 10 x 20 pixels, the
+size Windows Terminal draws sixel by, whatever its font. That is the usual
+case with Windows Terminal: no size reaches the kernel from Windows, over
+ssh or in WSL, and tmux before 3.6 does not ask the terminal. tmux 3.4
+does not see that Windows Terminal shows sixel at all; there, set
+`GA_TERM_PROTOCOL=sixel`. If a sixel picture comes out too small or too
+large for its pane in another terminal, `GA_TERM_CELL=WxH` gives the cell
+size, as in `GA_TERM_CELL=9x18`.
+
 The progress bar and looping GIFs are iTerm2's, so other terminals show
 neither: an animation is shown frame by frame, and the last frame stays.
 The viewer for `file` mode (`grads-termview`) draws iTerm2 inline images
@@ -164,6 +175,7 @@ The picture is redrawn to fit the smaller pane.
 |---|---|---|
 | `GA_TERM_MODE` | `tmux` (picture pane), `inline` (print under the command), `file` (only write the PNG), or `auto` | `auto`: the picture pane; outside tmux, `auto` and `tmux` stop at start-up |
 | `GA_TERM_PROTOCOL` | `iterm2`, `kitty`, or `sixel`, to use those pictures without asking the terminal; see [Which terminals](#which-terminals) | `auto`: what the terminal shows |
+| `GA_TERM_CELL` | A character cell in pixels, `WxH`, for a sixel picture too small or too large for its pane; see [Which terminals](#which-terminals) | what tmux or the terminal says, else `10x20` |
 | `GA_TERM_PANE` | Width of the picture pane | `50%` |
 | `GA_TERM_WIDTH` | Width of an inline image: `70%` of the terminal, or `80` cells; with iTerm2 also `600px` | `70%` |
 | `GA_TERM_SCALE` | Pixels per point, 1 to 4. 2 keeps lines and text sharp on Retina screens | `2` |

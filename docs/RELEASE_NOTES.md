@@ -36,7 +36,11 @@ calculations, and native archives for Linux and macOS.
   the picture at the size of the cells it fills, often a tenth of the data,
   and inside tmux draws it in place of placeholder characters, which tmux
   keeps with the pane as it switches windows. Sixel goes in up to 256
-  colours; a tmux built with sixel draws it in the pane itself. In a
+  colours, sized for the pane; a tmux built with sixel draws it in the pane
+  itself. In Windows Terminal, whose cell size reaches neither tmux before
+  3.6 nor GrADS from Windows, it is made for the 10 x 20 pixel cells
+  Windows Terminal draws sixel by, and fills the pane rather than six
+  tenths of it; `GA_TERM_CELL=WxH` gives another size. In a
   terminal that shows none (a plain xterm, the macOS Terminal) `-d Term`
   says so and stops, instead of filling the screen with escape codes; when
   the launcher chose it, the pictures go to files instead.
