@@ -8,12 +8,14 @@ calculations, and native archives for Linux and macOS.
 - **Plots in the terminal, without X.** A new display, `-d Term`, draws GrADS
   pictures inside the terminal (iTerm2, WezTerm, kitty, Ghostty, and sixel
   terminals such as foot and mlterm), so a session on a cluster needs no X
-  server and no `ssh -X`.
-  Inside tmux, GrADS splits a pane off beside the prompt and draws each
-  picture there, sized to the pane; outside tmux it prints the picture below
-  the command. Pictures are encoded in a background thread, so the prompt
-  comes back at once. The launcher picks this display when there is no
-  `DISPLAY` and the terminal says it shows pictures (iTerm2 through
+  server and no `ssh -X`. It runs inside tmux: GrADS splits a pane off
+  beside the prompt and draws each picture there, sized to the pane.
+  Outside tmux `-d Term` says so and stops, unless printing each picture
+  below its command (`GA_TERM_MODE=inline`) or only writing the pictures
+  (`GA_TERM_MODE=file`) is asked for. Pictures are encoded in a background
+  thread, so the prompt comes back at once. The launcher picks this display
+  when there is no `DISPLAY`, GrADS runs inside tmux, and the terminal says
+  it shows pictures (iTerm2 through
   `LC_TERMINAL`, which ssh forwards; kitty, Ghostty, WezTerm and others
   through `TERM` or `TERM_PROGRAM`); `OPENGRADS_TERM=1` or `0` overrides the
   choice. Both ordinary tmux and iTerm2's tmux integration (`tmux -CC`)
@@ -73,10 +75,10 @@ calculations, and native archives for Linux and macOS.
   record for the display plug-in`. The packager checks that both load from
   the archive, and draws with them on XQuartz's virtual X server.
 - **macOS: plots in the terminal.** The macOS archive also carries the
-  terminal display, `-d Term`, so in iTerm2, WezTerm, kitty or Ghostty on a
-  Mac pictures appear in the terminal, inside tmux too, without XQuartz. The
-  launcher picks it when there is no `DISPLAY` and the terminal shows
-  pictures;
+  terminal display, `-d Term`, so in tmux in iTerm2, WezTerm, kitty or
+  Ghostty on a Mac pictures appear in the terminal without XQuartz. The
+  launcher picks it when there is no `DISPLAY`, GrADS runs inside tmux, and
+  the terminal shows pictures;
   with XQuartz installed the X window wins, and `-d Term` or
   `OPENGRADS_TERM=1` asks for the terminal instead. The terminal display's
   tests, tmux included, now run on macOS too.
@@ -495,10 +497,10 @@ cd opengrads-hpc-1.0.10-linux-x86_64
 ```
 
 On macOS start `./opengrads`. The launcher opens a GrADS window when
-XQuartz is installed (it sets `DISPLAY`), draws in the terminal in iTerm2,
-WezTerm, kitty or Ghostty otherwise, and runs headless elsewhere, so no
-extra flags are needed.
-`./opengrads -l -d Term` draws in the terminal even with XQuartz.
+XQuartz is installed (it sets `DISPLAY`), draws in the terminal inside tmux
+in iTerm2, WezTerm, kitty or Ghostty otherwise, and runs headless elsewhere,
+so no extra flags are needed. `./opengrads -l -d Term` in tmux draws in the
+terminal even with XQuartz.
 
 ### Known limitations
 

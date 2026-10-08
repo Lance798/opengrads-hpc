@@ -384,15 +384,34 @@ if compgen -G "$test_root/tmp/grads-term-*" > /dev/null; then
   fail 'the temporary picture directory was left behind'
 fi
 
-# 6. Outside tmux, asking for tmux falls back to inline.
+# 6. Outside tmux there is no picture pane: -d Term says so and stops, with
+#    or without GA_TERM_MODE=tmux, and leaves no directory behind; chosen by
+#    the launcher (GA_TERM_AUTO=1), it writes the pictures to files instead.
+for how in auto tmux; do
+  rc=0
+  output="$(
+    unset TMUX
+    TMPDIR="$test_root/tmp" GA_TERM_MODE="$how" run_grads <<'GRADS_COMMANDS'
+quit
+GRADS_COMMANDS
+  )" || rc=$?
+  grep -Fq 'GrADS is not running inside tmux.' <<< "$output" && (( rc != 0 )) ||
+    fail "-d Term went on outside tmux (GA_TERM_MODE=$how, exit $rc)" "$output"
+  if grep -Fq 'ga->' <<< "$output"; then
+    fail "GrADS took commands with -d Term outside tmux ($how)" "$output"
+  fi
+done
+if compgen -G "$test_root/tmp/grads-term-*" > /dev/null; then
+  fail 'the temporary picture directory was left behind outside tmux'
+fi
 output="$(
   unset TMUX
-  TMPDIR="$test_root/tmp" GA_TERM_MODE=tmux run_grads <<'GRADS_COMMANDS'
+  TMPDIR="$test_root/tmp" GA_TERM_AUTO=1 run_grads <<'GRADS_COMMANDS'
 quit
 GRADS_COMMANDS
 )"
-grep -Fq 'not running inside tmux' <<< "$output" ||
-  fail 'GA_TERM_MODE=tmux outside tmux gave no warning' "$output"
+grep -Fq 'the pictures go to files in' <<< "$output" ||
+  fail 'chosen by the launcher outside tmux, -d Term did not write files' "$output"
 
 # 7. The viewer wraps the image for tmux, sizes it to the pane, wakes up for
 #    a new picture, sends a picture over 1 MiB in parts, and exits with the
@@ -579,6 +598,8 @@ env = dict(os.environ, TERM='xterm-256color', OPENGRADS_COLOR='0', LANG=utf8, GA
 for k in ('TMUX', 'TMUX_PANE', 'LC_TERMINAL', 'TERM_PROGRAM', 'KITTY_WINDOW_ID', 'GA_TERM_AUTO',
           'GA_TERM_PROTOCOL', 'GA_TERM_MODE', 'GA_TERM_TMUX_STEP', 'LC_ALL', 'LC_CTYPE'):
     env.pop(k, None)
+if where == 'direct':                       # outside tmux, pictures below the commands
+    env['GA_TERM_MODE'] = 'inline'
 env.update(settings)
 if os.sep in tmux:
     env['PATH'] = os.path.dirname(os.path.abspath(tmux)) + os.pathsep + env['PATH']

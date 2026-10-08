@@ -18,11 +18,12 @@
              normally libexec/grads-termview, only to keep the pane open) and
              the worker draws each picture into it.
      inline  The picture is printed into the terminal below the command,
-             like a notebook. Needs no tmux.
+             like a notebook. Needs no tmux, but must be asked for.
      file    The picture is only written; grads-termview can show it
              elsewhere, started by hand with the command printed at start-up.
-     auto    tmux when GrADS runs inside tmux and a viewer is available,
-             inline otherwise. This is the default.
+     auto    tmux, inline when no viewer is available. This is the default.
+             Outside tmux, auto and tmux stop at start-up (files instead
+             when the launcher chose the display).
 
    Sending. Inside tmux the image sequence travels in a passthrough sequence
    and carries its own cursor movement, because tmux does not place
@@ -2474,9 +2475,32 @@ gadouble f;
   m = getenv("GA_TERM_MODE");
   if (m==NULL || *m=='\0') m = "auto";
 
-  /* Pictures for the terminal need a terminal that shows them. When
+  /* The pictures go to a tmux pane beside the prompt, so outside tmux
+     there is no -d Term unless printing them below each command
+     (GA_TERM_MODE=inline) or only writing them (file) is asked for. When
      the launcher chose this display by itself, write them to files
      instead; when asked for by name, say so and stop. */
+  t = getenv("TMUX");
+  if ((!strcmp(m,"auto") || !strcmp(m,"tmux")) && !(t && *t)) {
+    a = getenv("GA_TERM_AUTO");
+    if (a && !strcmp(a,"1")) {
+      printf("Terminal display: GrADS is not running inside tmux;\n");
+      printf("Terminal display: the pictures go to files in %s instead\n",tdir);
+      m = "file";
+    } else {
+      printf("Terminal display: GrADS is not running inside tmux.\n");
+      printf("  -d Term shows the pictures in a tmux pane beside the prompt: start tmux\n");
+      printf("  (or tmux -CC in iTerm2) first, then GrADS. To print each picture below\n");
+      printf("  its command instead, set GA_TERM_MODE=inline; to only write the pictures\n");
+      printf("  to files, GA_TERM_MODE=file.\n");
+      fflush(stdout);
+      if (fifopath[0]) unlink(fifopath);
+      if (ownsdir) rmdir(tdir);
+      exit(1);
+    }
+  }
+
+  /* Pictures for the terminal need a terminal that shows them: likewise */
   if (strcmp(m,"file")) {
     termproto();
     tlogf("protocol: %s (%s), cell %dx%d",protonames[proto],protowhy,cellw,cellh);
@@ -2500,25 +2524,18 @@ gadouble f;
       }
     }
   }
-  t = getenv("TMUX");
   v = viewer();
   pane[0] = '\0';
   if (!strcmp(m,"file")) mode = 3;
   else if (!strcmp(m,"inline")) mode = 2;
-  else if (!strcmp(m,"tmux") || (!strcmp(m,"auto") && t && *t && v)) {
-    if (t==NULL || *t=='\0') {
-      printf("Terminal display: GA_TERM_MODE=tmux, but GrADS is not running inside tmux.\n");
+  else if (!strcmp(m,"tmux") || (!strcmp(m,"auto") && v)) {
+    rc = tmuxsplit();                       /* inside tmux, as checked above */
+    if (rc) {
+      if (v==NULL) printf("Terminal display: viewer not found; set GA_TERM_VIEWER.\n");
+      else printf("Terminal display: unable to open a tmux pane for the pictures.\n");
       printf("Terminal display: showing pictures inline instead.\n");
       mode = 2;
-    } else {
-      rc = tmuxsplit();
-      if (rc) {
-        if (v==NULL) printf("Terminal display: viewer not found; set GA_TERM_VIEWER.\n");
-        else printf("Terminal display: unable to open a tmux pane for the pictures.\n");
-        printf("Terminal display: showing pictures inline instead.\n");
-        mode = 2;
-      } else mode = 1;
-    }
+    } else mode = 1;
   }
   else {
     if (strcmp(m,"auto"))
