@@ -28,12 +28,14 @@ tmux                      # or: tmux attach, tmux -CC
 ./opengrads               # picks the terminal display by itself
 ```
 
-Inside tmux, GrADS splits a pane off to the right and shows the picture
-there. When GrADS quits, the pane closes. Outside tmux, each picture is
-printed below the command that drew it instead.
+GrADS splits a pane off to the right and shows the picture there. When
+GrADS quits, the pane closes. The display needs tmux: outside tmux,
+`-d Term` says so and stops. To have each picture printed below the
+command that drew it instead, ask for it with `GA_TERM_MODE=inline`; to
+only write the pictures to files, `GA_TERM_MODE=file`.
 
-The launcher picks the terminal display when there is no `DISPLAY` and the
-terminal says it shows pictures: iTerm2 sets `LC_TERMINAL`, which ssh
+The launcher picks the terminal display when there is no `DISPLAY`, GrADS
+runs inside tmux, and the terminal says it shows pictures: iTerm2 sets `LC_TERMINAL`, which ssh
 forwards along with the other `LC_*` variables; WezTerm, kitty, Ghostty,
 mintty, foot and mlterm set `TERM_PROGRAM`, `TERM` or `KITTY_WINDOW_ID`. If
 it then turns out to show none, the pictures go to files. If your ssh or
@@ -102,11 +104,11 @@ only.
 
 ## On a Mac
 
-The macOS archive carries the terminal display too, so in iTerm2, WezTerm,
-kitty or Ghostty on the Mac itself `./opengrads` draws in the terminal,
-inside tmux as well, without XQuartz. XQuartz sets `DISPLAY` for the whole login session, so
-once it is installed the launcher opens an X window instead; ask for the
-terminal by name to keep the pictures in iTerm2:
+The macOS archive carries the terminal display too, so in tmux in iTerm2,
+WezTerm, kitty or Ghostty on the Mac itself `./opengrads` draws in the
+terminal without XQuartz. XQuartz sets `DISPLAY` for the whole login
+session, so once it is installed the launcher opens an X window instead;
+ask for the terminal by name to keep the pictures in the terminal:
 
 ```bash
 ./opengrads -l -d Term           # or: OPENGRADS_TERM=1 ./opengrads
@@ -160,7 +162,7 @@ The picture is redrawn to fit the smaller pane.
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `GA_TERM_MODE` | `tmux` (picture pane), `inline` (print under the command), `file` (only write the PNG), or `auto` | `auto`: `tmux` inside tmux, `inline` elsewhere |
+| `GA_TERM_MODE` | `tmux` (picture pane), `inline` (print under the command), `file` (only write the PNG), or `auto` | `auto`: the picture pane; outside tmux, `auto` and `tmux` stop at start-up |
 | `GA_TERM_PROTOCOL` | `iterm2`, `kitty`, or `sixel`, to use those pictures without asking the terminal; see [Which terminals](#which-terminals) | `auto`: what the terminal shows |
 | `GA_TERM_PANE` | Width of the picture pane | `50%` |
 | `GA_TERM_WIDTH` | Width of an inline image: `70%` of the terminal, or `80` cells; with iTerm2 also `600px` | `70%` |
@@ -319,6 +321,6 @@ protocol. Pictures in parts need iTerm2 3.5 or newer.
   tmux windows or reattaching, the pane is blank until the next picture or
   a resize of the pane. kitty's pictures in tmux, and sixel drawn by tmux
   itself, come back with the pane.
-- Inline mode is for use outside tmux: inside tmux the picture is not
-  anchored to the scrolling text.
+- Inline mode (`GA_TERM_MODE=inline`) is for use outside tmux: inside tmux
+  the picture is not anchored to the scrolling text.
 - `gxprint` and `printim` work as usual and are not affected by the display.

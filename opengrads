@@ -240,15 +240,16 @@ fi
 # holds on a remote host and inside tmux there; WezTerm, kitty, Ghostty,
 # mintty, foot and mlterm set TERM_PROGRAM, TERM or KITTY_WINDOW_ID. The
 # terminal display then asks the terminal which pictures it shows, and when
-# it shows none (GA_TERM_AUTO), writes them to files. OPENGRADS_TERM=1 or 0
-# overrides the guess.
+# it shows none (GA_TERM_AUTO), writes them to files. It draws in a tmux pane
+# beside the prompt, so only inside tmux. OPENGRADS_TERM=1 or 0 overrides the
+# guess.
 terminal_shows_images()
 {
   case "${OPENGRADS_TERM:-}" in
     1) return 0 ;;
     0) return 1 ;;
   esac
-  [[ -t 1 ]] || return 1
+  [[ -t 1 && -n "${TMUX:-}" ]] || return 1
   [[ -n "${KITTY_WINDOW_ID:-}" ]] && return 0
   case "${LC_TERMINAL:-}:${TERM_PROGRAM:-}" in
     iTerm2:*|*:iTerm.app|WezTerm:*|*:WezTerm|*:ghostty|*:mintty) return 0 ;;
