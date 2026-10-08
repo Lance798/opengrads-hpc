@@ -34,7 +34,7 @@ calculations, and native archives for Linux and macOS.
   the picture at the size of the cells it fills, often a tenth of the data,
   and inside tmux draws it in place of placeholder characters, which tmux
   keeps with the pane as it switches windows. Sixel goes in up to 256
-  colours; tmux 3.4 built with sixel draws it in the pane itself. In a
+  colours; a tmux built with sixel draws it in the pane itself. In a
   terminal that shows none (a plain xterm, the macOS Terminal) `-d Term`
   says so and stops, instead of filling the screen with escape codes; when
   the launcher chose it, the pictures go to files instead.
@@ -504,7 +504,7 @@ extra flags are needed.
 - The terminal display is tested through tmux 3.2a, 3.4, and 3.7c, plain and
   `-CC`, with a terminal emulator standing in for iTerm2, not yet on iTerm2
   itself; kitty, xterm (`-ti vt340`) and mlterm were checked on screen, by
-  themselves and in tmux 3.2a and 3.4. If no picture appears, `GA_TERM_LOG=/tmp/grads-term.log` records
+  themselves and in tmux 3.2a, 3.4 and 3.7c. If no picture appears, `GA_TERM_LOG=/tmp/grads-term.log` records
   what happened; `GA_TERM_PROGRESS=off` sends each picture in the oldest form
   of the protocol. Pictures in parts, which tmux before 3.3 and `tmux -CC`
   always use, need iTerm2 3.5 or newer.

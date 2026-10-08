@@ -497,8 +497,9 @@ gaint i;
      sixel    DEC sixel: foot, mlterm, xterm -ti vt340, Windows Terminal
 
    In tmux, tmux says which terminal its client is in (client_termtype,
-   from the terminal's own XTVERSION) and whether it shows sixel
-   (client_termfeatures, tmux 3.4 built with sixel). Otherwise LC_TERMINAL,
+   from the terminal's own XTVERSION), whether it shows sixel
+   (client_termfeatures), and from 3.5 whether tmux itself was built to
+   draw sixel (sixel_support). Otherwise LC_TERMINAL,
    TERM_PROGRAM and TERM may say, or the terminal is asked: a kitty
    graphics query, XTVERSION, the cell size (CSI 16 t), and Primary Device
    Attributes, which every terminal answers, and last. GA_TERM_PROTOCOL
@@ -637,7 +638,8 @@ gaint i,n,kitty,sixel,envp,rc,named=PROTO_NONE;
     argv[i++] = "tmux"; argv[i++] = "display-message"; argv[i++] = "-p";
     if ((p=getenv("TMUX_PANE"))!=NULL && *p) { argv[i++] = "-t"; argv[i++] = p; }
     argv[i++] = "#{client_control_mode}|#{client_termtype}|#{client_termname}|"
-                "#{client_termfeatures}|#{client_cell_width}|#{client_cell_height}";
+                "#{client_termfeatures}|#{client_cell_width}|#{client_cell_height}|"
+                "#{sixel_support}";
     argv[i] = NULL;
     /* In a session just started, its client may not be attached yet, or
        its terminal not have answered tmux: give them a second */
@@ -645,13 +647,13 @@ gaint i,n,kitty,sixel,envp,rc,named=PROTO_NONE;
       if (rc) usleep(200000);
       out[0] = '\0';
       runcmd(argv,out,sizeof(out));
-      for (n=0, p=out; n<6; ) {
+      for (n=0, p=out; n<7; ) {
         f[n++] = p;
         p = strchr(p,'|');
         if (p==NULL) break;
         *p++ = '\0';
       }
-      for (i=n; i<6; i++) f[i] = "";
+      for (i=n; i<7; i++) f[i] = "";
       a = getenv("LC_TERMINAL");
       if (*f[1] || atoi(f[0])==1 || named!=PROTO_NONE || (a && !strcmp(a,"iTerm2"))) break;
     }
@@ -664,10 +666,11 @@ gaint i,n,kitty,sixel,envp,rc,named=PROTO_NONE;
       snprintf(protowhy,sizeof(protowhy),"tmux -CC, so iTerm2");
     } else if (proto==PROTO_ITERM || proto==PROTO_KITTY) {
       snprintf(protowhy,sizeof(protowhy),"tmux says the terminal is %s",f[1]);
-    } else if (hasword(f[3],"sixel")) {     /* tmux keeps it with the pane */
+    } else if (hasword(f[3],"sixel")) {     /* the terminal shows sixel */
       proto = PROTO_SIXEL;
-      tmuxsixel = 1;
-      snprintf(protowhy,sizeof(protowhy),"tmux draws sixel for %s",*f[1] ? f[1] : f[2]);
+      tmuxsixel = atoi(f[6])==1;           /* and tmux can keep it with the pane */
+      snprintf(protowhy,sizeof(protowhy),"%s sixel for %s",tmuxsixel ? "tmux draws" : "tmux passes on",
+               *f[1] ? f[1] : f[2]);
     } else if (proto==PROTO_SIXEL) {
       snprintf(protowhy,sizeof(protowhy),"tmux says the terminal is %s",f[1]);
     } else if (a && !strcmp(a,"iTerm2")) {
@@ -683,7 +686,7 @@ gaint i,n,kitty,sixel,envp,rc,named=PROTO_NONE;
     if (hasword(f[1],"iterm2") || (a && !strcmp(a,"iTerm2")) || atoi(f[0])==1) iterm = 1;
     if (named!=PROTO_NONE) {                 /* tmux still gave the cell size */
       proto = named;
-      tmuxsixel = named==PROTO_SIXEL && hasword(f[3],"sixel");
+      tmuxsixel = named==PROTO_SIXEL && hasword(f[3],"sixel") && atoi(f[6])==1;
       snprintf(protowhy,sizeof(protowhy),"GA_TERM_PROTOCOL=%s",getenv("GA_TERM_PROTOCOL"));
     }
     return;
@@ -1617,6 +1620,15 @@ struct mbuf mb;
     utf8put(w,kittymarks[0]);
     utf8put(w,kittymarks[hi]);
     for (x=1; x<c; x++) utf8put(w,0x10eeee);
+    /* tmux 3.7 draws the marks only when it redraws the line (it looks
+       for the cell at the left of the window, not of the pane), and
+       deleting a character in a pane that is not the full width makes it
+       redraw it: delete the last cell, and put it back */
+    if (c>=2) {
+      snprintf(at,sizeof(at),"\033[%dG\033[P",c);
+      wstr(w,at);
+      utf8put(w,0x10eeee);
+    }
     wstr(w,"\033[39m");
   }
   free(mb.p);
@@ -1644,8 +1656,9 @@ char head[100];
 }
 
 /* sixel: the picture scaled to the pixels it is to fill, from the cell
-   size the terminal or tmux gave. tmux 3.4 built with sixel takes it into
-   the pane and draws it itself, by the cell size it gave the pane. When
+   size the terminal or tmux gave. tmux built with sixel (3.5 and later
+   say so) takes it into the pane and draws it itself, by the cell size it
+   gave the pane. When
    none is known, cells of 6 x 12, smaller than most: a picture too large
    would run over the panes below, or scroll the screen. Unlike the others
    a sixel picture cannot go in parts, as tmux puts its own sequences
