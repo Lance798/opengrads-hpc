@@ -1020,8 +1020,8 @@ grep -qx 'back 1' <<< "$result" ||
   fail 'the held picture did not appear when its window came back' "$result"
 
 # 13. Inside tmux, tmux says which terminal its client is in, and whether
-#     it shows sixel (tmux 3.4 built with sixel, which then draws it in the
-#     pane itself): kitty gets the picture and draws it in place of
+#     it shows sixel (a tmux built with sixel, 3.5 or later, then draws it
+#     in the pane itself): kitty gets the picture and draws it in place of
 #     placeholder characters, which tmux keeps with the pane; a sixel
 #     terminal gets sixel; iTerm2 its own; a plain xterm no -d Term.
 result="$(kind tmux kitty "$tmux_bin")"

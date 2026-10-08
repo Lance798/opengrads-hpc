@@ -70,8 +70,7 @@ on the screen. Only when the terminal does not answer does GrADS go by
 
 Inside tmux the terminal cannot be asked, but tmux has asked it already:
 GrADS goes by the name tmux got back (tmux 3.2 and later), and by whether
-tmux shows sixel itself (tmux 3.4 built with sixel). `tmux -CC` means
-iTerm2.
+the terminal told tmux it shows sixel. `tmux -CC` means iTerm2.
 
 A terminal that shows none, such as a plain xterm, GNOME Terminal or the
 macOS Terminal, gets no pictures: `-d Term` says why and stops. When the
@@ -89,9 +88,9 @@ pane, like any text. This needs tmux to run in a UTF-8 locale, as it
 normally does.
 
 **sixel.** The picture goes in up to 256 colours, at the size of the cells
-it fills. tmux 3.4 built with sixel takes it into the pane and draws it
-itself, again whenever it redraws the pane; otherwise it goes through tmux
-to the terminal, as iTerm2's pictures do. tmux before 3.3 throws away
+it fills. tmux built with sixel (3.5 and later say so) takes it into the
+pane and draws it itself, again whenever it redraws the pane; otherwise it
+goes through tmux to the terminal, as iTerm2's pictures do. tmux before 3.3 throws away
 anything over 8 bytes a cell of the terminal, and a sixel picture cannot be
 sent in parts, so through such a tmux it goes in fewer colours, or smaller,
 until it is under 6.
@@ -319,7 +318,7 @@ protocol. Pictures in parts need iTerm2 3.5 or newer.
   iTerm2 picture, or a sixel one it did not draw itself. After switching
   tmux windows or reattaching, the pane is blank until the next picture or
   a resize of the pane. kitty's pictures in tmux, and sixel drawn by tmux
-  3.4, come back with the pane.
+  itself, come back with the pane.
 - Inline mode is for use outside tmux: inside tmux the picture is not
   anchored to the scrolling text.
 - `gxprint` and `printim` work as usual and are not affected by the display.
