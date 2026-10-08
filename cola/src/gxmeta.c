@@ -426,20 +426,30 @@ gaint i;
   undogen = ++undoseq;
 }
 
-/* Set how many undo steps to keep.  A count below one turns undo off.
-   Returns 1 if the stack could not be allocated, otherwise 0. */
+/* Set how many undo steps to keep.  A count below one turns undo off and
+   releases the stored steps; otherwise the stored steps stay, and when they
+   are more than the new count, the oldest go.  Returns 1 if the stack could
+   not be allocated (the old one is kept), otherwise 0. */
 
 gaint gxhundoset (gaint steps) {
-  gxhundoclr();
-  if (undostk) {
-    gree (undostk,"undostk");
+struct gxhstep *stk;
+gaint i, keep;
+  if (steps<1) {
+    gxhundoclr();
+    if (undostk) gree (undostk,"undostk");
     undostk = NULL;
+    undolim = 0;
+    return (0);
   }
-  undolim = 0;
-  if (steps<1) return (0);
   if (steps>UNDOSTEPMAX) steps = UNDOSTEPMAX;
-  undostk = (struct gxhstep *)galloc(sizeof(struct gxhstep)*steps,"undostk");
-  if (undostk==NULL) return (1);
+  stk = (struct gxhstep *)galloc(sizeof(struct gxhstep)*steps,"undostk");
+  if (stk==NULL) return (1);
+  keep = undocnt<steps ? undocnt : steps;
+  for (i=0; i<undocnt-keep; i++) gxhundodrop (undostk+i);    /* The oldest go */
+  for (i=0; i<keep; i++) stk[i] = undostk[undocnt-keep+i];
+  if (undostk) gree (undostk,"undostk");
+  undostk = stk;
+  undocnt = keep;
   undolim = steps;
   return (0);
 }

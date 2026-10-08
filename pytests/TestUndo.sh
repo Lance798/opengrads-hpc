@@ -117,34 +117,34 @@ check_count()
 }
 
 # On by default, keeping ten steps; off, the error says how to turn it on.
-check_text 'Undo is on, 0 of 10 steps available, 7 meta buffer words used by the current plot'
+check_text 'Undo is on: 0 steps can be undone (up to 10 kept), 7 meta buffer words used by the current plot'
 check_text 'Undo is off, 7 meta buffer words used by the current plot'
 check_text "UNDO error:  undo is off.  Turn it on with 'set undo <steps>'"
 
 # Turning it on reports the step count; three draws against a two-step stack
 # keep only the newest two, so 'undo 4' rewinds two and stops.
 check_text 'Undo is on, keeping up to 2 steps'
-check_text 'Undo is on, 0 of 2 steps available, 7 meta buffer words used by the current plot'
-check_text 'Undo is on, 2 of 2 steps available, 46 meta buffer words used by the current plot'
-check_text 'Undid 2 steps, 0 of 2 still available'
-check_text 'Undo is on, 0 of 2 steps available, 20 meta buffer words used by the current plot'
+check_text 'Undo is on: 0 steps can be undone (up to 2 kept), 7 meta buffer words used by the current plot'
+check_text 'Undo is on: 2 steps can be undone (up to 2 kept), 46 meta buffer words used by the current plot'
+check_text 'Undid 2 steps; 0 more can be undone (up to 2 kept)'
+check_text 'Undo is on: 0 steps can be undone (up to 2 kept), 20 meta buffer words used by the current plot'
 
 # A command that draws nothing costs no step, and a script costs exactly one
 # however much it draws: undoing it removes all three of its lines.
 check_text 'Undo is on, keeping up to 4 steps'
-check_text 'Undo is on, 0 of 4 steps available, 20 meta buffer words used by the current plot'
-check_text 'Undo is on, 1 of 4 steps available, 59 meta buffer words used by the current plot'
-check_text 'Undid 1 step, 0 of 4 still available'
+check_text 'Undo is on: 0 steps can be undone (up to 4 kept), 20 meta buffer words used by the current plot'
+check_text 'Undo is on: 1 step can be undone (up to 4 kept), 59 meta buffer words used by the current plot'
+check_text 'Undid 1 step; 0 more can be undone (up to 4 kept)'
 
 # A clear is a step of its own, and undoing it brings back the frame it
 # cleared, with the steps taken in it.
-check_text 'Undo is on, 2 of 4 steps available, 0 meta buffer words used by the current plot'
-check_text 'Undid 1 step, 1 of 4 still available'
-check_text 'Undo is on, 1 of 4 steps available, 33 meta buffer words used by the current plot'
+check_text 'Undo is on: 2 steps can be undone (up to 4 kept), 0 meta buffer words used by the current plot'
+check_text 'Undid 1 step; 1 more can be undone (up to 4 kept)'
+check_text 'Undo is on: 1 step can be undone (up to 4 kept), 33 meta buffer words used by the current plot'
 
 # Double buffering drops the stored steps.
 check_text 'Undo is on, keeping up to 3 steps'
-check_text 'Undo is on, 0 of 3 steps available, 0 meta buffer words used by the current plot'
+check_text 'Undo is on: 0 steps can be undone (up to 3 kept), 0 meta buffer words used by the current plot'
 check_text 'Undo is off'
 
 # Two 'undo's ran with the feature on and nothing to rewind: the first, at
@@ -152,6 +152,28 @@ check_text 'Undo is off'
 # report the 'undo is off' error.
 check_count 'Nothing to undo' 2
 check_count "UNDO error:  undo is off.  Turn it on with 'set undo <steps>'" 2
+
+# Changing the count keeps the stored steps, the newest when the new count
+# is smaller; off releases them.
+output="$(
+  run_grads gxdummy <<GRADS_COMMANDS
+draw line 1 1 2 2
+draw line 2 2 3 3
+draw line 3 3 4 4
+set undo 2
+set undo 5
+undo
+set undo off
+set undo 3
+q undo
+quit
+GRADS_COMMANDS
+)"
+check_text 'Undo is on, keeping up to 2 steps; 2 can be undone now'
+check_text 'Undo is on, keeping up to 5 steps; 2 can be undone now'
+check_text 'Undid 1 step; 1 more can be undone (up to 5 kept)'
+check_text 'Undo is on, keeping up to 3 steps; 0 can be undone now'
+check_text 'Undo is on: 0 steps can be undone (up to 3 kept), 33 meta buffer words used by the current plot'
 
 # Undo puts back what GrADS knows about the picture along with it, as the
 # shorter command sequence would have left it, so queries and the next plot
@@ -297,7 +319,7 @@ collect plotted 'd ts+0'
   state_fail 'undoing a display did not give back the cint it used'
 
 if [[ "$hardcopy" == gxdummy ]]; then
-  printf 'Undo state test passed: on by default (10 steps), off, step accounting, script as one step, clear as a step, frame resets, plot state.\n'
+  printf 'Undo state test passed: on by default (10 steps), off, a new count keeps the steps, step accounting, script as one step, clear as a step, frame resets, plot state.\n'
   printf 'Rendered-output comparison skipped: this build has no printing plug-in.\n'
   exit 0
 fi
@@ -406,5 +428,5 @@ for pair in rewound:direct unclear:direct unscript:direct unmask:mask; do
   fi
 done
 
-printf 'Undo test passed: on by default (10 steps), off, step accounting, script as one step, clear as a step, frame resets, plot state, and byte-identical plots after undoing draws, a clear, a script that clears, and with masked labels (%s).\n' \
+printf 'Undo test passed: on by default (10 steps), off, a new count keeps the steps, step accounting, script as one step, clear as a step, frame resets, plot state, and byte-identical plots after undoing draws, a clear, a script that clears, and with masked labels (%s).\n' \
   "$hardcopy"

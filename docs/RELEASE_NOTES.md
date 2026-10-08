@@ -87,8 +87,11 @@ calculations, and native archives for Linux and macOS.
 
 - **Undo is on from the start.** GrADS starts as after `set undo 10`: the
   last ten commands that changed the picture can be undone without turning
-  undo on first. `set undo <steps>` keeps another number, and `set undo off`
-  turns it off, as before. A step costs a few KB; a `clear` keeps the
+  undo on first. `set undo <steps>` keeps another number, now without
+  dropping the steps already stored (the newest stay when the number is
+  smaller), and `set undo off` turns it off. `undo` and `q undo` say how
+  many steps can still be undone: `Undid 1 step; 4 more can be undone (up
+  to 10 kept)`. A step costs a few KB; a `clear` keeps the
   cleared picture (at least 1 MB) until its step is undone or dropped. See
   [UNDO.md](UNDO.md).
 - **Axes of very small or large values carry one power of ten.** As in
