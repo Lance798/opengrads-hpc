@@ -453,6 +453,7 @@ void hfull (void);
 gaint gxhwri (void *, int);
 void gxhfrm (int);
 void gxhdrw (gaint,gaint);
+#define UNDODEFAULT 10                  /* Undo steps kept from start-up, and by set undo on */
 gaint gxhundoset (gaint);
 void gxhundoclr (void);
 void gxhundofn (void (*) (void *));

@@ -98,6 +98,7 @@ gaint gagx (struct gacmn *pcm) {
 gaint rc=0;
   rc = gxstrt (pcm->xsiz,pcm->ysiz,pcm->batflg,pcm->hbufsz,pcm->gxdopt,pcm->gxpopt,pcm->xgeom);
   if (rc) return (rc);
+  gxhundoset (UNDODEFAULT);         /* Undo is on from the start; set undo off turns it off */
   pcm->pass = 0;
   pcm->ccolor = -9;
   pcm->cint = 0.0;

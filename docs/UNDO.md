@@ -1,11 +1,10 @@
 # Undo
 
-This fork can step the plot back one command at a time. Undo is **off by
-default**; turn it on and choose how many steps to keep with `set undo`.
+This fork can step the plot back one command at a time. Undo is **on from
+start-up, keeping ten steps**; `set undo` keeps another number, and
+`set undo off` turns it off.
 
 ```text
-ga-> set undo 10
-Undo is on, keeping up to 10 steps
 ga-> set gxout shaded
 ga-> display ts
 ga-> display ps
@@ -23,7 +22,7 @@ The last `undo` brings back the `ts` plot that `clear` removed.
 | Command | Effect |
 | --- | --- |
 | `set undo <steps>` | Turn undo on and keep that many steps (1 to 10000). |
-| `set undo on` | Turn undo on with the default of 10 steps. |
+| `set undo on` | Turn undo on with the default of 10 steps, as at start-up. |
 | `set undo off` | Turn undo off and release the stored steps. |
 | `set undo 0` | Same as `set undo off`. |
 | `undo` | Step the plot back one step. |
@@ -128,7 +127,8 @@ When the stack is full, the oldest step goes, and with it the picture a clear
 kept, if that was the step.
 
 `set undo` itself is a session setting: `reinit` drops the stored steps but
-leaves undo on.
+leaves undo as it was set. To start without undo, put `set undo off` in a
+script run at start-up (`grads -c 'set undo off'`).
 
 ## Cost
 

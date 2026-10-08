@@ -91,7 +91,7 @@ struct gxhstep {
 
 #define UNDOSTEPMAX 10000      /* Sanity cap on the number of steps kept */
 
-static gaint undolim = 0;            /* Steps to keep; 0 is off, the default */
+static gaint undolim = 0;            /* Steps to keep; 0 is off (gagx sets UNDODEFAULT) */
 static gaint undocnt = 0;            /* Steps currently available */
 static gaint undogen = 0;            /* Generation of the current chain */
 static gaint undoseq = 0;            /* Last generation handed out */
