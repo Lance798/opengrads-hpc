@@ -608,16 +608,21 @@ size_t k;
   return (0);
 }
 
-/* The cell size from the kernel, when the terminal has told it */
+/* The cell size from the kernel, when the terminal (or tmux, for a pane)
+   has told it */
+
+static gaint kernelcell (gaint fd, gaint *w, gaint *h) {
+struct winsize ws;
+  if (ioctl(fd,TIOCGWINSZ,&ws) || ws.ws_col==0 || ws.ws_row==0 ||
+      ws.ws_xpixel/ws.ws_col==0 || ws.ws_ypixel/ws.ws_row==0) return (0);
+  *w = ws.ws_xpixel/ws.ws_col;
+  *h = ws.ws_ypixel/ws.ws_row;
+  return (1);
+}
 
 static void cellsize (gaint fd) {
-struct winsize ws;
   if (cellw>0 && cellh>0) return;
-  if (ioctl(fd,TIOCGWINSZ,&ws)==0 && ws.ws_col>0 && ws.ws_row>0 &&
-      ws.ws_xpixel>0 && ws.ws_ypixel>0) {
-    cellw = ws.ws_xpixel/ws.ws_col;
-    cellh = ws.ws_ypixel/ws.ws_row;
-  }
+  kernelcell(fd,&cellw,&cellh);
 }
 
 static void termproto (void) {
@@ -1659,9 +1664,12 @@ char head[100];
 /* sixel: the picture scaled to the pixels it is to fill, from the cell
    size the terminal or tmux gave. tmux built with sixel (3.5 and later
    say so) takes it into the pane and draws it itself, by the cell size it
-   gave the pane. When
-   none is known, cells of 6 x 12, smaller than most: a picture too large
-   would run over the panes below, or scroll the screen. Unlike the others
+   gave the pane. When none is known, cells of 10 x 20, the VT340's:
+   Windows Terminal draws sixel by them whatever its font, and it is the
+   terminal that leaves the size unknown, as tmux before 3.6 does not ask
+   it and neither ssh nor WSL pass it on from Windows (other sixel
+   terminals tell the kernel, and ssh passes that on). GA_TERM_CELL sets
+   another. Unlike the others
    a sixel picture cannot go in parts, as tmux puts its own sequences
    between them: through tmux before 3.3, which drops a sequence of more
    than 8 bytes a cell, it goes in fewer colours, or smaller, until it is
@@ -1677,9 +1685,13 @@ size_t sent=0;
 
   rgb = lastpixels(&iw,&ih);
   if (rgb==NULL) return (0);
-  if (w->via==VIA_TMUX && tmuxsixel) cellsize(w->fd);
-  cw = cellw>0 && cellh>0 ? cellw : 6;
-  ch = cellw>0 && cellh>0 ? cellh : 12;
+  /* tmux takes it in by the cells it gave the pane, not always its
+     client's: when tmux had to ask the terminal (3.6 and later), the pane
+     keeps tmux's own 16 x 32 until it is resized */
+  if (!(w->via==VIA_TMUX && tmuxsixel && kernelcell(w->fd,&cw,&ch))) {
+    cw = cellw>0 && cellh>0 ? cellw : 10;
+    ch = cellw>0 && cellh>0 ? cellh : 20;
+  }
   if (pi) { bw = pi->cols*cw; bh = (pi->rows>1 ? pi->rows-1 : 1)*ch; }
   else { bw = inlinecols(w->fd,iwidth)*cw; bh = 1<<20; }
   f = (gadouble)bw/iw;
@@ -2400,7 +2412,7 @@ gaint before,frames;
 
 static void termsetup (void) {
 char *d,*m,*t,*v,*a;
-gaint rc;
+gaint rc,cw,ch;
 gadouble f;
 
   d = getenv("GA_TERM_DIR");
@@ -2503,6 +2515,8 @@ gadouble f;
   /* Pictures for the terminal need a terminal that shows them: likewise */
   if (strcmp(m,"file")) {
     termproto();
+    a = getenv("GA_TERM_CELL");             /* the cell size in pixels, WxH */
+    if (a && sscanf(a,"%dx%d",&cw,&ch)==2 && cw>0 && ch>0) { cellw = cw; cellh = ch; }
     tlogf("protocol: %s (%s), cell %dx%d",protonames[proto],protowhy,cellw,cellh);
     if (proto==PROTO_NONE) {
       a = getenv("GA_TERM_AUTO");
