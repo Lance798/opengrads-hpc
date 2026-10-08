@@ -70,6 +70,7 @@ OPENGRADS_ADIOS2_ROOT="$adios2_root" \
   "$repo_root/pytests/TestBP5.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestSDFOpen.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestOpenMP.sh"
+OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestAveSection.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestUndo.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestProgress.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestAxisScale.sh"

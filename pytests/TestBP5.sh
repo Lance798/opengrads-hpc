@@ -231,6 +231,14 @@ set y 2
 set z 1 2
 d ave(temperature,t=1,t=6,2)
 d ave(temperature+0,t=1,t=6,2)
+set x 1
+set y 1
+set z 1 2
+set t 3
+d ave(ave(temperature,x=1,x=4),y=1,y=3)
+d ave(ave(temperature+0,x=1,x=4),y=1,y=3)
+d min(temperature,x=1,x=4)
+d min(temperature+0,x=1,x=4)
 quit
 GRADS_COMMANDS
 )"
@@ -346,4 +354,10 @@ if (( open_count < 3 )); then
   exit 1
 fi
 
-printf 'BP5 regression test passed: partial TDEF, attributes, descriptor precedence, bulk 2-D/shaded reads, 1-D and written-once fields, many-step time averages, errors, and repeated lifecycle.\n'
+# Averages over x and y of a plain variable read every position at once, as
+# a section, and must match the same average taken a position at a time:
+# a horizontal mean drawn as a vertical profile, and a minimum over x.
+check_count '2011.5 2111.5' 2
+check_count '2000 2100' 2
+
+printf 'BP5 regression test passed: partial TDEF, attributes, descriptor precedence, bulk 2-D/shaded reads, 1-D and written-once fields, many-step time averages, horizontal-mean profiles, errors, and repeated lifecycle.\n'

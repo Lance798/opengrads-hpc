@@ -94,6 +94,15 @@ calculations, and native archives for Linux and macOS.
   to 10 kept)`. A step costs a few KB; a `clear` keeps the
   cleared picture (at least 1 MB) until its step is undone or dropped. See
   [UNDO.md](UNDO.md).
+- **Averages over x, y and z read once.** `ave`, `mean`, `sum`, `sumg`,
+  `min`, `max`, `minloc`, and `maxloc` over x, y or z of a plain variable,
+  when the result varies in one dimension at most (a horizontal-mean
+  profile, a zonal-mean line, a single value), now read every position as
+  one section instead of a read per position. A horizontal-mean profile of
+  a 256 × 256 × 100 BP5 variable, `ave(ave(th,x=1,x=256),y=1,y=256)`, read a
+  column 65,536 times and took 12.8 s whatever `set threads` said; it now
+  takes 0.6 s. Results are the same to the last bit, for every file format.
+  See [PERFORMANCE.md](PERFORMANCE.md).
 - **Axes of very small or large values carry one power of ten.** As in
   matplotlib, a plain numeric axis whose labels would have gone to
   e-notation (below 1e-4, or from 1e6) now shows them as plain numbers with
