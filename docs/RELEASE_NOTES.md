@@ -1,7 +1,26 @@
-## opengrads-hpc 1.0.10
+## opengrads-hpc 1.0.11
 
 GrADS for modern simulation output: an ADIOS2/BP5 reader, OpenMP-threaded
 calculations, and native archives for Linux and macOS.
+
+### Fixed in 1.0.11
+
+- **Sixel pictures fill their pane in Windows Terminal.** In tmux in Windows
+  Terminal, `-d Term` drew the picture at six tenths of its pane. Windows
+  Terminal draws sixel by cells of 10 x 20 pixels whatever its font, but
+  from Windows (over ssh, or in WSL) no cell size reaches the kernel, and
+  tmux before 3.6 does not ask the terminal, so GrADS knew none and made
+  the picture for cells of 6 x 12. It now takes 10 x 20 when no size is
+  known. `GA_TERM_CELL=WxH` (`GA_TERM_CELL=9x18`) sets the size for a
+  terminal where a sixel picture still comes out too small or too large.
+  tmux 3.4 does not see that Windows Terminal shows sixel at all; there,
+  set `GA_TERM_PROTOCOL=sixel`. See [TERMINAL.md](TERMINAL.md).
+- **Sixel pictures that tmux draws itself fill their pane.** A tmux built
+  with sixel takes a picture into the pane by the cell size it gave the
+  pane, which tmux 3.6 and later, when they had to ask the terminal for its
+  own, leave at 16 x 32 until the pane is resized; the picture came out at
+  10/16 of the pane in Windows Terminal. GrADS now sizes it by the pane's
+  cells.
 
 ### Added in 1.0.10
 
@@ -36,11 +55,7 @@ calculations, and native archives for Linux and macOS.
   the picture at the size of the cells it fills, often a tenth of the data,
   and inside tmux draws it in place of placeholder characters, which tmux
   keeps with the pane as it switches windows. Sixel goes in up to 256
-  colours, sized for the pane; a tmux built with sixel draws it in the pane
-  itself. In Windows Terminal, whose cell size reaches neither tmux before
-  3.6 nor GrADS from Windows, it is made for the 10 x 20 pixel cells
-  Windows Terminal draws sixel by, and fills the pane rather than six
-  tenths of it; `GA_TERM_CELL=WxH` gives another size. In a
+  colours; a tmux built with sixel draws it in the pane itself. In a
   terminal that shows none (a plain xterm, the macOS Terminal) `-d Term`
   says so and stops, instead of filling the screen with escape codes; when
   the launcher chose it, the pictures go to files instead.
@@ -506,9 +521,9 @@ status.
 ### Verifying and running
 
 ```bash
-sha256sum -c opengrads-hpc-1.0.10-linux-x86_64.tar.gz.sha256
-tar -xzf opengrads-hpc-1.0.10-linux-x86_64.tar.gz
-cd opengrads-hpc-1.0.10-linux-x86_64
+sha256sum -c opengrads-hpc-1.0.11-linux-x86_64.tar.gz.sha256
+tar -xzf opengrads-hpc-1.0.11-linux-x86_64.tar.gz
+cd opengrads-hpc-1.0.11-linux-x86_64
 ./opengrads
 ```
 
@@ -525,7 +540,7 @@ terminal even with XQuartz.
   glibc when it is 2.28 or newer and their bundled glibc and loader otherwise.
 - Reading BP5 written by a multi-rank MPI job is supported by ADIOS2's format
   but is not yet covered by the regression suite.
-- The terminal display is tested through tmux 3.2a, 3.4, and 3.7c, plain and
+- The terminal display is tested through tmux 3.2a, 3.4, 3.5a and 3.7c, plain and
   `-CC`, with a terminal emulator standing in for iTerm2, not yet on iTerm2
   itself; kitty, xterm (`-ti vt340`) and mlterm were checked on screen, by
   themselves and in tmux 3.2a, 3.4 and 3.7c. If no picture appears, `GA_TERM_LOG=/tmp/grads-term.log` records
