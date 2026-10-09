@@ -284,8 +284,11 @@ for case in '1.0.13:does not match its checksum' '1.0.14:does not start on this 
 done
 
 # 9. Not while GrADS runs from the install, unless --force.
-cp "$(command -v sleep)" "$inst/sleep-as-grads"
-"$inst/sleep-as-grads" 30 &
+# The session: a program in the install that keeps running, a copy of bash
+# (not of sleep, which is a script on some systems, coreutils-single's,
+# and so runs as /usr/bin/coreutils).
+cp "$(command -v bash)" "$inst/grads-stand-in"
+"$inst/grads-stand-in" -c 'sleep 30; :' &
 sleeper_pid=$!
 sleep 0.3
 if said="$("$inst/opengrads" --update 2>&1)"; then
