@@ -3,6 +3,23 @@
 GrADS for modern simulation output: an ADIOS2/BP5 reader, OpenMP-threaded
 calculations, and native archives for Linux and macOS.
 
+### Added in 1.0.11
+
+- **Updates.** When GrADS starts in a terminal, the launcher says when a
+  newer release is out, and `./opengrads --update` installs it: the archive
+  for this machine is downloaded, checked against its `.sha256`, started
+  once, and only then put in place of the install, which keeps its path;
+  the old one stays beside it as `<directory>.previous`. Nothing is
+  installed unless asked. The launcher asks GitHub which release is the
+  latest once a day, in the background, so the start is not held up and a
+  machine without network (a compute node) loses nothing;
+  `OPENGRADS_UPDATE_CHECK=0` turns that off. `--update --check` only says
+  whether there is a newer one, and `--update 1.0.10` installs that release,
+  older too. `--update` stops while GrADS runs from the install, and in an
+  install the user cannot write (a shared one), where it prints the
+  commands to update by hand. 1.0.10 and earlier have neither: update them
+  once by hand. See [RELEASES.md](RELEASES.md#updating).
+
 ### Fixed in 1.0.11
 
 - **Sixel pictures fill their pane in Windows Terminal.** In tmux in Windows
@@ -526,6 +543,9 @@ tar -xzf opengrads-hpc-1.0.11-linux-x86_64.tar.gz
 cd opengrads-hpc-1.0.11-linux-x86_64
 ./opengrads
 ```
+
+From this release on, `./opengrads --update` installs later releases in
+place; see [RELEASES.md](RELEASES.md#updating).
 
 On macOS start `./opengrads`. The launcher opens a GrADS window when
 XQuartz is installed (it sets `DISPLAY`), draws in the terminal inside tmux

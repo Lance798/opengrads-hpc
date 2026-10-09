@@ -5,6 +5,18 @@ set -euo pipefail
 
 repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
+# A release archive updates itself with "opengrads --update", and says at
+# start-up, in a terminal, when a newer release is out (once a day it asks,
+# in the background; OPENGRADS_UPDATE_CHECK=0 turns that off).
+if [[ "${1:-}" == --update ]]; then
+  shift
+  exec bash "$repo_root/libexec/opengrads-update" "$repo_root" "$@"
+fi
+if [[ -t 0 && -t 1 && -r "$repo_root/VERSION" &&
+      -r "$repo_root/libexec/opengrads-update" ]]; then
+  bash "$repo_root/libexec/opengrads-update" "$repo_root" --notice || true
+fi
+
 if [[ -n "${OPENGRADS_BUILD_ROOT:-}" ]]; then
   build_root="$OPENGRADS_BUILD_ROOT"
 elif [[ -x "$repo_root/build/src/grads" ]]; then
