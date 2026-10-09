@@ -82,3 +82,7 @@ export OPENGRADS_RUNTIME_LIBRARY_PATH="$runtime_libraries"
 "$repo_root/pytests/TestTermDisplay.sh"
 
 "$repo_root/release/package-macos.sh" "$build_root" "$output_root"
+
+# The archive just made updates itself, to a copy of itself numbered higher.
+OPENGRADS_UPDATE_ARCHIVE="$output_root/opengrads-hpc-$(<"$repo_root/release/VERSION")-macos-$(uname -m).tar.gz" \
+  "$repo_root/pytests/TestUpdate.sh"

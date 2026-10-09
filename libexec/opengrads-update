@@ -1,0 +1,354 @@
+#!/usr/bin/env bash
+# Added in 2026: new-release notices and updates for the release archives.
+# GPLv2; see COPYING.
+#
+# The launcher runs this as
+#
+#   opengrads-update ROOT --notice          at start-up, in a terminal
+#   opengrads-update ROOT [OPTIONS] [VER]   for "opengrads --update"
+#
+# where ROOT is the unpacked archive. At start-up it prints one line when a
+# newer release is known, and once a day asks GitHub, in the background,
+# which release is the latest; the answer is kept in
+# ~/.cache/opengrads-hpc/latest for the next start. Nothing is installed
+# unless asked: --update downloads the archive for this machine, checks it
+# against its .sha256, makes sure it starts, and puts it in place of ROOT,
+# keeping the old one as ROOT.previous.
+#
+# OPENGRADS_UPDATE_CHECK=0 turns the notice and the daily check off;
+# OPENGRADS_UPDATE_URL names another place to take releases from, laid out
+# as GitHub's: URL/latest redirects to URL/tag/vX.Y.Z, and the archives are
+# in URL/download/vX.Y.Z/.
+
+set -uo pipefail
+
+root="${1:?usage: opengrads-update ROOT [--notice | --check | --force | VERSION]}"
+shift
+releases="${OPENGRADS_UPDATE_URL:-https://github.com/Lance798/opengrads-hpc/releases}"
+releases="${releases%/}"
+cache_dir="${XDG_CACHE_HOME:-${HOME:-/nonexistent}/.cache}/opengrads-hpc"
+cache="$cache_dir/latest"
+
+# The version of this install, from the VERSION file every archive carries
+# ("opengrads-hpc 1.0.11"); empty in a source checkout.
+current=""
+if [[ -r "$root/VERSION" ]]; then
+  read -r name version _ < "$root/VERSION" || true
+  [[ "${name:-}" == opengrads-hpc ]] && current="${version:-}"
+fi
+
+case "$(uname -s)" in
+  Linux) os=linux ;;
+  Darwin) os=macos ;;
+  *) os="" ;;
+esac
+machine="$(uname -m)"
+
+# Is version $1 later than $2? Both are dotted numbers.
+newer()
+{
+  local -a a b
+  local i x y
+  [[ "$1" =~ ^[0-9]+(\.[0-9]+)*$ && "$2" =~ ^[0-9]+(\.[0-9]+)*$ ]] || return 1
+  IFS=. read -r -a a <<< "$1"
+  IFS=. read -r -a b <<< "$2"
+  for (( i = 0; i < ${#a[@]} || i < ${#b[@]}; i++ )); do
+    x=$((10#${a[i]:-0}))
+    y=$((10#${b[i]:-0}))
+    (( x > y )) && return 0
+    (( x < y )) && return 1
+  done
+  return 1
+}
+
+# The latest release, from where URL/latest redirects to.
+latest_version()
+{
+  local to=""
+  if command -v curl >/dev/null 2>&1; then
+    to="$(curl -sS --max-time "${1:-15}" -o /dev/null -w '%{redirect_url}' \
+          "$releases/latest" 2>/dev/null)" || return 1
+  elif command -v wget >/dev/null 2>&1; then
+    to="$(wget -q -S --max-redirect=0 --timeout="${1:-15}" -O /dev/null \
+          "$releases/latest" 2>&1 | sed -n 's/^ *[Ll]ocation: *//p' | tail -n 1)"
+  else
+    return 1
+  fi
+  to="${to%%[[:space:]]*}"
+  to="${to##*/tag/v}"
+  [[ "$to" =~ ^[0-9]+(\.[0-9]+)*$ ]] || return 1
+  printf '%s\n' "$to"
+}
+
+# Download $1 to $2, with a progress bar when there is a terminal to show it.
+fetch()
+{
+  if command -v curl >/dev/null 2>&1; then
+    if [[ -t 2 ]]; then
+      curl -fL --retry 2 --connect-timeout 20 --progress-bar -o "$2" "$1"
+    else
+      curl -fsSL --retry 2 --connect-timeout 20 -o "$2" "$1"
+    fi
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q --timeout=20 --tries=3 -O "$2" "$1"
+  else
+    printf 'Downloading needs curl or wget, and neither was found.\n' >&2
+    return 1
+  fi
+}
+
+sha256_of()
+{
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    openssl dgst -sha256 "$1" | awk '{print $NF}'
+  fi
+}
+
+remember()
+{
+  mkdir -p "$cache_dir" 2>/dev/null || return 0
+  printf '%s\n' "$1" > "$cache.$$" 2>/dev/null && mv -f "$cache.$$" "$cache" 2>/dev/null
+  rm -f "$cache.$$" 2>/dev/null
+  return 0
+}
+
+# Ask which release is the latest, and note the time of asking even when no
+# answer came (no network on a compute node), so that it is asked once a day.
+refresh()
+{
+  local v
+  mkdir -p "$cache_dir" 2>/dev/null || return 0
+  touch "$cache" 2>/dev/null || return 0
+  v="$(latest_version 15)" && remember "$v"
+  touch "$cache" 2>/dev/null
+  return 0
+}
+
+notice()
+{
+  local latest=""
+  [[ "${OPENGRADS_UPDATE_CHECK:-1}" != 0 && -n "$current" ]] || return 0
+  if [[ -r "$cache" ]]; then
+    read -r latest < "$cache" 2>/dev/null || true
+    if newer "${latest:-}" "$current"; then
+      printf 'opengrads-hpc %s is out (this is %s); to update: %s/opengrads --update\n' \
+        "$latest" "$current" "$root" >&2
+    fi
+  fi
+  if [[ ! -e "$cache" || -z "$(find "$cache" -mmin -1440 2>/dev/null)" ]]; then
+    ( refresh </dev/null >/dev/null 2>&1 & )
+  fi
+  return 0
+}
+
+usage()
+{
+  cat <<USAGE
+opengrads --update [--check] [--force] [VERSION]
+
+  Install the latest release of opengrads-hpc in place of this one
+  ($root), which is kept as $root.previous.
+  The archive for this machine is downloaded from
+  $releases,
+  checked against its .sha256, and started once before it goes in.
+
+  --check   only say whether a newer release is out
+  --force   update even while GrADS runs from this install
+  VERSION   install that release instead, such as 1.0.10, newer or older
+
+OPENGRADS_UPDATE_CHECK=0 turns off the new-release notice at start-up.
+USAGE
+}
+
+# The processes started from this install: those whose program lies in it.
+# From ps, or where there is none (a minimal container), from /proc.
+running()
+{
+  local p c
+  if command -v ps >/dev/null 2>&1; then
+    ps -A -o pid= -o args= 2>/dev/null
+  else
+    for p in /proc/[0-9]*; do
+      c="$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)" || continue
+      [[ -n "$c" ]] && printf '%s %s\n' "${p#/proc/}" "$c"
+    done
+  fi |
+    awk -v a="$1/" -v b="$2/" '
+      index($2, a) == 1 || index($2, b) == 1 { print $1 }' |
+    tr '\n' ' '
+}
+
+manual()
+{
+  printf '\nTo install it yourself where you can write:\n\n' >&2
+  printf '  curl -fLO %s\n' "$1" >&2
+  printf '  curl -fLO %s.sha256\n' "$1" >&2
+  printf '  %s -c %s.sha256\n' \
+    "$( [[ "$os" == macos ]] && printf 'shasum -a 256' || printf 'sha256sum' )" "${1##*/}" >&2
+  printf '  tar -xzf %s\n' "${1##*/}" >&2
+}
+
+update()
+{
+  local want="$1" force="$2" dir parent base url new got expected actual
+  local pids out here
+
+  if [[ -z "$current" ]]; then
+    printf 'This is a source checkout, not a release archive (%s has no VERSION).\n' "$root" >&2
+    printf 'Update it with git (git pull), then rebuild; see docs/INSTALL.md.\n' >&2
+    return 1
+  fi
+  if [[ -z "$os" ]]; then
+    printf 'There are no opengrads-hpc archives for %s.\n' "$(uname -s)" >&2
+    return 1
+  fi
+  if [[ -z "$want" ]]; then
+    printf 'Asking %s for the latest release...\n' "$releases"
+    if ! want="$(latest_version 30)"; then
+      printf 'No answer from %s.\n' "$releases" >&2
+      printf 'Is this machine on the internet? On a cluster, try a login node.\n' >&2
+      return 1
+    fi
+    remember "$want"
+    if ! newer "$want" "$current"; then
+      printf 'opengrads-hpc %s is the latest release; nothing to do.\n' "$current"
+      return 0
+    fi
+  elif [[ "$want" == "$current" ]]; then
+    printf 'This is opengrads-hpc %s already; nothing to do.\n' "$current"
+    return 0
+  fi
+
+  base="opengrads-hpc-$want-$os-$machine"
+  url="$releases/download/v$want/$base.tar.gz"
+  dir="$(CDPATH= cd -P -- "$root" && pwd)" || return 1
+  parent="$(dirname -- "$dir")"
+  here="$(pwd -P 2>/dev/null)" || here=""
+
+  if [[ ! -w "$parent" || ! -w "$dir" ]]; then
+    printf 'opengrads-hpc %s is out, but you cannot change this install:\n  %s\n' "$want" "$dir" >&2
+    printf 'Ask whoever installed it to update it.\n' >&2
+    manual "$url"
+    return 1
+  fi
+  pids="$(running "$root" "$dir")"
+  if [[ -n "$pids" && "$force" != 1 ]]; then
+    printf 'GrADS is running from this install (process %s).\n' "${pids% }" >&2
+    printf 'Quit it first: what it loads later would come from the new version.\n' >&2
+    printf 'To update anyway: %s/opengrads --update --force\n' "$root" >&2
+    return 1
+  fi
+  if [[ -e "$dir.previous" ]]; then
+    read -r out _ < "$dir.previous/VERSION" 2>/dev/null || out=""
+    if [[ "$out" != opengrads-hpc ]]; then
+      printf '%s.previous is in the way, and is not an earlier opengrads-hpc.\n' "$dir" >&2
+      printf 'Move it elsewhere, then update again.\n' >&2
+      return 1
+    fi
+  fi
+
+  work="$(mktemp -d "$parent/.opengrads-update.XXXXXX")" || return 1
+  printf 'Downloading opengrads-hpc %s for %s %s...\n' "$want" "$os" "$machine"
+  if ! fetch "$url" "$work/$base.tar.gz" || ! fetch "$url.sha256" "$work/$base.tar.gz.sha256"; then
+    printf 'Could not download %s\n' "$url" >&2
+    printf '(see %s for the releases there are).\n' "$releases" >&2
+    return 1
+  fi
+  read -r expected _ < "$work/$base.tar.gz.sha256" || expected=""
+  actual="$(sha256_of "$work/$base.tar.gz")"
+  if [[ ! "$expected" =~ ^[0-9a-fA-F]{64}$ || "$expected" != "$actual" ]]; then
+    printf 'The download does not match its checksum; nothing was changed.\n' >&2
+    printf '  expected %s\n  got      %s\n' "${expected:-(none)}" "$actual" >&2
+    return 1
+  fi
+  if ! tar -xzf "$work/$base.tar.gz" -C "$work"; then
+    printf 'Could not unpack %s; nothing was changed.\n' "$base.tar.gz" >&2
+    return 1
+  fi
+  new="$work/$base"
+  got=""
+  [[ -r "$new/VERSION" ]] && read -r _ got _ < "$new/VERSION"
+  if [[ ! -x "$new/opengrads" || "$got" != "$want" ]]; then
+    printf 'The archive does not hold opengrads-hpc %s; nothing was changed.\n' "$want" >&2
+    return 1
+  fi
+  out="$(OPENGRADS_UPDATE_CHECK=0 "$new/opengrads" -bl -d gxdummy -h gxdummy -c quit \
+         </dev/null 2>&1)"
+  if [[ $? -ne 0 || "$out" != *"GX Package Terminated"* ]]; then
+    printf 'opengrads-hpc %s does not start on this machine; nothing was changed:\n' "$want" >&2
+    printf '%s\n' "$out" | tail -n 5 >&2
+    return 1
+  fi
+
+  rm -rf -- "$dir.previous"
+  if ! mv -- "$dir" "$dir.previous"; then
+    printf 'Could not move %s aside; nothing was changed.\n' "$dir" >&2
+    return 1
+  fi
+  if ! mv -- "$new" "$dir"; then
+    mv -- "$dir.previous" "$dir"
+    printf 'Could not put the new version in place; nothing was changed.\n' >&2
+    return 1
+  fi
+  remember "$want"
+  printf 'opengrads-hpc %s is installed in %s.\n' "$want" "$dir"
+  printf 'The previous version, %s, is in %s.previous; delete it when you no\n' "$current" "$dir"
+  printf 'longer need it, or move it back to return to it.\n'
+  if [[ "$here" == "$dir" || "$here" == "$dir"/* ]]; then
+    printf '\nThis shell is still in the old version, which moved with its directory:\n'
+    printf 'cd %s first, or ./opengrads starts %s.\n' "$dir" "$current"
+  fi
+  return 0
+}
+
+check()
+{
+  local v
+  [[ -n "$current" ]] || { printf 'This is a source checkout; it has no release version.\n'; return 1; }
+  if ! v="$(latest_version 30)"; then
+    printf 'No answer from %s.\n' "$releases" >&2
+    return 1
+  fi
+  remember "$v"
+  if newer "$v" "$current"; then
+    printf 'opengrads-hpc %s is out (this is %s); to update: %s/opengrads --update\n' \
+      "$v" "$current" "$root"
+  else
+    printf 'opengrads-hpc %s is the latest release.\n' "$current"
+  fi
+}
+
+# The download, unpacked beside the install so that it moves in with a
+# rename; gone at exit, whatever happened.
+work=""
+trap '[[ -n "$work" ]] && rm -rf -- "$work"' EXIT
+
+want=""
+force=0
+mode=update
+while (( $# )); do
+  case "$1" in
+    --notice) mode=notice ;;
+    --check) mode=check ;;
+    --force) force=1 ;;
+    -h|--help) usage; exit 0 ;;
+    v[0-9]*|[0-9]*)
+      want="${1#v}"
+      if [[ ! "$want" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+        printf 'Not a version: %s\n' "$1" >&2
+        exit 2
+      fi ;;
+    *) printf 'Unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+case "$mode" in
+  notice) notice ;;
+  check) check ;;
+  update) update "$want" "$force" ;;
+esac

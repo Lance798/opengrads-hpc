@@ -79,3 +79,7 @@ OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestTermDisplay.sh"
 
 "$repo_root/release/package-linux.sh" \
   "$build_root" "$deps_root" "$adios2_root" "$work_root" "$output_root"
+
+# The archive just made updates itself, to a copy of itself numbered higher.
+OPENGRADS_UPDATE_ARCHIVE="$output_root/opengrads-hpc-$(<"$repo_root/release/VERSION")-linux-$(uname -m).tar.gz" \
+  "$repo_root/pytests/TestUpdate.sh"

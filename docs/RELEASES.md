@@ -21,6 +21,53 @@ With an X display, the launcher selects the Cairo graphical plug-ins. Without
 an X display it uses the bundled noninteractive device. `./opengrads -j N`
 selects the calculation CPU count; the default remains four.
 
+### Updating
+
+From 1.0.11 an archive says, when GrADS starts in a terminal, that a newer
+release is out:
+
+```text
+opengrads-hpc 1.0.12 is out (this is 1.0.11); to update: /home/me/opengrads-hpc-1.0.11-linux-x86_64/opengrads --update
+```
+
+Once a day the launcher asks GitHub which release is the latest, in the
+background, so it never holds up the start; the answer is kept in
+`~/.cache/opengrads-hpc/latest` and shown from the next start. With no
+network, as on most compute nodes, the asking quietly fails and is not
+repeated that day. Batch jobs, pipes and anything else without a terminal
+see nothing. `OPENGRADS_UPDATE_CHECK=0` turns the notice and the asking off.
+Nothing is installed unless asked:
+
+```bash
+./opengrads --update --check   # only say whether a newer release is out
+./opengrads --update           # install the latest release
+./opengrads --update 1.0.10    # install that release instead, older too
+```
+
+`--update` downloads the archive for this machine, checks it against its
+`.sha256`, starts it once (`-bl -d gxdummy -c quit`), and only then puts it
+in place of the install. The directory keeps its path, and its name, so
+aliases and `PATH` entries still work; `VERSION` and the start-up banner
+say which release it holds. The old install is kept beside it as
+`<directory>.previous` until the next update: move it back to return to
+it, or delete it. If anything fails on the way (no network, a checksum
+that does not match, an archive that does not start here), nothing is
+changed. Files you added inside the install directory go with the old
+version to `.previous`.
+
+`--update` stops, and says so, when GrADS is still running from the install
+(`--force` updates anyway; a session that then loads a plug-in would load
+the new one), and when the install cannot be written, as with a shared one
+installed by an administrator: it then prints the commands to download and
+unpack the new release by hand. A source checkout is updated with git.
+`OPENGRADS_UPDATE_URL` names another place to take releases from, laid out
+as GitHub's (`URL/latest` redirects to `URL/tag/vX.Y.Z`, archives under
+`URL/download/vX.Y.Z/`). The download uses `curl` or `wget`, which follow
+`https_proxy`.
+
+On a cluster where only the login nodes reach the internet, run
+`--update` there.
+
 The release matrix is:
 
 

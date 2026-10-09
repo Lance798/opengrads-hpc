@@ -84,7 +84,9 @@ libraries are available.
 
 ## Quick start
 
-For a packaged release, follow [RELEASES.md](docs/RELEASES.md). For a
+For a packaged release, follow [RELEASES.md](docs/RELEASES.md); it says at
+start-up when a newer release is out, and `./opengrads --update` installs it.
+For a
 source build, follow [INSTALL.md](docs/INSTALL.md). Once started, a BP5 session
 can look like this:
 

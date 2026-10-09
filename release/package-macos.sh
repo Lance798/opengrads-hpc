@@ -31,6 +31,7 @@ mkdir -p "$bundle_root/bin" "$lib_root" "$plugin_root" "$bundle_root/etc" \
 install -m 0755 "$build_root/src/grads" "$bundle_root/bin/grads"
 # The terminal display starts this in the tmux pane it draws into.
 install -m 0755 "$repo_root/libexec/grads-termview" "$bundle_root/libexec/grads-termview"
+install -m 0755 "$repo_root/libexec/opengrads-update" "$bundle_root/libexec/opengrads-update"
 
 # The X displays (Cairo, the default, and X11) open a window through
 # XQuartz. They are plug-ins, loaded only when asked for, so the archive does

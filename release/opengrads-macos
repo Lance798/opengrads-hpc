@@ -4,6 +4,18 @@
 set -euo pipefail
 
 bundle_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+# The archive updates itself with "opengrads --update", and says at start-up,
+# in a terminal, when a newer release is out (once a day it asks, in the
+# background; OPENGRADS_UPDATE_CHECK=0 turns that off).
+if [[ "${1:-}" == --update ]]; then
+  shift
+  exec bash "$bundle_root/libexec/opengrads-update" "$bundle_root" "$@"
+fi
+if [[ -t 0 && -t 1 && -r "$bundle_root/libexec/opengrads-update" ]]; then
+  bash "$bundle_root/libexec/opengrads-update" "$bundle_root" --notice || true
+fi
+
 export GA_ROOT="$bundle_root/plugins"
 export GAUDPT="$bundle_root/etc/udpt"
 export GADDIR="$bundle_root/cola/data"

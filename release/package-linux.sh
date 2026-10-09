@@ -40,6 +40,8 @@ install -m 0755 "$build_root/src/grads" "$bundle_root/build/src/grads"
 install -m 0755 "$repo_root/opengrads" "$bundle_root/opengrads"
 install -D -m 0755 "$repo_root/libexec/grads-termview" \
   "$bundle_root/libexec/grads-termview"
+install -m 0755 "$repo_root/libexec/opengrads-update" \
+  "$bundle_root/libexec/opengrads-update"
 install -m 0644 "$repo_root/etc/udpt-local" "$bundle_root/etc/udpt-local"
 cp -a "$repo_root/cola/data/." "$bundle_root/cola/data/"
 cp -a "$repo_root/lib/scripts/." "$bundle_root/lib/scripts/"
