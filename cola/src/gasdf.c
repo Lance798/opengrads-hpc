@@ -3651,7 +3651,7 @@ size_t sz;
         gaprnt (0,"gadxdf error: data file name is missing\n");
         goto err9;
       }
-      if (*ch=='^' || *ch=='$') {
+      if (*ch=='^' || *ch=='$' || *ch=='~') {
         fnmexp (pfi->name,ch,pfi->dnam);
       } else {
         getwrd (pfi->name,ch,511);

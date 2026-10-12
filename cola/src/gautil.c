@@ -11,6 +11,7 @@
 #include <ctype.h>
 #include <signal.h>
 #include <unistd.h>
+#include <pwd.h>
 /* 
  * Include ./configure's header file
  */
@@ -1503,6 +1504,42 @@ gaint i;
 }
 
 
+/* A path that starts with ~ (~/data/x.ctl, ~, ~user/x.ctl) as the shell
+   would read it: ~ is $HOME (or the password entry's home when HOME is not
+   set), ~user that user's home. The path ends at white space. Gives 1 and
+   the path in out when it was expanded, 0 (out untouched) otherwise. */
+
+gaint gahome (const char *in, char *out, size_t n) {
+const char *rest, *home=NULL;
+char user[64];
+struct passwd *pw;
+size_t i;
+
+  if (in==NULL || *in!='~' || n==0) return (0);
+  rest = in+1;
+  i = 0;
+  while (*rest && *rest!='/' && !isspace((unsigned char)*rest) && i<sizeof(user)-1)
+    user[i++] = *rest++;
+  user[i] = '\0';
+  if (*rest && *rest!='/' && !isspace((unsigned char)*rest)) return (0);
+  if (i==0) {
+    home = getenv("HOME");
+    if (home==NULL || *home=='\0') {
+      pw = getpwuid(getuid());
+      if (pw) home = pw->pw_dir;
+    }
+  } else {
+    pw = getpwnam(user);
+    if (pw) home = pw->pw_dir;
+  }
+  if (home==NULL || *home=='\0') return (0);
+  i = 0;
+  while (*home && i<n-1) out[i++] = *home++;
+  while (*rest && !isspace((unsigned char)*rest) && *rest!=13 && i<n-1) out[i++] = *rest++;
+  out[i] = '\0';
+  return (1);
+}
+
 /* Expand file names prefixed with '^' from data descriptor
    files */
 
@@ -1510,6 +1547,10 @@ void fnmexp (char *out, char *in1, char *in2) {
 char *pos, *ch, envv[20], *envr, CR=13;
 gaint i,j;
 
+  if (*in1=='~') {                 /* home directory: written as is when it is not one */
+    if (!gahome(in1,out,256)) getwrd(out,in1,256);   /* the smallest out is 256 */
+    return;
+  }
   if (*in1=='$') {
     in1++;
     i = 0;

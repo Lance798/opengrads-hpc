@@ -21,6 +21,7 @@
 #include <dlfcn.h>
 #include <string.h>
 #include "grads.h"
+#include "gahelp.h"
 #include "gaomp.h"
 
 #if OPENGRADS == 1
@@ -211,6 +212,7 @@ gaint (*fpntr)(struct gafunc *, struct gastat *);
     gaprnt (0,"Syntax Error:  Invalid Operand \n");
     snprintf(pout,1255,"  '%s' not a variable or function name\n",name);
     gaprnt (0,pout);
+    gahelpnote(1,name);
     return (NULL);
   }
 
@@ -224,6 +226,10 @@ gaint (*fpntr)(struct gafunc *, struct gastat *);
 
   /* Parse the argument list                                          */
   pfc->argnum = 0;                         /* Initial arg count       */
+  pfc->buff[0] = '\0';                     /* With no args, as in     */
+  pfc->argpnt[0] = pfc->buff;              /*  coll2gr(), a function  */
+                                           /*  that reads the 1st one */
+                                           /*  gets "", not garbage   */
   if (*ch=='(') {                          /* If no leading paren..   */
     ch++;                                  /* Past the '('            */
     if (*ch==')') {                        /* Was it '()'???          */
@@ -235,6 +241,7 @@ gaint (*fpntr)(struct gafunc *, struct gastat *);
       while (pdeep!=0 || *ch!=')') {       /*  Until end of args...   */
         if (*ch=='\0' || *ch=='\n') {      /*   End of string?        */
           gaprnt (0,"Syntax Error:  Unmatched parens\n");
+          gahelpnote(2,name);
           goto err;                        /*    And return           */
         }                                  /*   Is ok                 */
         *pos = *ch;                        /*   Move to output buffer */
@@ -267,6 +274,7 @@ gaint (*fpntr)(struct gafunc *, struct gastat *);
   if (rc) {                                /* If an error occurred... */
     snprintf(pout,1255,"Operation Error:  Error from %s function\n",name);
     gaprnt (0,pout);
+    gahelpnote(2,name);
     goto err;
   }
   pst->type = pst2->type;

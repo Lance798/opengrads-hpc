@@ -34,10 +34,12 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include <string.h>
 #include <limits.h>
 #include <math.h>
 #include "grads.h"
+#include "gahelp.h"
 #include "gaomp.h"
 #include "gx.h"
 
@@ -387,6 +389,69 @@ struct gaundostep *step=NULL;
 }
 
 /* Handle all user commands */
+/* A file name in a command may start with ~ for the home directory, as in
+   a shell: open ~/data/model.ctl. Gives a copy of the command with such
+   names expanded, or NULL when there is none. Only where file names go:
+   after the commands that take them, after the set and query options that
+   do, and in run only the script's own name, not its arguments. */
+
+static char *gacmdhome (char *com) {
+static const char *cmds[] = {"open","sdfopen","xdfopen","bpopen","exec","gxprint",
+                             "printim","print","enable","outxwd","wi",NULL};
+static const char *sets[] = {"sdfwrite","fwrite","geotiff","kml","shp","imprun",NULL};
+static const char *qrys[] = {"dbf","shp",NULL};
+char w1[16],w2[16],path[4096],*p,*out;
+const char **l;
+gaint skip,most,i,n,any;
+size_t sz,len;
+
+  for (p=com; *p==' '; p++) ;
+  for (i=0; p[i] && p[i]!=' ' && i<15; i++) w1[i] = tolower((unsigned char)p[i]);
+  w1[i] = '\0';
+  for (p+=i; *p==' '; p++) ;
+  for (i=0; p[i] && p[i]!=' ' && i<15; i++) w2[i] = tolower((unsigned char)p[i]);
+  w2[i] = '\0';
+  skip = 1; most = 1<<30;                    /* words before the file names, and how many */
+  for (l=cmds; *l && strcmp(*l,w1); l++) ;
+  if (*l==NULL) {
+    l = NULL;
+    if (!strcmp(w1,"run")) most = 1;
+    else if (!strcmp(w1,"set")) { for (l=sets; *l && strcmp(*l,w2); l++) ; skip = 2; }
+    else if (!strcmp(w1,"q") || !strcmp(w1,"query")) { for (l=qrys; *l && strcmp(*l,w2); l++) ; skip = 2; }
+    else if (!strcmp(w1,"draw") && !strcmp(w2,"shp")) skip = 2;
+    else return (NULL);
+    if (l && *l==NULL) return (NULL);
+  }
+  /* any word to expand? */
+  any = 0;
+  for (p=com, n=0; *p; ) {
+    while (*p==' ') p++;
+    if (*p=='\0') break;
+    if (n>=skip && n<skip+most && *p=='~' && gahome(p,path,sizeof(path))) any = 1;
+    while (*p && *p!=' ') p++;
+    n++;
+  }
+  if (!any) return (NULL);
+  sz = strlen(com) + 1;
+  for (p=com; *p; p++) if (*p=='~') sz += 4096;
+  out = (char *)galloc(sz,"cmdhome");
+  if (out==NULL) return (NULL);
+  len = 0;
+  for (p=com, n=0; *p; ) {
+    while (*p==' ') out[len++] = *p++;
+    if (*p=='\0') break;
+    if (n>=skip && n<skip+most && *p=='~' && gahome(p,path,sizeof(path))) {
+      for (i=0; path[i]; i++) out[len++] = path[i];
+      while (*p && *p!=' ') p++;
+    } else {
+      while (*p && *p!=' ') out[len++] = *p++;
+    }
+    n++;
+  }
+  out[len] = '\0';
+  return (out);
+}
+
 gaint gacmd (char *com, struct gacmn *pcm, gaint exflg) {
 struct gafile *pfi,*pfi2;
 struct gadefn *pdf,*pdf2;
@@ -399,9 +464,17 @@ char *cmd,*rslt,*ccc,*ch,ext[10];
 size_t sz;
 void *ustep;
 char *formats[7] = {"EPS","PS","PDF","SVG","PNG","GIF","JPG"};
+char *comhome,*hintcom=NULL;
 FILE *pdefid=NULL;
 
   ccc = NULL;
+  comhome = gacmdhome(com);                /* ~ for the home directory */
+  if (comhome) com = comhome;
+  if (gacmdlvl==0 && !msgflg) {            /* typed at the prompt: hint at its usage if it fails */
+    gahelpclear();
+    hintcom = (char *)galloc(strlen(com)+1,"hintcom");
+    if (hintcom) { strcpy(hintcom,com); lowcas(hintcom); }
+  }
   gaiomg();   /* enable interpolation message */
   if (dsubs==NULL) dsubs = getdsubs();  /* get ptrs to the graphics display functions */
   if (psubs==NULL) psubs = getpsubs();  /* get ptrs to the graphics printing functions */
@@ -413,6 +486,8 @@ FILE *pdefid=NULL;
   ccc = (char *)galloc(sz,"cmd");
   if (ccc==NULL) {
     gaprnt(0,"Memory allocation error: Command Processing\n");
+    if (comhome) gree(comhome,"cmdhome");
+    if (hintcom) gree(hintcom,"hintcom");
     return(1);
   }
   for (i=0; i<len; i++) *(ccc+i) = *(com+i);
@@ -1328,12 +1403,17 @@ FILE *pdefid=NULL;
   }
 
 retrn:
+  if (hintcom) {
+    if (retcod>0 || gahelpfailed()) gahelpafter(hintcom,pcm);   /* quit is -1 */
+    gree(hintcom,"hintcom");
+  }
   gacmdlvl--;
   if (gacmdlvl==0) gaundokeep(pcm);  /* Keep an undo step if we drew or cleared */
   if (gacmdlvl==0) gaprogreset();    /* and take any progress line away */
   if (ccc) {
     gree(ccc,"f196");
   }
+  if (comhome) gree(comhome,"cmdhome");
   return (retcod);
 }
 
@@ -1610,6 +1690,7 @@ char shparg[4096];
   /* Check initial operands */
   if ((cmd=nxtwrd(cmd)) == NULL) {
     gaprnt (0,"DRAW error: Missing operand\n");
+    gahelpnote(3,NULL);
     return (1);
   }
   getwrd (oper,cmd,10);
@@ -2269,6 +2350,7 @@ char shparg[4096];
     return (0);
   }
   gaprnt (0,"DRAW error:  Invalid operand\n");
+  gahelpnote(3,NULL);
   return (1);
 }
 
@@ -5083,6 +5165,7 @@ gadouble minvals[4], maxvals[4],dval;
     lab[i] = '\0';
     snprintf(pout,1255,"Invalid QUERY argument: %s \n",lab);
     gaprnt(0,pout);
+    gahelpnote(3,NULL);
   }
   return (0);
 }

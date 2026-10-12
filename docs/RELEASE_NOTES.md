@@ -3,6 +3,37 @@
 GrADS for modern simulation output: an ADIOS2/BP5 reader, OpenMP-threaded
 calculations, and native archives for Linux and macOS.
 
+### Added since 1.0.11 (not yet released)
+
+- **Usage after an error.** A command typed at the prompt that fails is
+  followed by how it is used: a line of syntax and an example, for
+  functions (`d mean(ts)` gives `mean(expr, dim1, dim2 <,tinc> <,-b>)` and
+  `mean(ts, t=1, t=12)`), set and query options (`set gxout` lists the
+  kinds), `draw`, and the commands. A name that is not known gets the
+  nearest that are: `d tss` asks "Did you mean: ts?", `set gxot` suggests
+  `gxout`. Commands run by scripts print what they did, so scripts that
+  read `result` see no change. See [PROMPT.md](PROMPT.md).
+- **Tab completes more.** After `set` the options, and after an option its
+  keywords (`on`/`off`, the kinds of `gxout`, the `mpdset` resolutions,
+  the `sdfwrite` flags); the query options; in `d` and `define` the
+  variables, defined variables and functions, and the dimensions inside a
+  function's parentheses; scripts along `GASCRP` after `run`; open file
+  numbers, defined variables, and file names where they go. Before, Tab
+  knew only the commands and a few options, and offered the current
+  directory's files after `d`.
+- **`~` in file names.** `open ~/data/model.ctl`, `printim ~/plot.png`,
+  `run ~/gs/plot.gs` and the like read `~` as the home directory, as a
+  shell does, as do a script's `read` and `write` and a descriptor's
+  `DSET`, `INDEX` and `PDEF` files.
+
+### Fixed since 1.0.11 (not yet released)
+
+- **A function called with empty parentheses could crash GrADS.**
+  `d coll2gr()` and others read their first argument without checking
+  that there was one, and got whatever the previous call had left; after
+  some commands that was enough to end GrADS with a segmentation fault.
+  They now get an empty argument and report the error.
+
 ### Added in 1.0.11
 
 - **Updates.** When GrADS starts in a terminal, the launcher says when a

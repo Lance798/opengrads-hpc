@@ -711,7 +711,7 @@ gaint gaddes (char *name, struct gafile *pfi, gaint mflag) {
         gaprnt (0,"Descriptor File Error:  Data file name is missing\n");
         goto err9;
       }
-      if (*ch=='^' || *ch=='$') {
+      if (*ch=='^' || *ch=='$' || *ch=='~') {
         fnmexp (pfi->name,ch,name);
       } else {
         getwrd (pfi->name,ch,512);
@@ -724,7 +724,7 @@ gaint gaddes (char *name, struct gafile *pfi, gaint mflag) {
         gaprnt (0,"Open Error:  Station or Index Map file name is missing\n");
         goto err9;
       }
-      if (*ch=='^' || *ch=='$') {
+      if (*ch=='^' || *ch=='$' || *ch=='~') {
         fnmexp (pout, ch, name);
       } else {
         getwrd (pout, ch, 500);  
@@ -838,7 +838,7 @@ gaint gaddes (char *name, struct gafile *pfi, gaint mflag) {
 
         if ( (ch = nxtwrd(ch)) == NULL) goto errm;
 	ch = mrec + (ch-rec);
-        if (*ch=='^' || *ch=='$') {
+        if (*ch=='^' || *ch=='$' || *ch=='~') {
           fnmexp (pdefnm,ch,name);
         } else {
           getwrd (pdefnm,ch,256);
