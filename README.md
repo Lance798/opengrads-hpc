@@ -111,6 +111,7 @@ Use `q config` to see whether this build includes `adios2-bp5`, `openmp`,
 - [BP5 reader guide and limitations](docs/BP5.md)
 - [Terminal display: plots over ssh without X](docs/TERMINAL.md)
 - [Undo: settings and limits](docs/UNDO.md)
+- [The prompt: Tab completion, usage after errors, ~ in file names](docs/PROMPT.md)
 - [OpenMP controls and benchmark notes](docs/PERFORMANCE.md)
 - [Architecture and development roadmap](docs/ARCHITECTURE.md)
 

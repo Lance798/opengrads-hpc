@@ -37,6 +37,7 @@
 #include <signal.h>
 #include "grads.h"
 #include "gaomp.h"
+#include "gahelp.h"
 
 #if USEGUI == 1
 #include "gagui.h"
@@ -44,6 +45,7 @@
 
 #if READLINE ==1
 #include <time.h>
+#include <dirent.h>
 #include <readline/readline.h>
 #include <readline/history.h>
 extern gaint history_length;
@@ -619,74 +621,238 @@ gaint gaqsig (void) {
 }
 
 #if READLINE == 1
-static const char *ga_commands[] = {
-  "bpopen", "clear", "close", "collect", "define", "display", "draw",
-  "dropmenu", "enable", "exec", "flush", "frame", "history", "modify",
-  "open", "print", "printim", "query", "quit", "reinit", "repeat", "run",
-  "sdfopen", "set", "swap", "undefine", "undo", "xdfopen", NULL
-};
+/* Tab completion. What is offered depends on where the cursor is:
 
-static const char *ga_set_words[] = {
-  "background", "ccolor", "cint", "clevs", "clopts", "color", "csmooth",
-  "display", "dfile", "e", "font", "frame", "gxout", "lat", "lev", "lon",
-  "mpdraw", "mpdset", "mpvals", "parea", "poli", "rgb", "t", "time",
-  "threads", "undef", "undo", "x", "xaxis", "xflip", "xlint", "xsize", "y", "yaxis",
-  "yflip", "ylint", "z", NULL
-};
+     at the start            commands
+     set _                   set options; after one, its keywords
+                             (on|off, the kinds of gxout, ...)
+     q _, draw _, clear _    their options
+     d, define, name =       variables of the default file, defined
+                             variables, functions (with their "("), and
+                             inside one's parentheses the dimensions
+     run _                   scripts, in the current directory and GASCRP
+     open, sdfopen, ...      file names (~ for the home directory)
 
-static const char *ga_query_words[] = {
-  "attr", "config", "ctlinfo", "define", "dims", "file", "files",
-  "font", "gxconfig", "gxout", "pos", "shades", "threads", "time", "udct", "udft",
-  "undo", "vars", NULL
-};
+   The names come from gahelp.c, which also prints the usage hints. */
 
-static const char *ga_draw_words[] = {
-  "button", "dropmenu", "line", "map", "mark", "polyf", "rec", "recf",
-  "string", "title", "xlab", "ylab", NULL
-};
+static char **cands;                     /* the candidates of this completion */
+static int ncand, maxcand;
 
-static const char **ga_completion_words;
+static void cand (const char *w, const char *text) {
+int i;
+size_t n = strlen(text);
+char **more;
+  if (w==NULL || strncmp(w,text,n)) return;
+  for (i=0; i<ncand; i++) if (!strcmp(cands[i],w)) return;
+  if (ncand==maxcand) {
+    more = (char **)realloc(cands,sizeof(char *)*(maxcand ? 2*maxcand : 64));
+    if (more==NULL) return;
+    cands = more;
+    maxcand = maxcand ? 2*maxcand : 64;
+  }
+  if ((cands[ncand] = strdup(w))!=NULL) ncand++;
+}
+
+static void candwords (const char *words, const char *text) {
+char w[64];
+const char *p;
+int i;
+  if (words==NULL) return;
+  for (p=words; *p; ) {
+    while (*p==' ') p++;
+    for (i=0; *p && *p!=' ' && i<63; p++) w[i++] = *p;
+    w[i] = '\0';
+    if (i) cand(w,text);
+  }
+}
+
+static void candtable (int kind, const char *text) {
+const char *w;
+int i;
+  for (i=0; (w=gahelpname(kind,i))!=NULL; i++) cand(w,text);
+}
+
+static void candfiles (const char *text) {               /* open file numbers */
+struct gafile *pfi;
+char w[16];
+int n=0;
+  for (pfi=gcmn.pfi1; pfi; pfi=pfi->pforw) { snprintf(w,sizeof(w),"%d",++n); cand(w,text); }
+}
+
+static void canddefined (const char *text) {
+struct gadefn *pdf;
+  for (pdf=gcmn.pdf1; pdf; pdf=pdf->pforw) cand(pdf->abbrv,text);
+}
+
+static void candexpr (const char *text, int inparens) {
+struct gafile *pfi;
+char w[64];
+const char *f;
+int n=0,v,i;
+static const char *dims[] = {"x=","y=","z=","t=","e=","lon=","lat=","lev=","time=","ens=",NULL};
+  for (pfi=gcmn.pfi1; pfi; pfi=pfi->pforw) {
+    n++;
+    for (v=0; v<pfi->vnum; v++) {
+      if (pfi==gcmn.pfid) cand(pfi->pvar1[v].abbrv,text);
+      else { snprintf(w,sizeof(w),"%s.%d",pfi->pvar1[v].abbrv,n); cand(w,text); }
+    }
+  }
+  canddefined(text);
+  for (i=0; (f=gahelpname(GAHELP_FUNC,i))!=NULL; i++) {
+    snprintf(w,sizeof(w),"%s(",f);
+    cand(w,text);
+  }
+  if (inparens) for (i=0; dims[i]; i++) cand(dims[i],text);
+}
+
+static void candscripts (const char *text) {             /* .gs files along GASCRP */
+char *path,*dir,*save=NULL,w[300];
+DIR *d;
+struct dirent *e;
+size_t n;
+  if (strchr(text,'/')) return;
+  path = getenv("GASCRP");
+  if (path==NULL || (path=strdup(path))==NULL) return;
+  for (dir=strtok_r(path," :",&save); dir; dir=strtok_r(NULL," :",&save)) {
+    if ((d=opendir(dir))==NULL) continue;
+    while ((e=readdir(d))!=NULL) {
+      n = strlen(e->d_name);
+      if (n>3 && !strcmp(e->d_name+n-3,".gs")) { snprintf(w,sizeof(w),"%s",e->d_name); cand(w,text); }
+    }
+    closedir(d);
+  }
+  free(path);
+}
+
+static void candpaths (const char *text) {               /* file names, ~ too */
+char *f;
+int state;
+  for (state=0; (f=rl_filename_completion_function(text,state))!=NULL; state++) {
+    cand(f,text[0]=='~' ? "" : text);
+    free(f);
+  }
+  rl_filename_completion_desired = 1;
+}
 
 static char *ga_completion_generator(const char *text, int state) {
-  static size_t index;
-  size_t length;
-  const char *word;
-
+static int index;
+  (void)text;
   if (!state) index = 0;
-  length = strlen(text);
-  while ((word = ga_completion_words[index++]) != NULL) {
-    if (strncmp(word,text,length)==0) return strdup(word);
-  }
+  if (index<ncand) { char *w = cands[index]; cands[index++] = NULL; return w; }
   return NULL;
 }
 
+/* The words of the line before the cursor, in lower case: how many there
+   are, and the first two. */
+
+static int lineargs (int start, char *w1, char *w2, size_t n) {
+int i=0,k=0,args=0;
+size_t j;
+char *w;
+  w1[0] = w2[0] = '\0';
+  while (i<start) {
+    while (i<start && isspace((unsigned char)rl_line_buffer[i])) i++;
+    if (i>=start) break;
+    w = args==0 ? w1 : (args==1 ? w2 : NULL);
+    for (j=0; i<start && !isspace((unsigned char)rl_line_buffer[i]); i++, j++)
+      if (w && j<n-1) w[j] = tolower((unsigned char)rl_line_buffer[i]);
+    if (w) w[j<n-1 ? j : n-1] = '\0';
+    args++;
+    k = i;
+  }
+  (void)k;
+  return args;
+}
+
+static int ga_isexpr (const char *w1) {
+  return !strcmp(w1,"d") || !strcmp(w1,"display") || !strcmp(w1,"define") ||
+         (strchr(rl_line_buffer,'=') && gahelpwords(GAHELP_CMD,w1)==NULL &&
+          strcmp(w1,"set") && strcmp(w1,"q") && strcmp(w1,"query") && strcmp(w1,"draw"));
+}
+
+/* Inside an expression, a name ends at an operator or a parenthesis; in
+   commands, only at a space, so that file names and -options stay whole. */
+
+static char *ga_wordbreaks(void) {
+char w1[32],w2[32];
+  lineargs(rl_point,w1,w2,sizeof(w1));
+  if (ga_isexpr(w1)) return (char *)" \t\n,;()=+-*/<>^|&\"'";
+  return (char *)" \t\n";
+}
+
+static const char *filecmds[] = {"open","sdfopen","xdfopen","bpopen","exec","gxprint","printim",
+                                 "print","outxwd","wi",NULL};
+
 static char **ga_attempted_completion(const char *text, int start, int end) {
-  char first[32];
-  size_t length;
+char w1[32],w2[32];
+const char *words,**f;
+int args,depth,i;
   (void)end;
 
-  if (start==0) ga_completion_words = ga_commands;
-  else {
-    length = 0;
-    while (rl_line_buffer[length] && rl_line_buffer[length]!=' ' &&
-           rl_line_buffer[length]!='\t' && length<sizeof(first)-1) {
-      first[length] = rl_line_buffer[length];
-      length++;
+  for (i=0; i<ncand; i++) free(cands[i]);
+  ncand = 0;
+  rl_completion_append_character = ' ';
+  args = lineargs(start,w1,w2,sizeof(w1));
+
+  if (args==0) candtable(GAHELP_CMD,text);
+  else if (!strcmp(w1,"set")) {
+    if (args==1) candtable(GAHELP_SET,text);
+    else if (!strcmp(w2,"dfile")) candfiles(text);
+    else {
+      words = gahelpwords(GAHELP_SET,w2);
+      if (words && (text[0]=='-' || words[0]!='-')) candwords(words,text);
+      else if (!strcmp(w2,"sdfwrite") || !strcmp(w2,"fwrite") || !strcmp(w2,"geotiff") ||
+               !strcmp(w2,"kml") || !strcmp(w2,"shp") || !strcmp(w2,"imprun")) candpaths(text);
     }
-    first[length] = '\0';
-    if (!strcmp(first,"set")) ga_completion_words = ga_set_words;
-    else if (!strcmp(first,"query") || !strcmp(first,"q"))
-      ga_completion_words = ga_query_words;
-    else if (!strcmp(first,"draw")) ga_completion_words = ga_draw_words;
-    else return NULL;
+  }
+  else if (!strcmp(w1,"q") || !strcmp(w1,"query")) {
+    if (args==1) candtable(GAHELP_QUERY,text);
+    else if (!strcmp(w2,"file") || !strcmp(w2,"ctlinfo") || !strcmp(w2,"attr") || !strcmp(w2,"cache"))
+      candfiles(text);
+    else if (!strcmp(w2,"define") || !strcmp(w2,"defval")) canddefined(text);
+    else if (!strcmp(w2,"dbf") || !strcmp(w2,"shp")) candpaths(text);
+    else candwords(gahelpwords(GAHELP_QUERY,w2),text);
+  }
+  else if (!strcmp(w1,"draw")) {
+    if (args==1) candtable(GAHELP_DRAW,text);
+    else if (!strcmp(w2,"shp")) candpaths(text);
+  }
+  else if (ga_isexpr(w1)) {
+    for (depth=0, i=0; i<start; i++) {
+      if (rl_line_buffer[i]=='(') depth++;
+      else if (rl_line_buffer[i]==')' && depth>0) depth--;
+    }
+    if (!strcmp(w1,"define") && args==1) {             /* the new name */
+      rl_attempted_completion_over = 1;
+      return NULL;
+    }
+    candexpr(text,depth>0);
+    rl_completion_append_character = '\0';
+  }
+  else if (!strcmp(w1,"run")) {
+    if (args==1) { candscripts(text); candpaths(text); }
+  }
+  else if (!strcmp(w1,"close")) candfiles(text);
+  else if (!strcmp(w1,"undefine") || !strcmp(w1,"sdfwrite")) canddefined(text);
+  else if (!strcmp(w1,"modify")) {
+    if (args==1) canddefined(text);
+    else candwords("seasonal diurnal",text);
+  }
+  else if (!strcmp(w1,"enable") && args>1) candpaths(text);
+  else {
+    for (f=filecmds; *f && strcmp(*f,w1); f++) ;
+    if (*f) candpaths(text);
+    else if (args==1) candwords(gahelpwords(GAHELP_CMD,w1),text);
   }
   rl_attempted_completion_over = 1;
+  if (ncand==0) return NULL;
   return rl_completion_matches(text,ga_completion_generator);
 }
 
 static void ga_readline_init(void) {
   rl_readline_name = "opengrads";
   rl_attempted_completion_function = ga_attempted_completion;
+  rl_completion_word_break_hook = ga_wordbreaks;
 }
 
 /* write command history to log file */

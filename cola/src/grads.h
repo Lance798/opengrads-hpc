@@ -1258,6 +1258,7 @@ void gafree (struct gastat *);
 void gagfre (struct gagrid *);
 void gasfre (struct gastn *);
 void fnmexp (char *, char *, char *);
+gaint gahome (const char *, char *, size_t);
 gaint gagbb (unsigned char *, gaint, gaint);
 gaint gagby (unsigned char *, gaint, gaint);
 void gapby (gaint, unsigned char *, gaint, gaint);

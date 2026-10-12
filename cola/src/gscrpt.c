@@ -2596,6 +2596,21 @@ retrn:
   return (ret);
 }
 
+/* The file name of read, write and close: one that starts with ~ is in
+   the home directory, as in a shell (~/out.txt). Expanded in place, so that
+   the three agree on it. */
+
+static char *gsfname (struct gsvar *pvar) {
+char path[4096],*s;
+
+  if (gahome(pvar->strng,path,sizeof(path)) && (s=(char *)malloc(strlen(path)+1))!=NULL) {
+    strcpy(s,path);
+    free(pvar->strng);
+    pvar->strng = s;
+  }
+  return (pvar->strng);
+}
+
 /* Read function.  Expects one arg: the file name.
    Returnes a two line result -- an rc, and the record read */
 
@@ -2622,7 +2637,7 @@ gaint ret,n;
     ret = 1;
     goto retrn;
   }
-  name = pvar->strng;
+  name = gsfname(pvar);
   if (*name=='\0') {
     printf ("Error in read:  NULL File Name\n");
     ret = 1;
@@ -2734,7 +2749,7 @@ gaint ret,appflg,len;
     ret = 1;
     goto retrn;
   }
-  name = pvar->strng;
+  name = gsfname(pvar);
   if (*name=='\0') {
     printf ("Error in write:  NULL File Name\n");
     ret = 1;
@@ -2854,7 +2869,7 @@ gaint ret;
     ret = 1;
     goto retrn;
   }
-  name = pvar->strng;
+  name = gsfname(pvar);
   if (*name=='\0') {
     printf ("Error in close:  NULL File Name\n");
     ret = 1;

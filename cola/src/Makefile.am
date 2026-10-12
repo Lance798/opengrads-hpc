@@ -62,7 +62,7 @@ libgxdX11_la_SOURCES   = gxX11.c gxdxwd.c
 grads_SOURCES =	grads.c  gxsubs.c gxmeta.c  gxchpl.c gxcntr.c gxstrm.c gxdb.c \
 		gxwmap.c gxshad.c gxshad2.c gaexpr.c gafunc.c gautil.c gagx.c \
 		gscrpt.c gamach.c gatxt.c   galloc.c gaomp.c gaddes.c gacfg.c  gaio.c \
-                gauser.c gasdf.c  bufrstn.c gabufr.c gabufrtbl.c \
+                gahelp.c gauser.c gasdf.c  bufrstn.c gabufr.c gabufrtbl.c \
                 $(src_gui) $(src_gadap) $(src_udx) $(src_adios2)
 
 ## These may not always be compiled but must be listed in order to go in the distribution 
@@ -77,7 +77,7 @@ EXTRA_grads_SOURCES = gagmap.c gagui.c gsgui.c dodstn.c \
 ## Headers must be listed here to be included in the distribution.
 ## The "noinst_" prefix prevents "make install" from trying to do anything with them
 hdr_core  = grads.h  gatypes.h bitmaps.h bitmaps2.h gvt.h wx.h gs.h
-hdr_ga    = gagmap.h gagui.h gabufr.h gasdf.h gasdf_std_time.h gaomp.h
+hdr_ga    = gagmap.h gagui.h gabufr.h gasdf.h gasdf_std_time.h gaomp.h gahelp.h
 hdr_gx    = gx.h gxGD.h gxC.h gxmap.h 
 
 noinst_HEADERS = $(hdr_core) $(hdr_ga) $(hdr_gx) 
@@ -160,7 +160,7 @@ libgxdummy_la_LDFLAGS = $(plugin_ldflags)
 libgradspy_la_SOURCES  = grads.c gxsubs.c gxmeta.c  gxchpl.c gxcntr.c gxstrm.c gxdb.c \
 		gxwmap.c gxshad.c gxshad2.c gaexpr.c gafunc.c gautil.c gagx.c \
 		gscrpt.c gamach.c gatxt.c   galloc.c gaomp.c gaddes.c gacfg.c  gaio.c \
-                gauser.c gasdf.c  bufrstn.c gabufr.c gabufrtbl.c \
+                gahelp.c gauser.c gasdf.c  bufrstn.c gabufr.c gabufrtbl.c \
                 $(src_gui) $(src_gadap) $(src_udx) $(src_adios2)
 
 ## this object file needs to be recompiled for gradspy with the SHRDOBJ flag set 
