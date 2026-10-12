@@ -63,8 +63,14 @@ sha256()
 # served from the directory; every request is logged.
 mkdir -p "$work/site/releases/download"
 cat > "$work/server.py" <<'PYTHON'
-import http.server, os, sys, time
+import http.server, os, socketserver, sys, time
 site = sys.argv[1]
+class Server(http.server.ThreadingHTTPServer):
+    # Without the name lookup of 127.0.0.1 (socket.getfqdn) that
+    # HTTPServer does at start, which can take long on macOS runners.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **k):
         super().__init__(*a, directory=site, **k)
@@ -85,18 +91,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         super().do_GET()
     do_HEAD = do_GET
-server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-with open(os.path.join(site, 'port'), 'w') as f:
+server = Server(('127.0.0.1', 0), Handler)
+with open(os.path.join(site, 'port.new'), 'w') as f:
     f.write(str(server.server_port))
+os.rename(os.path.join(site, 'port.new'), os.path.join(site, 'port'))
 server.serve_forever()
 PYTHON
-python3 "$work/server.py" "$work/site" >/dev/null 2>&1 &
+python3 "$work/server.py" "$work/site" >/dev/null 2>"$work/server.err" &
 server_pid=$!
-for _ in $(seq 100); do
+for _ in $(seq 600); do
   [[ -s "$work/site/port" ]] && break
+  kill -0 "$server_pid" 2>/dev/null || break
   sleep 0.1
 done
-[[ -s "$work/site/port" ]] || fail 'the stand-in release server did not start'
+[[ -s "$work/site/port" ]] ||
+  fail 'the stand-in release server did not start' "$(cat "$work/server.err" 2>/dev/null)"
 port="$(<"$work/site/port")"
 url="http://127.0.0.1:$port/releases"
 export OPENGRADS_UPDATE_URL="$url"
