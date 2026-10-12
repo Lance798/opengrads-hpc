@@ -485,6 +485,27 @@ fi
 if [[ -s "$test_root/hold.out" ]]; then
   fail 'the --hold viewer printed something' "$(od -c "$test_root/hold.out" | head -5)"
 fi
+#    But a picture GrADS placed directly (kitty graphics in Konsole), which
+#    outlasts the pane, the viewer takes away when GrADS ends without
+#    doing so.
+printf '123\n' > "$view/kitty"
+sleep 30 &
+follow_pid=$!
+background_pids+=("$follow_pid")
+TMUX=/tmp/stand-in,1,0 "$viewer" --hold "$view" "$follow_pid" > "$test_root/hold.out" \
+  2>/dev/null < /dev/null &
+hold_pid=$!
+background_pids+=("$hold_pid")
+sleep 0.5
+kill "$follow_pid"
+for i in $(seq 1 30); do
+  kill -0 "$hold_pid" 2>/dev/null || break
+  sleep 0.1
+done
+printf '\033Ptmux;\033\033_Ga=d,d=I,i=123,q=2\033\033\\\033\\' > "$test_root/hold.want"
+cmp -s "$test_root/hold.out" "$test_root/hold.want" && [[ ! -e "$view/kitty" ]] ||
+  fail 'the --hold viewer did not take away the picture GrADS left' \
+    "$(od -c "$test_root/hold.out" | head -5)"
 
 if ! command -v python3 > /dev/null 2>&1; then
   printf 'SKIP: Ctrl-C and tmux checks need python3\n'
@@ -580,6 +601,7 @@ import os, pty, fcntl, termios, struct, subprocess, time, select, re, sys, base6
 where, profile, launcher, ctl, root, tmux = sys.argv[1:7]
 settings = dict(kv.split('=', 1) for kv in sys.argv[7:])
 draw = settings.pop('KIND_DRAW', 'd ts')    # the command that draws
+hide = settings.pop('KIND_HIDE', '')        # then show another tmux window, and back
 PROFILES = {   # kitty graphics, XTVERSION, cell size (CSI 16 t), DA1
     'kitty':  (True, b'kitty(0.32.2)', (18, 9), b'?62;c'),
     'vt340':  (False, b'XTerm(390)', None, b'?63;1;2;4;6;9;15;16;22;28c'),
@@ -589,6 +611,8 @@ PROFILES = {   # kitty graphics, XTVERSION, cell size (CSI 16 t), DA1
     # Windows Terminal: no XTVERSION, sixel by cells of 10 x 20 whatever its
     # font, and from Windows (ssh, WSL) no pixel size reaches the kernel
     'winterm': (False, None, (20, 10), b'?61;4;6;7;14;21;22;23;24;28;32;42c'),
+    # Konsole: kitty graphics without Unicode placeholders, and sixel
+    'konsole': (True, b'Konsole 26.08.1', None, b'?62;1;4c'),
     'silent': None,
 }
 P = PROFILES[profile]
@@ -678,6 +702,11 @@ while time.time() < end and not prompts() and 'shows no pictures' not in screen(
     pump(0.3, 0.3)                          # typed too soon, it may be lost
 said = [l for l in screen().splitlines() if 'Terminal display:' in l]
 for c in ('open ' + ctl, draw, 'quit') if prompts() else ():
+    if c == 'quit' and hide and where == 'tmux':
+        subprocess.run(tm + ['new-window', '-t', 'k', 'sleep 60'], env=env, check=True)
+        pump(3, 2)
+        subprocess.run(tm + ['select-window', '-t', 'k:0'], env=env, check=True)
+        pump(5, 2.5)
     n = prompts()
     keys(c)
     end = time.time() + 30
@@ -710,9 +739,16 @@ for m in re.finditer(rb'\x1b_G(a=T[^;]*);', d):
     keys_, b64, p = m.group(1).decode(), b'', m.start()
     for c in re.finditer(rb'\x1b_G(?:a=T[^;]*|m=\d);([A-Za-z0-9+/=]*)\x1b\\', d[p:]):
         b64 += c.group(1)
-        if re.match(rb'\x1b_G[^;]*m=0;', d[p + c.start():]):
+        last = p + c.start()
+        if re.match(rb'\x1b_G[^;]*m=0;', d[last:]):
             break
     print('kitty', keys_, 'png', png_size(base64.b64decode(b64)))
+    # where the cursor was sent before the last part, which places it
+    at = re.search(rb'\x1b7\x1b\[(\d+);(\d+)H$', d[max(0, last - 24):last])
+    print('kitty-at', '%s;%s' % (at.group(1).decode(), at.group(2).decode()) if at else 'none')
+# kitty pictures placed (T) and taken away (D), in order
+print('kitty-events', ' '.join('D' if m.group(1) == b'a=d' else 'T' for m in
+                               re.finditer(rb'\x1b_G(a=T|a=d)', d)) or 'none')
 # kitty placeholders: the rows named by the first mark of each row
 marks = '̅̍̎̐̒̽̾̿͆͊͋͌͐͑͒͗͛ͣͤͥͦͧͨͩͪͫͬͭͮͯ҃҄҅҆҇֒֓֔֕֗֘֙֜֝֞֟֠֡֨֩'
 t = d.decode('utf-8', 'replace')
@@ -1064,6 +1100,20 @@ read -r cols rows width <<< "$(sed -n \
   fail 'kitty in tmux did not get the picture, made for the pane' "$result"
 grep -Eqx "placeholders rows $rows in order True colour (1[6-9]|[2-9][0-9]|1[0-9][0-9]|2[0-5][0-9])" \
   <<< "$result" || fail 'the kitty placeholders do not cover the picture' "$result"
+# Konsole shows kitty pictures, but not by placeholders, and drops a sixel
+# one at any erase in its rows, as tmux makes them for the pane beside: the
+# picture goes straight to the pane's top left corner, made for its cells,
+# is taken away while another window is shown and put back after, and is
+# taken away at quit. Outside tmux it goes at the cursor, as for kitty.
+result="$(kind tmux konsole "$tmux_bin" KIND_HIDE=1)"
+grep -Eqx 'kitty a=T,f=100,t=d,q=2,C=1,i=[0-9]+,p=1,m=1 png (406|413|420)x[0-9]+' <<< "$result" &&
+  grep -Eqx 'kitty-at 1;(60|61|62)' <<< "$result" && ! grep -q '^placeholders' <<< "$result" ||
+  fail 'Konsole in tmux did not get the picture placed at the pane' "$result"
+grep -qx 'kitty-events T D T D' <<< "$result" ||
+  fail 'the picture in Konsole was not taken away with its window, or at quit' "$result"
+result="$(kind direct konsole -)"
+grep -Eqx 'kitty a=T,f=100,t=d,q=2,c=84,m=1 png 588x[0-9]+' <<< "$result" ||
+  fail 'Konsole outside tmux did not get the kitty picture at the cursor' "$result"
 result="$(kind tmux iterm "$tmux_bin")"
 grep -qx 'iterm 1' <<< "$result" || fail 'iTerm2 in tmux did not get its own picture' "$result"
 result="$(kind tmux xterm "$tmux_bin")"
@@ -1081,7 +1131,7 @@ result="$(kind tmux winterm "$tmux_bin" GA_TERM_PROTOCOL=sixel)"
 width="$(sed -n 's/^sixel \([0-9]*\)x[0-9]* colours.*/\1/p' <<< "$result" | head -1)"
 (( ${width:-0} >= 570 && ${width:-0} <= 600 )) ||
   fail 'Windows Terminal in tmux did not get the picture made for the pane' "$result"
-printf '  pictures by terminal: kitty, sixel, iTerm2, none; in tmux too (sixel: %s)\n' \
+printf '  pictures by terminal: kitty, Konsole, sixel, iTerm2, none; in tmux too (sixel: %s)\n' \
   "${how:-passed through}"
 
 printf 'Terminal display checks passed\n'

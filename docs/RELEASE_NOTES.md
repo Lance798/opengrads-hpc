@@ -28,6 +28,17 @@ calculations, and native archives for Linux and macOS.
 
 ### Fixed since 1.0.11 (not yet released)
 
+- **Konsole in tmux: the picture was wiped a band at a time.** Konsole
+  drops a sixel picture at any erase in the rows it covers, even one in
+  the pane beside it, and tmux makes such erases for the GrADS pane as it
+  scrolls, so while a loop printed its output the picture in the pane
+  beside lost one band after another. Konsole now gets kitty pictures,
+  which it keeps, placed straight at the pane (it has no placeholders);
+  GrADS takes the picture away while the pane is not on the screen and
+  draws it again when it comes back, and the pane's viewer takes it away
+  should GrADS end without doing so. With tmux before 3.4, which cannot
+  pass that on from a hidden pane, Konsole gets sixel as before.
+
 - **A function called with empty parentheses could crash GrADS.**
   `d coll2gr()` and others read their first argument without checking
   that there was one, and got whatever the previous call had left; after
