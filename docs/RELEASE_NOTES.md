@@ -28,6 +28,15 @@ calculations, and native archives for Linux and macOS.
 
 ### Fixed since 1.0.11 (not yet released)
 
+- **kitty in tmux: the picture went black during an animation, then
+  flickered.** Each picture took the same image id, and the one shown was
+  deleted before the next was sent; kitty also drops an image's placements
+  as soon as another with its id starts to come in. So the pane stayed
+  blank while each picture was on its way, which during an animation over
+  ssh was nearly all the time, and flickered once frames came more slowly.
+  The pane's pictures now take two ids in turn: the one shown stays until
+  the next has all come in, and its placeholders then take over.
+
 - **Konsole in tmux: the picture was wiped a band at a time.** Konsole
   drops a sixel picture at any erase in the rows it covers, even one in
   the pane beside it, and tmux makes such erases for the GrADS pane as it
