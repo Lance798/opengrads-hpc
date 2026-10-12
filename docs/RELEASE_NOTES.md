@@ -1,9 +1,9 @@
-## opengrads-hpc 1.0.11
+## opengrads-hpc 1.0.12
 
 GrADS for modern simulation output: an ADIOS2/BP5 reader, OpenMP-threaded
 calculations, and native archives for Linux and macOS.
 
-### Added since 1.0.11 (not yet released)
+### Added in 1.0.12
 
 - **Usage after an error.** A command typed at the prompt that fails is
   followed by how it is used: a line of syntax and an example, for
@@ -26,7 +26,7 @@ calculations, and native archives for Linux and macOS.
   shell does, as do a script's `read` and `write` and a descriptor's
   `DSET`, `INDEX` and `PDEF` files.
 
-### Fixed since 1.0.11 (not yet released)
+### Fixed in 1.0.12
 
 - **kitty in tmux: the picture went black during an animation, then
   flickered.** Each picture took the same image id, and the one shown was
@@ -36,7 +36,6 @@ calculations, and native archives for Linux and macOS.
   ssh was nearly all the time, and flickered once frames came more slowly.
   The pane's pictures now take two ids in turn: the one shown stays until
   the next has all come in, and its placeholders then take over.
-
 - **Konsole in tmux: the picture was wiped a band at a time.** Konsole
   drops a sixel picture at any erase in the rows it covers, even one in
   the pane beside it, and tmux makes such erases for the GrADS pane as it
@@ -47,7 +46,6 @@ calculations, and native archives for Linux and macOS.
   draws it again when it comes back, and the pane's viewer takes it away
   should GrADS end without doing so. With tmux before 3.4, which cannot
   pass that on from a hidden pane, Konsole gets sixel as before.
-
 - **A function called with empty parentheses could crash GrADS.**
   `d coll2gr()` and others read their first argument without checking
   that there was one, and got whatever the previous call had left; after
@@ -589,14 +587,15 @@ status.
 ### Verifying and running
 
 ```bash
-sha256sum -c opengrads-hpc-1.0.11-linux-x86_64.tar.gz.sha256
-tar -xzf opengrads-hpc-1.0.11-linux-x86_64.tar.gz
-cd opengrads-hpc-1.0.11-linux-x86_64
+sha256sum -c opengrads-hpc-1.0.12-linux-x86_64.tar.gz.sha256
+tar -xzf opengrads-hpc-1.0.12-linux-x86_64.tar.gz
+cd opengrads-hpc-1.0.12-linux-x86_64
 ./opengrads
 ```
 
-From this release on, `./opengrads --update` installs later releases in
-place; see [RELEASES.md](RELEASES.md#updating).
+A 1.0.11 install updates to this release with `./opengrads --update`;
+1.0.10 and earlier are updated once by hand. See
+[RELEASES.md](RELEASES.md#updating).
 
 On macOS start `./opengrads`. The launcher opens a GrADS window when
 XQuartz is installed (it sets `DISPLAY`), draws in the terminal inside tmux
@@ -614,7 +613,8 @@ terminal even with XQuartz.
 - The terminal display is tested through tmux 3.2a, 3.4, 3.5a and 3.7c, plain and
   `-CC`, with a terminal emulator standing in for iTerm2, not yet on iTerm2
   itself; kitty, xterm (`-ti vt340`) and mlterm were checked on screen, by
-  themselves and in tmux 3.2a, 3.4 and 3.7c. If no picture appears, `GA_TERM_LOG=/tmp/grads-term.log` records
+  themselves and in tmux 3.2a, 3.4 and 3.7c. Konsole is checked with a
+  terminal that answers as Konsole 26.08 does, not on Konsole itself. If no picture appears, `GA_TERM_LOG=/tmp/grads-term.log` records
   what happened; `GA_TERM_PROGRESS=off` sends each picture in the oldest form
   of the protocol. Pictures in parts, which tmux before 3.3 and `tmux -CC`
   always use, need iTerm2 3.5 or newer.
