@@ -1100,6 +1100,17 @@ read -r cols rows width <<< "$(sed -n \
   fail 'kitty in tmux did not get the picture, made for the pane' "$result"
 grep -Eqx "placeholders rows $rows in order True colour (1[6-9]|[2-9][0-9]|1[0-9][0-9]|2[0-5][0-9])" \
   <<< "$result" || fail 'the kitty placeholders do not cover the picture' "$result"
+# An animation: kitty drops an image's placements as soon as another image
+# with its id starts to come in, so the pane's pictures take two ids in
+# turn, and none is taken away before GrADS ends: the picture shown stays
+# until the next is all there.
+result="$(kind tmux kitty "$tmux_bin" "KIND_DRAW=run $test_root/dbuffloop.gs")"
+sed -n 's/^kitty a=T,U=1,.*,i=\([0-9]*\),.*/\1/p' <<< "$result" | awk '
+  NR > 1 && $1 == last { same = 1 }
+  { last = $1; ids[$1] = 1; n++ }
+  END { for (i in ids) k++; exit !(n >= 3 && k == 2 && !same) }' &&
+  grep -Eqx 'kitty-events (T ){3,}D D' <<< "$result" ||
+  fail 'the pictures of an animation in kitty did not take two ids in turn' "$result"
 # Konsole shows kitty pictures, but not by placeholders, and drops a sixel
 # one at any erase in its rows, as tmux makes them for the pane beside: the
 # picture goes straight to the pane's top left corner, made for its cells,

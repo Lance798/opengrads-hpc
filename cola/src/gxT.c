@@ -1532,7 +1532,9 @@ unsigned char *rgb=NULL;
 }
 
 static unsigned long kittyid=0;             /* the pane's picture */
+static unsigned long kittyold=0;            /* and the one before, under the other id */
 static gaint kittyshown=0;
+static gaint kittyflip=0;                   /* which of the pane's two ids is next */
 static gaint kittyn=0;                      /* pictures at the cursor in tmux */
 
 static void utf8put (struct wout *w, unsigned long c) {
@@ -1681,14 +1683,23 @@ size_t off,n,inseq=0;
     return ((len+2)/3*4);
   }
 
+  /* The pane's pictures take two ids in turn. kitty drops an image's
+     placements as soon as the first part of another image with its id
+     comes in, and shows nothing there until the last: with one id, the
+     pane went blank while each picture was on its way, which during an
+     animation over ssh was nearly all the time. With two, the picture
+     shown stays until the next is all there and its placeholders, in the
+     other colour, take over; the next but one then replaces it. */
+  if (pi && kittyflip) {
+    lo = 16 + (gaint)((getpid() + 120) % 240);
+    id = ((unsigned long)hi<<24) | (unsigned long)lo;
+  }
   if (r>297) r = 297;
   if (pi) {
-    if (kittyshown) {
-      snprintf(keys,sizeof(keys),"\033_Ga=d,d=I,i=%lu,q=2\033\\",kittyid);
-      ptopen(w); wesc(w,keys); ptclose(w);
-    }
+    if (kittyshown && kittyid!=id) kittyold = kittyid;
     kittyid = id;
     kittyshown = 1;
+    kittyflip = !kittyflip;
   }
   snprintf(keys,sizeof(keys),"a=T,U=1,f=100,t=d,q=2,i=%lu,c=%d,r=%d",id,c,r);
   kittysend(w,data,len,keys);
@@ -1736,9 +1747,16 @@ char head[100];
   ptopen(w);
   wesc(w,head);
   ptclose(w);
+  if (kittyold && kittyold!=kittyid) {      /* the one before, under the other id */
+    snprintf(head,sizeof(head),"\033_Ga=d,d=I,i=%lu,q=2\033\\",kittyold);
+    ptopen(w);
+    wesc(w,head);
+    ptclose(w);
+  }
   wflush(w);
   free(w);
   kittyshown = 0;
+  kittyold = 0;
 }
 
 /* sixel: the picture scaled to the pixels it is to fill, from the cell

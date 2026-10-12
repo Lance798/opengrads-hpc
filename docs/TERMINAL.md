@@ -87,7 +87,8 @@ fills, often a tenth of the data. Inside tmux, kitty draws it wherever it
 finds its placeholder character, which GrADS writes into the pane as text
 (kitty 0.28 and later, Ghostty): tmux moves, hides and redraws it with the
 pane, like any text. This needs tmux to run in a UTF-8 locale, as it
-normally does.
+normally does. The pane's pictures take two image ids in turn, so the one
+shown stays until the next has all come in.
 
 **Konsole.** Konsole shows kitty pictures and sixel, but drops a sixel
 picture at any erase in the rows it covers, even one beside it, and tmux
