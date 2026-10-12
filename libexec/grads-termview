@@ -32,6 +32,15 @@ if [[ "${1:-}" == --hold ]]; then
         { [[ -z "$grads_pid" ]] || kill -0 "$grads_pid" 2>/dev/null; }; do
     sleep 1
   done
+  # A picture GrADS placed directly (kitty graphics in Konsole) outlasts
+  # the pane, and GrADS ended without taking it away: do so.
+  if [[ -n "${TMUX:-}" && -f "$dir/kitty" ]]; then
+    read -r id < "$dir/kitty" || id=""
+    if [[ "$id" =~ ^[0-9]+$ ]]; then
+      printf '\033Ptmux;\033\033_Ga=d,d=I,i=%s,q=2\033\033\\\033\\' "$id"
+    fi
+    rm -f -- "$dir/kitty"
+  fi
   exit 0
 fi
 

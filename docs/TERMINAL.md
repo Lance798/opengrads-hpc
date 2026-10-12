@@ -14,9 +14,9 @@ and updates after each command.
 └──────────────────────────┴──────────────────────────┘
 ```
 
-It works in terminals that show pictures: iTerm2 and WezTerm, kitty and
-Ghostty, and those that show sixel (foot, mlterm, Windows Terminal, xterm
-started as `xterm -ti vt340`). GrADS finds out which kind the terminal is,
+It works in terminals that show pictures: iTerm2 and WezTerm, kitty,
+Ghostty and Konsole, and those that show sixel (foot, mlterm, Windows
+Terminal, xterm started as `xterm -ti vt340`). GrADS finds out which kind the terminal is,
 and in one that shows none, `-d Term` says so and stops. See
 [Which terminals](#which-terminals).
 
@@ -58,7 +58,7 @@ and uses the first it can:
 | Pictures | Terminals |
 |---|---|
 | iTerm2 inline images | iTerm2, WezTerm, mintty, VS Code (with images turned on) |
-| kitty graphics | kitty, Ghostty |
+| kitty graphics | kitty, Ghostty, Konsole |
 | sixel | foot, mlterm, Windows Terminal 1.22, xterm started as `xterm -ti vt340`, and others |
 
 iTerm2 and WezTerm say who they are in the environment (`LC_TERMINAL`,
@@ -88,6 +88,18 @@ finds its placeholder character, which GrADS writes into the pane as text
 (kitty 0.28 and later, Ghostty): tmux moves, hides and redraws it with the
 pane, like any text. This needs tmux to run in a UTF-8 locale, as it
 normally does.
+
+**Konsole.** Konsole shows kitty pictures and sixel, but drops a sixel
+picture at any erase in the rows it covers, even one beside it, and tmux
+makes such erases for the GrADS pane whenever it scrolls: the picture in
+the pane beside would be wiped a band at a time. A kitty picture Konsole
+keeps, so in tmux that is what it gets, placed straight at the pane's top
+left corner (Konsole has no placeholders). Konsole also keeps it over
+whatever tmux draws later, so GrADS takes it away as soon as the pane is
+not on the screen (another window, a zoomed pane) and draws it again when
+the pane comes back or moves; should GrADS end without taking it away,
+the pane's viewer does. That needs tmux 3.4 or later; with an older tmux,
+and for pictures printed below the commands, Konsole gets sixel.
 
 **sixel.** The picture goes in up to 256 colours, at the size of the cells
 it fills. tmux built with sixel (3.5 and later say so) takes it into the

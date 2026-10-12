@@ -225,6 +225,7 @@ static size_t lastpiclen=0;
 
 /* Worker only: what the pane shows, and the link */
 static gaint sentrows=0,sentcols=0;         /* pane size the picture was sent for */
+static gaint sentrow=-1,sentcol=-1;         /* and where the pane was */
 static gaint panefresh=1;                   /* the pane needs clearing first */
 static double slowuntil=0.0;                /* the link was slow until about then */
 static gaint stepshift=0;                   /* steps halved this often after losses */
@@ -494,7 +495,7 @@ gaint i;
    shows of:
 
      iTerm2   inline images, OSC 1337: iTerm2, WezTerm, mintty, VS Code
-     kitty    the kitty graphics protocol: kitty, Ghostty
+     kitty    the kitty graphics protocol: kitty, Ghostty, Konsole
      sixel    DEC sixel: foot, mlterm, xterm -ti vt340, Windows Terminal
 
    In tmux, tmux says which terminal its client is in (client_termtype,
@@ -516,6 +517,9 @@ static gaint proto=PROTO_ITERM;
 static char protowhy[300];                  /* how it was found out */
 static gaint cellw=0,cellh=0;               /* a character cell in pixels, if known */
 static gaint tmuxsixel=0;                   /* tmux draws sixel in the pane itself */
+static gaint kittydirect=0;                 /* kitty pictures only at the cursor (Konsole) */
+static gaint termsixel=0;                   /* tmux says the terminal shows sixel */
+static gaint protonamed=0;                  /* GA_TERM_PROTOCOL chose it */
 
 static gaint hasword (const char *s, const char *w) {
 size_t n;
@@ -531,7 +535,8 @@ size_t n;
 static gaint protofor (const char *name) {
   if (hasword(name,"iterm") || hasword(name,"wezterm") || hasword(name,"mintty"))
     return (PROTO_ITERM);
-  if (hasword(name,"kitty") || hasword(name,"ghostty")) return (PROTO_KITTY);
+  if (hasword(name,"kitty") || hasword(name,"ghostty") || hasword(name,"konsole"))
+    return (PROTO_KITTY);
   if (hasword(name,"foot") || hasword(name,"mlterm") || hasword(name,"contour"))
     return (PROTO_SIXEL);
   return (PROTO_NONE);
@@ -630,6 +635,7 @@ char out[700],*f[8],*p,*a,*t,*argv[8],name[256];
 gaint i,n,kitty,sixel,envp,rc,named=PROTO_NONE;
 
   tmuxsixel = 0;
+  kittydirect = 0;
   a = getenv("GA_TERM_PROTOCOL");
   if (a && *a && strcasecmp(a,"auto")) {
     if (!strcasecmp(a,"iterm2") || !strcasecmp(a,"iterm")) named = PROTO_ITERM;
@@ -637,6 +643,7 @@ gaint i,n,kitty,sixel,envp,rc,named=PROTO_NONE;
     else if (!strcasecmp(a,"sixel")) named = PROTO_SIXEL;
     else printf("Terminal display: unknown GA_TERM_PROTOCOL \"%s\"; use iterm2, kitty, or sixel\n",a);
   }
+  protonamed = named!=PROTO_NONE;
 
   t = getenv("TMUX");
   if (t && *t) {
@@ -665,6 +672,10 @@ gaint i,n,kitty,sixel,envp,rc,named=PROTO_NONE;
     }
     cellw = atoi(f[4]);
     cellh = atoi(f[5]);
+    /* Konsole shows kitty pictures, but not by the placeholders that let
+       tmux keep them with the pane (see kittypic) */
+    kittydirect = hasword(f[1],"konsole") || hasword(f[2],"konsole");
+    termsixel = hasword(f[3],"sixel");
     a = getenv("LC_TERMINAL");
     proto = protofor(f[1]);
     if (atoi(f[0])==1) {
@@ -1468,7 +1479,11 @@ gadouble ca;
    its placeholder, U+10EEEE, as text. tmux keeps, moves, hides and
    redraws that text as any other. The placeholder's colour (256 colours,
    which tmux always passes on) and a third mark name the picture; marks
-   on the first cell of each row give the row. */
+   on the first cell of each row give the row.
+
+   Konsole has no placeholders, so there a picture for the pane is placed
+   directly, as a sixel one is, and GrADS takes it away whenever the pane
+   leaves the screen (see kittyclear). */
 
 static const unsigned long kittymarks[297] = {
   0x0305,0x030d,0x030e,0x0310,0x0312,0x033d,0x033e,0x033f,0x0346,0x034a,0x034b,0x034c,
@@ -1559,13 +1574,27 @@ gaint more;
   }
 }
 
+/* For the viewer, the id of a picture placed directly: should GrADS end
+   without taking it away, the viewer does (grads-termview --hold) */
+
+static void kittymark (unsigned long id) {
+char fn[700];
+FILE *f;
+  snprintf(fn,sizeof(fn),"%s/kitty",tdir);
+  f = fopen(fn,"w");
+  if (f==NULL) return;
+  fprintf(f,"%lu\n",id);
+  fclose(f);
+}
+
 static size_t kittypic (struct wout *w, const struct paneinfo *pi, const unsigned char *data,
                         size_t len, const char *iwidth) {
-char keys[200],at[32];
-gaint iw,ih,c,r,x,y,lo,hi,rw,rh,tw,th;
+char keys[200],at[32],head[260];
+gaint iw,ih,c,r,x,y,lo,hi,rw,rh,tw,th,direct,seqopen=0;
 unsigned long id;
 unsigned char *rgb,*small;
 struct mbuf mb;
+size_t off,n,inseq=0;
 
   if (len<24) return (0);
   iw = (data[16]<<24)|(data[17]<<16)|(data[18]<<8)|data[19];
@@ -1575,10 +1604,14 @@ struct mbuf mb;
   else picfit(iw,ih,inlinecols(w->fd,iwidth),100000,&c,&r);
 
   /* No more pixels than the cells show, when their size is known: a
-     tenth as much to send, often, and kitty takes it in 4 KB parts */
+     tenth as much to send, often, and kitty takes it in 4 KB parts.
+     Placed directly, the picture is drawn by its pixels, so exactly as
+     many as fill the pane. */
+  direct = w->via==VIA_TMUX && kittydirect && pi;
   memset(&mb,0,sizeof(mb));
   tw = c*cellw;
-  if (cellw>0 && cellh>0 && tw<iw && (rgb=lastpixels(&rw,&rh))!=NULL) {
+  if (cellw>0 && cellh>0 && (tw<iw || (direct && tw!=iw)) &&
+      (rgb=lastpixels(&rw,&rh))!=NULL) {
     th = (gaint)((gadouble)ih*tw/iw+0.5);
     small = (rw==iw && rh==ih && th>0) ? rgbscale(rgb,iw,ih,tw,th) : NULL;
     if (small && !pngencode(small,tw,th,0,&mb)) {
@@ -1603,6 +1636,51 @@ struct mbuf mb;
   lo = 16 + (gaint)((getpid() + (pi ? 0 : ++kittyn)) % 240);
   hi = (gaint)((getpid()/255) % 256);
   id = ((unsigned long)hi<<24) | (unsigned long)lo;
+
+  /* Konsole: placed where the last part finds the cursor, so that part
+     goes with absolute cursor movement to the pane's top left corner in
+     one passthrough sequence, in which tmux writes nothing of its own; the
+     parts before, in sequences of up to 64 KB. The same i and p replace
+     the last picture; C=1 leaves the cursor. Konsole keeps a kitty picture
+     over what tmux draws later (unlike a sixel one, which it drops at any
+     erase in its rows, as tmux does them for the pane beside), so it stays
+     when the other pane scrolls. Unless sized above, c and r, which
+     Konsole stretches it to. */
+  if (direct) {
+    if (mb.n) snprintf(keys,sizeof(keys),"a=T,f=100,t=d,q=2,C=1,i=%lu,p=1",id);
+    else snprintf(keys,sizeof(keys),"a=T,f=100,t=d,q=2,C=1,i=%lu,p=1,c=%d,r=%d",id,c,r);
+    for (off=0; off<len && !w->err; off+=n) {
+      n = len-off;
+      if (n>3072) n = 3072;
+      if (off+n>=len) {                     /* the last part */
+        if (seqopen) ptclose(w);
+        ptopen(w);
+        snprintf(at,sizeof(at),"\0337\033[%d;%dH",pi->row+1,pi->col+1);
+        wesc(w,at);
+        seqopen = 1;
+      } else if (!seqopen || inseq+(n+2)/3*4 > SEQ_PART) {
+        if (seqopen) ptclose(w);
+        room(w,SEQ_PART+256);
+        ptopen(w);
+        inseq = 0;
+        seqopen = 1;
+      }
+      inseq += (n+2)/3*4;
+      if (off==0) snprintf(head,sizeof(head),"\033_G%s,m=%d;",keys,off+n<len);
+      else snprintf(head,sizeof(head),"\033_Gm=%d;",off+n<len);
+      wesc(w,head);
+      b64put(w,data+off,n);
+      wesc(w,"\033\\");
+    }
+    wesc(w,"\0338");
+    ptclose(w);
+    if (!kittyshown) kittymark(id);
+    kittyid = id;
+    kittyshown = 1;
+    free(mb.p);
+    return ((len+2)/3*4);
+  }
+
   if (r>297) r = 297;
   if (pi) {
     if (kittyshown) {
@@ -1641,7 +1719,9 @@ struct mbuf mb;
   return ((len+2)/3*4);
 }
 
-/* Take the pane's picture out of kitty, as GrADS ends */
+/* Take the pane's picture out of kitty, as GrADS ends; in Konsole also
+   whenever the pane leaves the screen, as Konsole would keep it over what
+   tmux draws there. tmux 3.4 passes this on from a hidden pane. */
 
 static void kittyclear (void) {
 struct wout *w;
@@ -1960,6 +2040,7 @@ size_t want;
             pane,pi.cols,pi.rows,pi.row,pi.col,pi.ctty[0] ? pi.ctty : "(none)",pi.cw,pi.ch,
             pi.control ? ", tmux -CC" : "",pi.hidden ? ", not on screen" : "",pi.lost);
     if (pi.hidden) {                       /* tmux would drop it, or draw it elsewhere */
+      if (kittydirect && kittyshown) kittyclear();
       panehidden = 1;
       return;
     }
@@ -1967,6 +2048,8 @@ size_t want;
     if (pi.rows!=sentrows || pi.cols!=sentcols) clear = 1;
     sentrows = pi.rows;
     sentcols = pi.cols;
+    sentrow = pi.row;
+    sentcol = pi.col;
     via = pi.control ? VIA_CC : VIA_TMUX;
     sendpic(panefd,pacefor(pi.ctty),via,via==VIA_TMUX ? tmuxstep(&pi) : 0,&pi,
             clear || panefresh,lastpic,lastpiclen,NULL);
@@ -1993,15 +2076,31 @@ size_t want;
   }
 }
 
-/* The pane changed size, or came back: draw the picture again to fit */
+/* The pane changed size, or came back: draw the picture again to fit.
+   A picture placed directly (Konsole) stays where it was put whatever
+   tmux does: as soon as the pane is hidden (another window, a zoomed
+   pane) it is taken away, and when the pane moves it is drawn again. */
 
 static void checkresize (void) {
 struct winsize ws;
+struct paneinfo pi;
 static gaint ticks=0;
   if (panefd<0 || lastpic==NULL) return;
   if (panehidden) {                         /* now and then, see if it is back */
     if (++ticks%3==0) panesend(1);
     return;
+  }
+  if (kittydirect && kittyshown && mode==1 && !tmuxinfo(pane,&pi)) {
+    if (pi.hidden) {
+      tlogf("pane %s: not on screen; the picture is taken away",pane);
+      kittyclear();
+      panehidden = 1;
+      return;
+    }
+    if (pi.row!=sentrow || pi.col!=sentcol || pi.rows!=sentrows || pi.cols!=sentcols) {
+      panesend(1);
+      return;
+    }
   }
   if (ioctl(panefd,TIOCGWINSZ,&ws)) return;
   if (ws.ws_row!=sentrows || ws.ws_col!=sentcols) panesend(1);
@@ -2557,6 +2656,17 @@ gadouble f;
     mode = 2;
   }
 
+  /* Konsole in tmux takes kitty pictures only placed directly, which GrADS
+     must take away when the pane is hidden: in a pane, with tmux 3.4 or
+     later (see kittyclear). Otherwise sixel, which it also shows. */
+  if (proto==PROTO_KITTY && kittydirect && !protonamed && termsixel &&
+      (mode==2 || (mode==1 && !tmuxall))) {
+    proto = PROTO_SIXEL;
+    snprintf(protowhy,sizeof(protowhy),"tmux passes on sixel for Konsole, as %s",
+             mode==2 ? "the pictures go inline" : "this tmux is before 3.4");
+    tlogf("protocol: sixel (%s)",protowhy);
+  }
+
   tlogf("start: mode %s, protocol %s, pane %s, tmux %s, iTerm2 %s, GA_TERM_TMUX_STEP %ld",
         mode==1 ? "tmux" : (mode==2 ? "inline" : "file"),mode==3 ? "none needed" : protonames[proto],
         pane[0] ? pane : "(none)",
@@ -2650,8 +2760,10 @@ char fn[700];
     unlink(seqpath);
     unlink(seqtmp);
     if (fifopath[0]) unlink(fifopath);
-    rmdir(tdir);
   }
+  snprintf(fn,sizeof(fn),"%s/kitty",tdir);
+  unlink(fn);
+  if (ownsdir) rmdir(tdir);
 }
 
 /* Frame action.  Values for action are:
