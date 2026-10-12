@@ -58,7 +58,9 @@ grads()
 }
 
 # 1. ~
-out="$(cd "$work" && grads <<'CMDS'
+# (Commands go through files: bash 3.2, the macOS one, misreads a here
+# document inside $(...) when its parentheses do not pair, as in "d mean(".)
+cat > "$work/tilde.cmds" <<'CMDS'
 open ~/data/model.ctl
 q file
 close 1
@@ -68,7 +70,7 @@ printim ~/plot.png
 run ~/gs/args.gs ~/not-a-path
 quit
 CMDS
-)"
+out="$(cd "$work" && grads < "$work/tilde.cmds")"
 grep -q "Descriptor: $home/data/model.ctl" <<< "$out" ||
   fail 'open ~/data/model.ctl did not open the file in the home directory' "$out"
 grep -Eq '^Result value = 2[0-9][0-9]\.' <<< "$out" ||
@@ -85,7 +87,7 @@ grep -q 'result of a failed set: SET error:  Missing or invalid arguments for GX
   fail "a script's result changed" "$out"
 grep -q '^result of a failed set: .*Usage' <<< "$out" &&
   fail 'a usage hint went into a script result' "$out"
-out="$(grads <<CMDS
+cat > "$work/hints.cmds" <<CMDS
 open $data/model.ctl
 d mean(ts)
 d mean(
@@ -103,7 +105,7 @@ set gxout shaded
 d ts
 quit
 CMDS
-)"
+out="$(grads < "$work/hints.cmds")"
 expect()
 {
   local after="$1" line="$2" block
