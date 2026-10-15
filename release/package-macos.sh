@@ -251,6 +251,7 @@ q threads
 set vpage 0 11 0 8.5
 draw recf 1 1 6 5
 printim $smoke_root/smoke.png x800 y600
+color 0 10 -kind bluered
 quit
 GRADS
 )"
@@ -258,6 +259,8 @@ grep -Fq 'adios2-bp5' <<< "$smoke_output"
 grep -Fq 'openmp' <<< "$smoke_output"
 grep -Fq 'netcdf' <<< "$smoke_output"
 grep -Fq 'Calculation threads = 4' <<< "$smoke_output"
+# gscript's color.gs, found along the launcher's GASCRP
+grep -Fq 'clevs= 0 1 2 3 4 5 6 7 8 9 10' <<< "$smoke_output"
 if [[ ! -s "$smoke_root/smoke.png" ]]; then
   printf 'Cairo hardcopy output was not produced by the macOS bundle.\n' >&2
   printf '%s\n' "$smoke_output" >&2

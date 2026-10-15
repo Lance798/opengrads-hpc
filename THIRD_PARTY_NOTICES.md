@@ -130,6 +130,26 @@ ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF S
 DAMAGE.
 ```
 
+## gscript (Chihiro Kodama)
+
+- Project: gscript, script and script function libraries for GrADS
+- Upstream: https://github.com/kodamail/gscript
+- Version included: commit 88939ab (2025-08-20), retrieved 2026-10-15
+- License: GNU General Public License version 3, in the repository's
+  `LICENSE`; the scripts' help says "Distributed under GNU GPL"
+- Copyright: Chihiro Kodama, with years per file (2009 to 2019)
+
+These scripts are committed to the repository and ship, unchanged, in
+`lib/scripts/gscript`, with the GPLv3 text beside them in
+`lib/scripts/gscript/LICENSE` and a `README.md` that lists what was left out.
+The launchers put that directory on `GASCRP` after `lib/scripts`.
+
+76 of upstream's 87 scripts are included. `drawline.gs`, `drawmark.gs`,
+`save.gs` and `qdims.gsf` are not, as `lib/scripts` already has different
+scripts by those names from bGASL; nor are the seven that call gscript's
+`qdims()`, which would find bGASL's: `lreg.gs`, `saveanim.gs`,
+`setlabs.gs`, `setshift.gs`, `shift.gs`, `tile.gs` and `time_avail.gsf`.
+
 ## License compatibility
 
 This section records the licensing position of the binary archives so that
@@ -140,6 +160,16 @@ later" option, so this repository treats GrADS as `GPL-2.0-only`.
 
 The bGASL scripts are BSD 2-Clause, which is compatible with GPLv2; including
 them raises no compatibility question.
+
+The gscript scripts are GPLv3, which is not compatible with GPLv2-only for a
+combined work. They do not form one with GrADS: they are separate files that
+GrADS reads and interprets at run time, not code linked into it, and they ship
+beside it unchanged with their own license text. The GPL FAQ treats an
+interpreted program as data to the interpreter
+(https://www.gnu.org/licenses/gpl-faq.en.html#IfInterpreterIsGPL) and
+separate programs shipped together as mere aggregation
+(https://www.gnu.org/licenses/gpl-faq.en.html#MereAggregation), so each part
+keeps its own license.
 
 ADIOS2 is Apache-2.0. The Apache Software Foundation and the Free Software
 Foundation both describe Apache-2.0 as compatible with GPLv3 but **not** with
