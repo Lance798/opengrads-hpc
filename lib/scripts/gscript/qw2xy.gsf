@@ -1,0 +1,12 @@
+function qw2xy( wx, wy )
+  rc = gsfallow( 'on' )
+  'q w2xy 'wx' 'wy
+  x = subwrd( result, 3 )
+  y = subwrd( result, 6 )
+  if( valnum(x) = 0 | valnum(y) = 0 )
+    say 'error in qw2xy.gsf: fail to get (x,y) from (wx,wy)'
+    return ''
+  endif
+  ret = x % ' ' % y
+  return ret
+end function

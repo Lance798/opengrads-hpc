@@ -713,7 +713,7 @@ size_t n;
   if (strchr(text,'/')) return;
   path = getenv("GASCRP");
   if (path==NULL || (path=strdup(path))==NULL) return;
-  for (dir=strtok_r(path," :",&save); dir; dir=strtok_r(NULL," :",&save)) {
+  for (dir=strtok_r(path," :;,",&save); dir; dir=strtok_r(NULL," :;,",&save)) {
     if ((d=opendir(dir))==NULL) continue;
     while ((e=readdir(d))!=NULL) {
       n = strlen(e->d_name);

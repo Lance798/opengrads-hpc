@@ -1,0 +1,120 @@
+* id = dset
+*      title
+*      undef
+*      xdef
+*      ydef
+*      zdef
+*      edef
+*      tdef
+*      vars
+*      'var-name'
+*      vlist
+*      elist
+*
+*  num = 0: id itself
+*  num >= 1
+*
+* for id = 'vlist', num is line number.
+* for id = 'elist', num is line number and num2 is its element.
+*
+function qctlinfo( fn, id, num, num2 )
+ _version = '0.03r3'
+
+* check arguement
+  if( valnum(fn) != 1 )
+    say 'error: fn = ' % fn % ' is illegal.'
+    exit
+  endif
+  if( valnum(id) != 0 )
+    say 'error: id = ' % id % ' is illegal.'
+    exit
+  endif
+  if( num = 'num' ) ; num = '' ; endif
+  if( valnum(num) != 1 & num != '' )
+    say 'error: num = ' % num % ' is illegal.'
+    exit
+  endif
+  if( num2 = 'num2' ) ; num2 = '' ; endif
+  if( valnum(num2) != 1 & num2 != '' )
+    say 'error: num2 = ' % num2 % ' is illegal.'
+    exit
+  endif
+
+* save current file number
+  'q file'
+  line = sublin( result, 1 )
+  fnc = subwrd( line, 2 )
+  ret = ''
+
+* obtain control file information
+  'set dfile 'fn
+  'q ctlinfo'
+  i = 1
+  stat = ''
+  statn = 1
+  while( i - i = 0 )
+    line = sublin( result, i )
+    if( line = '' ) ; break ; endif
+
+*    key = subwrd( line, 1 )
+    v.1 = subwrd( line, 1 )
+    v.2 = subwrd( line, 2 )
+    v.3 = subwrd( line, 3 )
+
+    if( v.1 = id )
+      if( num = '' )
+        ret = line
+      else
+        ret = subwrd( line, num+1 )
+      endif
+      break
+    endif
+
+    if( v.1 = 'endedef' )
+      stat = '' ; statn = 0
+      if( id = 'elist' ) ; break ; endif
+    endif
+    if( v.1 = 'endvars' )
+      stat = '' ; statn = 0
+      if( id = 'vlist' ) ; break ; endif
+    endif
+
+    if( id = 'vlist' & stat = 'vars' )
+      if( statn = num )
+        ret = v.1
+        break
+      else
+        ret = ret % v.1 % ' '
+      endif
+    endif
+
+    if( id = 'elist' & stat = 'edef' )
+      if( statn = num )
+        if( num2 = '' | num2 = 0 )
+          ret = line
+        else
+          ret = v.num2
+        endif
+        break
+      else
+        if( num2 = '' | num2 = 0 )
+          ret = ret % line % ' '
+        else
+          ret = ret % v.num2 % ' '
+        endif
+      endif
+    endif
+
+    if( v.1 = 'vars' & stat = '' )
+      stat = 'vars' ; statn = 0
+    endif
+    if( v.1 = 'edef' & stat = '' )
+      stat = 'edef' ; statn = 0
+    endif
+
+    statn = statn + 1
+    i = i + 1
+  endwhile
+  'set dfile 'fnc
+
+return ret

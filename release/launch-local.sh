@@ -40,9 +40,9 @@ export GA_ROOT="$plugin_dir"
 export GAUDPT="$plugin_table"
 export GADDIR="$repo_root/cola/data"
 if [[ -n "${GASCRP:-}" ]]; then
-  export GASCRP="$GASCRP:$repo_root/lib/scripts"
+  export GASCRP="$GASCRP:$repo_root/lib/scripts:$repo_root/lib/scripts/gscript"
 else
-  export GASCRP="$repo_root/lib/scripts"
+  export GASCRP="$repo_root/lib/scripts:$repo_root/lib/scripts/gscript"
 fi
 
 runtime_path="$plugin_dir"

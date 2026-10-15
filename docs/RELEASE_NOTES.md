@@ -3,6 +3,29 @@
 GrADS for modern simulation output: an ADIOS2/BP5 reader, OpenMP-threaded
 calculations, and native archives for Linux and macOS.
 
+### Added since 1.0.12 (not yet released)
+
+- **Scripts from gscript.** 76 scripts and script functions from Chihiro
+  Kodama's gscript (GPLv3) ship in `lib/scripts/gscript`, which the
+  launchers put on `GASCRP` after `lib/scripts`: `color` sets shading
+  levels and colours in one command (`color 220 280 -kind bluered
+  -xcbar`), `xcbar` draws a colour bar anywhere, with `hatch`, `drawpoly`,
+  `draws`, `dshade`, `tbox` and more, and functions such as `strrep()`,
+  `chcase()`, `printf()` and `cmonth()` for scripts with
+  `gsfallow('on')`. Four gscript files share names with bGASL scripts
+  already here and seven depend on one of them, so those eleven are left
+  out; `lib/scripts/gscript/README.md` lists them.
+
+### Fixed since 1.0.12 (not yet released)
+
+- **`GASCRP` with directories separated by colons.** GrADS split the list
+  at colons, semicolons and commas as well as spaces, but went on to the
+  next directory only after a space, so with `dir1:dir2` it searched
+  `dir1` alone, for scripts and for `.gsf` functions. The macOS archive's
+  launcher writes `GASCRP` with colons, so a `GASCRP` of the user's own,
+  which it puts after `lib/scripts`, was not searched there. All four
+  separators now work.
+
 ### Added in 1.0.12
 
 - **Usage after an error.** A command typed at the prompt that fails is

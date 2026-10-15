@@ -52,13 +52,16 @@ libraries are available.
   NetCDF and HDF data instead of disappearing from the command set. Confirm
   enabled features with `q config`.
 
-- **Advanced scripts and extensions.** The bundled OpenGrADS/Kodama script
+- **Advanced scripts and extensions.** The bundled OpenGrADS script
   collection in [lib/scripts](lib/scripts) provides reusable plotting and
   analysis tools, including maps, panels, colour bars, meteorograms,
   trajectories, and interpolation helpers. Plotting scripts from Bin Guan's
   bGASL add 1-D graphs, shading with contours, vertical cross-sections,
-  vectors, multi-panel layouts, legends, and publication-ready output. Existing OpenGrADS extensions are
-  retained under [extensions](extensions).
+  vectors, multi-panel layouts, legends, and publication-ready output.
+  Chihiro Kodama's [gscript](lib/scripts/gscript) adds colour tables
+  (`color`), free-standing colour bars (`xcbar`), hatching, markers and
+  polygons, and a library of script functions. Existing OpenGrADS
+  extensions are retained under [extensions](extensions).
 
 - **Plots in the terminal, no X needed.** Over ssh from iTerm2, the picture
   appears in a tmux pane beside the `ga->` prompt and updates after each

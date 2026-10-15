@@ -1,5 +1,6 @@
 /* Copyright (C) 1988-2018 by George Mason University. See file COPYRIGHT for more information. */
-/* Modified in 2026 for the terminal display; see COPYING. */
+/* Modified in 2026 for the terminal display, ~ in file names, and GASCRP
+   lists separated by colons; see COPYING. */
 
 /* Authored by B. Doty */
 
@@ -3538,7 +3539,7 @@ gaint len;
             }
           }
         }
-        while (*sdir!=' ' && *sdir!='\0') sdir++;   /* Advance */
+        while (!gsdelim(*sdir) && *sdir!='\0') sdir++;   /* Advance */
         free(dname);
         dname = NULL;
       }
@@ -3633,7 +3634,7 @@ char nname[20];
       return (ifile);
     }
     free (dname);
-    while (*sdir!=' ' && *sdir!='\0') sdir++;   /* Advance */
+    while (!gsdelim(*sdir) && *sdir!='\0') sdir++;   /* Advance */
   }
 
   /* If we fall thru, next try the GASCRP path */
@@ -3662,7 +3663,7 @@ char nname[20];
       return (ifile);
     }
     free (tname);
-    while (*sdir!=' ' && *sdir!='\0') sdir++;   /* Advance */
+    while (!gsdelim(*sdir) && *sdir!='\0') sdir++;   /* Advance */
   }
   
   /* If we fall thru, we didn't find anything.  */

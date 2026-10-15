@@ -19,7 +19,7 @@ fi
 export GA_ROOT="$bundle_root/plugins"
 export GAUDPT="$bundle_root/etc/udpt"
 export GADDIR="$bundle_root/cola/data"
-export GASCRP="$bundle_root/lib/scripts${GASCRP:+:$GASCRP}"
+export GASCRP="$bundle_root/lib/scripts:$bundle_root/lib/scripts/gscript${GASCRP:+:$GASCRP}"
 
 # The bundled ncurses has the build machine's terminfo path compiled into it,
 # and that directory does not exist here, so terminal lookup fails and the

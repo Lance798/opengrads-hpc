@@ -121,10 +121,11 @@ else
   unset GA2UDXT || true
 fi
 
+# lib/scripts, then gscript's scripts (lib/scripts/gscript)
 if [[ -n "${GASCRP:-}" ]]; then
-  export GASCRP="$GASCRP $script_dir"
+  export GASCRP="$GASCRP $script_dir $script_dir/gscript"
 else
-  export GASCRP="$script_dir"
+  export GASCRP="$script_dir $script_dir/gscript"
 fi
 
 # The bundled ncurses has the build machine's terminfo path compiled into it,
