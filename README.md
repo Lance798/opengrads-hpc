@@ -60,8 +60,9 @@ libraries are available.
   vectors, multi-panel layouts, legends, and publication-ready output.
   Chihiro Kodama's [gscript](lib/scripts/gscript) adds colour tables
   (`color`), free-standing colour bars (`xcbar`), hatching, markers and
-  polygons, and a library of script functions. Existing OpenGrADS
-  extensions are retained under [extensions](extensions).
+  polygons, and a library of script functions. A script of your own by the
+  same name, in the current directory or on your `GASCRP`, comes first.
+  Existing OpenGrADS extensions are retained under [extensions](extensions).
 
 - **Plots in the terminal, no X needed.** Over ssh from iTerm2, the picture
   appears in a tmux pane beside the `ga->` prompt and updates after each

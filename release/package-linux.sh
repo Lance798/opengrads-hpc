@@ -314,6 +314,21 @@ grep -Fq 'netcdf' <<< "$smoke_output"
 grep -Fq 'Calculation threads = 4' <<< "$smoke_output"
 # gscript's color.gs, found along the launcher's GASCRP
 grep -Fq 'clevs= 0 1 2 3 4 5 6 7 8 9 10' <<< "$smoke_output"
+# A script of the user's own by the same name comes before the bundled one.
+user_root="$(mktemp -d "${TMPDIR:-/tmp}/opengrads-user-scripts.XXXXXX")"
+printf "function main(args)\nsay 'user color 'args\n" > "$user_root/color.gs"
+user_output="$(env -i HOME="$user_root" PATH=/usr/bin:/bin GASCRP="$user_root" \
+  OPENGRADS_COLOR=0 "$bundle_root/opengrads" -bl -d gxdummy -h gxdummy <<'GRADS'
+color 0 10
+quit
+GRADS
+)"
+rm -rf -- "$user_root"
+if ! grep -Fqx 'user color 0 10' <<< "$user_output"; then
+  printf "The user's own color.gs did not come before the bundled one.\n" >&2
+  printf '%s\n' "$user_output" >&2
+  exit 1
+fi
 
 # Nor may an old OpenGrADS install unpacked beside the archive. The launcher
 # used to adopt a sibling opengrads-2.2.1.oga.1 bundle and load its plug-ins

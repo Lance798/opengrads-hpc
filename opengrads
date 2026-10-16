@@ -121,7 +121,9 @@ else
   unset GA2UDXT || true
 fi
 
-# lib/scripts, then gscript's scripts (lib/scripts/gscript)
+# Scripts of the user's own come first: GrADS looks in the current directory,
+# then along GASCRP, where the user's directories go before lib/scripts and
+# then gscript's (lib/scripts/gscript).
 if [[ -n "${GASCRP:-}" ]]; then
   export GASCRP="$GASCRP $script_dir $script_dir/gscript"
 else

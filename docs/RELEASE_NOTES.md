@@ -25,6 +25,12 @@ calculations, and native archives for Linux and macOS.
   launcher writes `GASCRP` with colons, so a `GASCRP` of the user's own,
   which it puts after `lib/scripts`, was not searched there. All four
   separators now work.
+- **Your own scripts come first on macOS.** The macOS archive's launcher put
+  the bundled `lib/scripts` before the user's `GASCRP`, so a script of the
+  user's own with the same name as a bundled one (`color.gs`, `plot.gs`)
+  never ran. The user's directories now come first there too, as they
+  already did on Linux: the current directory, then the user's `GASCRP`,
+  then `lib/scripts` and `lib/scripts/gscript`.
 
 ### Added in 1.0.12
 

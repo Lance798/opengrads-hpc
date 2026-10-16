@@ -39,6 +39,7 @@ sed "s/\\.so/.$plugin_ext/g" "$repo_root/etc/udpt-local" > "$plugin_table"
 export GA_ROOT="$plugin_dir"
 export GAUDPT="$plugin_table"
 export GADDIR="$repo_root/cola/data"
+# The user's own scripts first, as in the launchers
 if [[ -n "${GASCRP:-}" ]]; then
   export GASCRP="$GASCRP:$repo_root/lib/scripts:$repo_root/lib/scripts/gscript"
 else

@@ -101,5 +101,34 @@ out="$(cd "$work/elsewhere" && printf 'run second.gs\nrun caller.gs\nquit\n' |
 grep -Fqx 'second: 42' <<< "$out" && grep -Fqx 'from here: 8' <<< "$out" ||
   fail 'a script or function in the second of two GASCRP directories was not found' "$out"
 
-printf 'gscript checks passed: %d scripts start, color and xcbar, functions, GASCRP order and colons\n' \
+# 6. A script of the user's own by the same name comes first: from the
+#    current directory, then from the user's GASCRP, before lib/scripts and
+#    gscript. A function of the user's own by the same name is the one the
+#    user's scripts get, while the bundled scripts keep their own.
+mkdir -p "$work/mine" "$work/here"
+printf "function main(args)\nsay 'my color 'args\n" > "$work/here/color.gs"
+printf "function main(args)\nsay 'my xcbar 'args\n" > "$work/mine/xcbar.gs"
+printf "function chcase(s, t)\nreturn 'mine'\n" > "$work/mine/chcase.gsf"
+printf "function main()\nrc = gsfallow('on')\nsay 'chcase gives 'chcase('a', 'upper')\n" \
+  > "$work/here/usechcase.gs"
+cat > "$work/mine.cmds" <<CMDS
+color 0 10
+xcbar 1 2
+run usechcase.gs
+open $data/model.ctl
+run $repo_root/lib/scripts/gscript/color.gs 0 10 -kind bluered
+quit
+CMDS
+out="$(cd "$work/here" && GASCRP="$work/mine" HOME="$work" OPENGRADS_BUILD_ROOT="$build_root" \
+  OPENGRADS_COLOR=0 "$launcher" -bl -d gxdummy -h gxdummy < "$work/mine.cmds" 2>&1)"
+grep -Fqx 'my color 0 10' <<< "$out" ||
+  fail 'a script of the same name in the current directory did not come first' "$out"
+grep -Fqx 'my xcbar 1 2' <<< "$out" ||
+  fail "a script of the same name on the user's GASCRP did not come first" "$out"
+grep -Fqx 'chcase gives mine' <<< "$out" ||
+  fail "the user's script did not get the user's function of the same name" "$out"
+grep -Fqx 'clevs= 0 1 2 3 4 5 6 7 8 9 10' <<< "$out" ||
+  fail "gscript's color did not keep its own functions beside a user's of the same name" "$out"
+
+printf 'gscript checks passed: %d scripts start, color and xcbar, functions, GASCRP order and colons, the user'"'"'s own first\n' \
   "$scripts"
