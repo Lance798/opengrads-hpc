@@ -10,6 +10,11 @@ scripts run by name (`color`, `xcbar`, `run hatch.gs`) and their functions
 (`.gsf`) load with `gsfallow('on')`. A script here finds the functions it
 calls in this directory first.
 
+Your own scripts come first: one by the same name in the current directory,
+or in a directory on your own `GASCRP`, is the one that runs. A function of
+your own by the same name is the one your scripts get, while the scripts
+here keep using theirs.
+
 Scripts with help print it when run without arguments (`xcbar`), and
 `color` is the usual start:
 

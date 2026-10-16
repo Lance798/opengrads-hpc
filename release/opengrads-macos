@@ -19,7 +19,9 @@ fi
 export GA_ROOT="$bundle_root/plugins"
 export GAUDPT="$bundle_root/etc/udpt"
 export GADDIR="$bundle_root/cola/data"
-export GASCRP="$bundle_root/lib/scripts:$bundle_root/lib/scripts/gscript${GASCRP:+:$GASCRP}"
+# Scripts of the user's own come first: GrADS looks in the current directory,
+# then along GASCRP, where the user's directories go before the bundled ones.
+export GASCRP="${GASCRP:+$GASCRP:}$bundle_root/lib/scripts:$bundle_root/lib/scripts/gscript"
 
 # The bundled ncurses has the build machine's terminfo path compiled into it,
 # and that directory does not exist here, so terminal lookup fails and the

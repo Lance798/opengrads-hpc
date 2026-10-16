@@ -261,6 +261,20 @@ grep -Fq 'netcdf' <<< "$smoke_output"
 grep -Fq 'Calculation threads = 4' <<< "$smoke_output"
 # gscript's color.gs, found along the launcher's GASCRP
 grep -Fq 'clevs= 0 1 2 3 4 5 6 7 8 9 10' <<< "$smoke_output"
+# A script of the user's own by the same name comes before the bundled one.
+mkdir -p "$smoke_root/mine"
+printf "function main(args)\nsay 'user color 'args\n" > "$smoke_root/mine/color.gs"
+user_output="$(env -i HOME="$smoke_root" PATH=/usr/bin:/bin GASCRP="$smoke_root/mine" \
+  OPENGRADS_COLOR=0 "$bundle_root/opengrads" -bl -d gxdummy -h gxdummy <<'GRADS'
+color 0 10
+quit
+GRADS
+)"
+if ! grep -Fqx 'user color 0 10' <<< "$user_output"; then
+  printf "The user's own color.gs did not come before the bundled one.\n" >&2
+  printf '%s\n' "$user_output" >&2
+  exit 1
+fi
 if [[ ! -s "$smoke_root/smoke.png" ]]; then
   printf 'Cairo hardcopy output was not produced by the macOS bundle.\n' >&2
   printf '%s\n' "$smoke_output" >&2
