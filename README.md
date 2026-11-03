@@ -116,6 +116,7 @@ Use `q config` to see whether this build includes `adios2-bp5`, `openmp`,
 - [Terminal display: plots over ssh without X](docs/TERMINAL.md)
 - [Undo: settings and limits](docs/UNDO.md)
 - [The prompt: Tab completion, usage after errors, ~ in file names](docs/PROMPT.md)
+- [Clear Canvas: clear the picture and reuse plot settings](docs/CLEAR_CANVAS.md)
 - [OpenMP controls and benchmark notes](docs/PERFORMANCE.md)
 - [Architecture and development roadmap](docs/ARCHITECTURE.md)
 
