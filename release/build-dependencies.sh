@@ -104,6 +104,7 @@ extract()
 ncurses_archive="$download_root/ncurses-$NCURSES_VERSION.tar.gz"
 readline_archive="$download_root/readline-$READLINE_VERSION.tar.gz"
 adios2_archive="$download_root/adios2-$ADIOS2_VERSION.tar.gz"
+blosc2_archive="$download_root/c-blosc2-$BLOSC2_VERSION.tar.gz"
 
 fetch "$NCURSES_URL" "$NCURSES_SHA256" "$ncurses_archive"
 fetch "$READLINE_URL" "$READLINE_SHA256" "$readline_archive"
@@ -113,6 +114,7 @@ for readline_patch in $READLINE_PATCHES; do
     "$download_root/readline${READLINE_VERSION//./}-${readline_patch%%:*}"
 done
 fetch "$ADIOS2_URL" "$ADIOS2_SHA256" "$adios2_archive"
+fetch "$BLOSC2_URL" "$BLOSC2_SHA256" "$blosc2_archive"
 extract "$ncurses_archive" "$source_root/ncurses-$NCURSES_VERSION"
 extract "$readline_archive" "$source_root/readline-$READLINE_VERSION"
 # Apply the official patches once; the stamp records how far a source tree
@@ -130,6 +132,7 @@ for readline_patch in $READLINE_PATCHES; do
   fi
 done
 extract "$adios2_archive" "$source_root/ADIOS2-$ADIOS2_VERSION"
+extract "$blosc2_archive" "$source_root/c-blosc2-$BLOSC2_VERSION"
 
 if [[ ! -f "$deps_root/lib/libncurses.so" ]]; then
   ncurses_build="$build_root/ncurses-$NCURSES_VERSION"
@@ -159,7 +162,42 @@ if [[ ! -f "$deps_root/lib/libreadline.so" ]]; then
   make install SHLIB_LIBS=-lncurses
 fi
 
-if [[ ! -x "$adios2_root/bin/adios2-config" ]]; then
+# Keep the codecs inside libblosc2 so the runtime closure is portable and
+# never depends on a writer's MPI/CUDA installation or codec plug-ins.
+if [[ ! -f "$deps_root/lib/cmake/Blosc2/Blosc2Config.cmake" ]]; then
+  (
+    unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH
+    cmake -S "$source_root/c-blosc2-$BLOSC2_VERSION" \
+      -B "$build_root/blosc2-$BLOSC2_VERSION" \
+      -G "Unix Makefiles" \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX="$deps_root" \
+      -DCMAKE_INSTALL_LIBDIR=lib \
+      -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+      -DBUILD_SHARED=ON -DBUILD_STATIC=OFF \
+      -DBUILD_TESTS=OFF -DBUILD_FUZZERS=OFF \
+      -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_PLUGINS=OFF \
+      -DPREFER_EXTERNAL_LZ4=OFF -DPREFER_EXTERNAL_ZLIB=OFF \
+      -DPREFER_EXTERNAL_ZSTD=OFF
+    cmake --build "$build_root/blosc2-$BLOSC2_VERSION" --parallel "$jobs"
+    cmake --install "$build_root/blosc2-$BLOSC2_VERSION"
+  )
+fi
+
+# Blosc2 compiles these codecs into its shared library. Install their notices
+# with the private dependency prefix so external-prefix packagers can reuse it.
+blosc2_notices="$deps_root/share/licenses/blosc2"
+mkdir -p "$blosc2_notices"
+install -m 0644 "$source_root/c-blosc2-$BLOSC2_VERSION/LICENSE.txt" "$blosc2_notices/"
+cp -a "$source_root/c-blosc2-$BLOSC2_VERSION/LICENSES/." "$blosc2_notices/"
+install -m 0644 "$source_root/c-blosc2-$BLOSC2_VERSION/internal-complibs/zlib-ng-2.0.7/LICENSE.md" \
+  "$blosc2_notices/ZLIB-NG.md"
+
+# Older work directories already contain ADIOS2 with compression disabled.
+# Reconfigure those as well instead of accepting adios2-config alone.
+if [[ ! -x "$adios2_root/bin/adios2-config" ]] || \
+   ! grep -Eq '^#define ADIOS2_HAVE_BLOSC2($|[[:space:]]+1)' \
+       "$adios2_root/include/adios2/common/ADIOSConfig.h" 2>/dev/null; then
   unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH
   cmake -S "$source_root/ADIOS2-$ADIOS2_VERSION" \
     -B "$build_root/adios2-$ADIOS2_VERSION" \
@@ -167,6 +205,7 @@ if [[ ! -x "$adios2_root/bin/adios2-config" ]]; then
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$adios2_root" \
     -DCMAKE_INSTALL_LIBDIR=lib \
+    -DCMAKE_INSTALL_RPATH="$deps_root/lib" \
     -DBUILD_SHARED_LIBS=ON \
     -DBUILD_TESTING=OFF \
     -DADIOS2_BUILD_EXAMPLES=OFF \
@@ -184,7 +223,9 @@ if [[ ! -x "$adios2_root/bin/adios2-config" ]]; then
     -DADIOS2_USE_ZeroMQ=OFF \
     -DADIOS2_USE_UCX=OFF \
     -DADIOS2_USE_BigWhoop=OFF \
-    -DADIOS2_USE_Blosc2=OFF \
+    -DADIOS2_USE_Blosc2=ON \
+    -DADIOS2_Blosc2_PREFER_SHARED=ON \
+    -DBlosc2_DIR="$deps_root/lib/cmake/Blosc2" \
     -DADIOS2_USE_BZip2=OFF \
     -DADIOS2_USE_Caliper=OFF \
     -DADIOS2_USE_ZFP=OFF \

@@ -1,9 +1,23 @@
 # Self-contained binary releases
 
 The modern release path produces archives that users unpack and run directly.
-ADIOS2, ncurses, Readline, Cairo/X11, OpenMP runtime support, and every other
+ADIOS2, Blosc2, ncurses, Readline, Cairo/X11, OpenMP runtime support, and every other
 non-glibc shared-library dependency discovered at build time are included.
 Users do not install ADIOS2 or set library paths.
+
+The Linux bootstrap builds shared Blosc2 with its BloscLZ, LZ4/LZ4HC, zlib,
+and Zstd codecs, then enables it in serial ADIOS2. The archive includes
+`libblosc2` and the codec licenses. It does not require the VVMex writer's
+dependency directory. Packaging verifies actual compressed BP5 reads with
+both descriptors and `bpopen` in a clean environment before creating the
+archive.
+
+When UDUNITS is supplied by a cluster module, set `UDUNITS2_XML_PATH` to
+that installation's `udunits2.xml` when packaging. The packager copies its
+database directory into the archive, and the launcher selects that copy.
+Non-glibc library resolution is checked for every executable, graphics
+plug-in, and bundled shared library; a path outside the archive fails the
+package build.
 
 ## End-user workflow
 

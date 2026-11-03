@@ -25,6 +25,21 @@ runtime libraries inside the archive; source builders may use automatic
 detection or the pinned release bootstrap. Redistributors must follow the
 upstream license and notices.
 
+## Blosc2 and built-in codecs
+
+- Project: C-Blosc2
+- Upstream: https://github.com/Blosc/c-blosc2
+- Pinned Linux bootstrap version: 2.15.2
+- License: BSD 3-Clause
+- Purpose: lossless BP5 decompression through ADIOS2's `blosc` operator
+
+The Linux bootstrap builds shared Blosc2 with its bundled BloscLZ,
+LZ4/LZ4HC, zlib-ng, and Zstd codecs. The packager copies the shared runtime
+and upstream notices, including the shuffle/codec notices, into
+`licenses/blosc2/`. Neither a VVMex installation nor its MPI/CUDA libraries
+are needed for these compressed arrays. The checksum-pinned Blosc2 source
+archive is recorded in `release/versions.env`.
+
 ## GNU Readline
 
 - Project: GNU Readline
