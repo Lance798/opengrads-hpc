@@ -623,6 +623,7 @@ gaint gaqsig (void) {
 #if READLINE == 1
 /* Tab completion. What is offered depends on where the cursor is:
 
+
      at the start            commands
      set _                   set options; after one, its keywords
                              (on|off, the kinds of gxout, ...)
@@ -734,6 +735,7 @@ int state;
   rl_filename_completion_desired = 1;
 }
 
+
 static char *ga_completion_generator(const char *text, int state) {
 static int index;
   (void)text;
@@ -843,6 +845,7 @@ int args,depth,i;
     for (f=filecmds; *f && strcmp(*f,w1); f++) ;
     if (*f) candpaths(text);
     else if (args==1) candwords(gahelpwords(GAHELP_CMD,w1),text);
+
   }
   rl_attempted_completion_over = 1;
   if (ncand==0) return NULL;

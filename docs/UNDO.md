@@ -44,7 +44,8 @@ One step is one command you issue that changes the picture. A command that
 draws nothing — `set gxout shaded`, `open`, `q dims` — costs no step, so `undo`
 always reaches the last thing that actually appeared.
 
-`clear` (`c`) is a step too, and so are `clear norset` and `clear graphics`:
+`clear` (`c`) is a step too, and so are `clear canvas` (`cc`), `clear norset`,
+and `clear graphics`:
 undoing it brings the cleared picture back, and the steps taken on that
 picture can then be undone in turn.
 
@@ -99,6 +100,11 @@ reverse what the command did:
   the display can be issued again as it was.
 - A clear resets options such as `set vrange`, `set xlint`, `set xlabs`, and
   `set grads off`; undoing it gives them back.
+
+`cc` also remembers explicitly selected one-display settings for reuse on the
+next canvas. Undo restores that remembered style along with the picture;
+settings issued after the undone command still take precedence. See
+[CLEAR_CANVAS.md](CLEAR_CANVAS.md).
 
 Either way, an option you have set since keeps your new value. Everything
 else keeps its current value:

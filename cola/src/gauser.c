@@ -75,6 +75,85 @@ static struct msgbuf *msgstk, *msgcurr, *msgnew;
    everything a script draws collapsing into a single step. */
 static gaint gacmdlvl = 0;
 
+/* Clear Canvas remembers explicit, one-display options before rendering
+   computes automatic colors/intervals and display consumes those options.
+   A set issued afterwards wins, even when it explicitly disables a flag. */
+enum gaccoption {
+  CC_COLOR=1u<<0, CC_STYLE=1u<<1, CC_MARK=1u<<2, CC_INTERVAL=1u<<3,
+  CC_MIN=1u<<4, CC_MAX=1u<<5, CC_LEVELS=1u<<6, CC_COLORS=1u<<7,
+  CC_BLACK=1u<<8, CC_RAINBOW=1u<<9, CC_ARROWS=1u<<10, CC_FILL=1u<<11
+};
+struct gaccstyle {
+  gaint ccolor,cstyle,cmark,cflag,ccflg,blkflg,arrflg,ptflg;
+  gaint ptopt,ptden,ptang;
+  gadouble cint,cmin,cmax,rainmn,rainmx,blkmin,blkmax,arrsiz,arrmag;
+  gadouble clevs[256];
+  gaint ccols[256];
+};
+struct gaccstate {
+  gaint valid;
+  unsigned int changed;
+  struct gaccstyle style;
+};
+static struct gaccstate canvas;
+
+#define GACC_FIELDS(X) \
+  X(CC_COLOR,ccolor) X(CC_STYLE,cstyle) X(CC_MARK,cmark) \
+  X(CC_INTERVAL,cint) X(CC_MIN,cmin) X(CC_MAX,cmax) \
+  X(CC_LEVELS,cflag) X(CC_COLORS,ccflg) \
+  X(CC_BLACK,blkflg) X(CC_BLACK,blkmin) X(CC_BLACK,blkmax) \
+  X(CC_RAINBOW,rainmn) X(CC_RAINBOW,rainmx) \
+  X(CC_ARROWS,arrflg) X(CC_ARROWS,arrsiz) X(CC_ARROWS,arrmag) \
+  X(CC_FILL,ptflg) X(CC_FILL,ptopt) X(CC_FILL,ptden) X(CC_FILL,ptang)
+
+static void gaccsave (struct gacmn *pcm, struct gaccstyle *style) {
+  memset(style,0,sizeof(*style));
+#define CC_SAVE(option,field) style->field = pcm->field;
+  GACC_FIELDS(CC_SAVE)
+#undef CC_SAVE
+  if (pcm->cflag>0 && pcm->cflag<=256)
+    memcpy(style->clevs,pcm->clevs,pcm->cflag*sizeof(gadouble));
+  if (pcm->ccflg>0 && pcm->ccflg<=256)
+    memcpy(style->ccols,pcm->ccols,pcm->ccflg*sizeof(gaint));
+}
+
+static void gaccrestore (struct gacmn *pcm) {
+  struct gaccstyle *style = &canvas.style;
+  unsigned int skip = canvas.changed;
+  if (!canvas.valid) return;
+  /* A newly chosen interval must not be hidden by remembered fixed levels.
+     Colors without fixed levels are not a valid ccols mapping. */
+  if ((skip & CC_INTERVAL) && !(skip & CC_LEVELS)) {
+    skip |= CC_LEVELS;
+    pcm->cflag = 0;
+  }
+  if ((skip & CC_LEVELS) ? !pcm->cflag : !style->cflag) {
+    if (!(skip & CC_COLORS)) pcm->ccflg = 0;
+    skip |= CC_COLORS;
+  }
+#define CC_RESTORE(option,field) if (!(skip & (option))) pcm->field = style->field;
+  GACC_FIELDS(CC_RESTORE)
+#undef CC_RESTORE
+  if (!(skip & CC_LEVELS))
+    memcpy(pcm->clevs,style->clevs,sizeof(style->clevs));
+  if (!(skip & CC_COLORS))
+    memcpy(pcm->ccols,style->ccols,sizeof(style->ccols));
+}
+#undef GACC_FIELDS
+
+static void gaccset (char *cmd) {
+  static const struct { const char *name; unsigned int option; } options[] = {
+    {"ccolor",CC_COLOR}, {"cstyle",CC_STYLE}, {"cmark",CC_MARK},
+    {"cint",CC_INTERVAL}, {"cmin",CC_MIN}, {"cmax",CC_MAX},
+    {"clevs",CC_LEVELS}, {"ccols",CC_COLORS}, {"black",CC_BLACK},
+    {"rbrange",CC_RAINBOW}, {"arrscl",CC_ARROWS}, {"fill",CC_FILL}
+  };
+  size_t i;
+  if (cmd==NULL) return;
+  for (i=0; i<sizeof(options)/sizeof(options[0]); i++)
+    if (cmpwrd((char *)options[i].name,cmd)) canvas.changed |= options[i].option;
+}
+
 /* Undo keeps, with each step, what GrADS knows about the picture besides
    the picture itself, as it was before the step's command and after it:
    what the plots so far set up for the next one to overlay (the overlay
@@ -85,6 +164,9 @@ static gaint gacmdlvl = 0;
    the step, so a setting made after it stays. */
 
 struct gaundost {
+  struct gaccstate canvas;
+  gadouble clevs[256];
+  gaint ccols[256];
   gaint datagen;                       /* gadatagen when taken */
   /* Scaling environment */
   gaint xdim,ydim;
@@ -188,6 +270,9 @@ gaint i,n;
   st = (struct gaundost *)galloc(sizeof(struct gaundost),"undost");
   if (st==NULL) return (NULL);
   memset(st,0,sizeof(struct gaundost));
+  st->canvas = canvas;
+  memcpy(st->clevs,pcm->clevs,sizeof(st->clevs));
+  memcpy(st->ccols,pcm->ccols,sizeof(st->ccols));
   st->datagen = gadatagen;
   st->xdim = pcm->xdim; st->ydim = pcm->ydim;
   st->xgr2ab = pcm->xgr2ab; st->ygr2ab = pcm->ygr2ab;
@@ -266,10 +351,21 @@ nomem:
 static void gaundorest (struct gacmn *pcm, struct gaundostep *step) {
 struct gaundost *b,*a;
 gaint i,same;
+unsigned int ccchanged;
 
   b = step->before;
   a = step->after;
   if (a==NULL || b==NULL) return;
+  ccchanged = canvas.changed & ~a->canvas.changed;
+
+  /* Rewind the remembered display as well. Later set commands retain
+     their pending overrides rather than acquiring the undone plot's style. */
+  if (canvas.valid==a->canvas.valid &&
+      memcmp(&canvas.style,&a->canvas.style,sizeof(canvas.style))==0) {
+    canvas.valid = b->canvas.valid;
+    canvas.style = b->canvas.style;
+  }
+  if (canvas.changed==a->canvas.changed) canvas.changed = b->canvas.changed;
 
   /* The scaling environment points into the grid coordinates of a file or
      defined variable, which may be gone */
@@ -339,12 +435,28 @@ gaint i,same;
   }
 
   /* Options a clear resets */
-  UNDO1(cstyle); UNDO1(ccolor); UNDO1(cthick); UNDO1(cmark);
-  UNDO1(cflag); UNDO1(ccflg); UNDO1(blkflg); UNDO1(gridln); UNDO1(grdsflg);
+  same = (!(ccchanged & CC_LEVELS) && pcm->cflag==a->cflag);
+  for (i=0; same && i<a->cflag; i++) same = (pcm->clevs[i]==a->clevs[i]);
+  if (same) {
+    pcm->cflag = b->cflag;
+    memcpy(pcm->clevs,b->clevs,sizeof(b->clevs));
+  }
+  same = (!(ccchanged & CC_COLORS) && pcm->ccflg==a->ccflg);
+  for (i=0; same && i<a->ccflg; i++) same = (pcm->ccols[i]==a->ccols[i]);
+  if (same) {
+    pcm->ccflg = b->ccflg;
+    memcpy(pcm->ccols,b->ccols,sizeof(b->ccols));
+  }
+#define UNDOCC(option,field) if (!(ccchanged & (option))) { UNDO1(field); }
+  UNDOCC(CC_STYLE,cstyle); UNDOCC(CC_COLOR,ccolor); UNDOCC(CC_MARK,cmark);
+  UNDOCC(CC_BLACK,blkflg); UNDOCC(CC_FILL,ptflg);
+  UNDOCC(CC_INTERVAL,cint); UNDOCC(CC_MIN,cmin); UNDOCC(CC_MAX,cmax);
+  UNDOCC(CC_RAINBOW,rainmn); UNDOCC(CC_RAINBOW,rainmx);
+#undef UNDOCC
+  UNDO1(cthick); UNDO1(gridln); UNDO1(grdsflg);
   UNDO1(hemflg); UNDO1(rotate); UNDO1(xflip); UNDO1(yflip);
   UNDO1(xlflg); UNDO1(ylflg); UNDO1(ylpflg); UNDO1(xlside); UNDO1(ylside);
-  UNDO1(tlsupp); UNDO1(ptflg); UNDO1(marktype);
-  UNDO1(cint); UNDO1(cmin); UNDO1(cmax); UNDO1(rainmn); UNDO1(rainmx);
+  UNDO1(tlsupp); UNDO1(marktype);
   UNDO1(xlint); UNDO1(ylint); UNDO1(xlpos); UNDO1(ylpos); UNDO1(yllow);
   UNDO1(marksize);
   if (pcm->cachesf==a->cachesf && pcm->cachesf!=b->cachesf) {
@@ -453,6 +565,7 @@ size_t sz,len;
 }
 
 gaint gacmd (char *com, struct gacmn *pcm, gaint exflg) {
+gaint keepcanvas,canvasaa;
 struct gafile *pfi,*pfi2;
 struct gadefn *pdf,*pdf2;
 struct gaclct *clct,*clct2;
@@ -546,7 +659,7 @@ FILE *pdefid=NULL;
 #endif
 
   /* if command is NOT clear ...*/
-  if (!(cmpwrd("clear",cmd) || cmpwrd("c",cmd))) {  
+  if (!(cmpwrd("clear",cmd) || cmpwrd("c",cmd) || cmpwrd("cc",cmd))) {
     gxfrme (9);  /* ... clear the X request buffer */
   }
 
@@ -825,10 +938,26 @@ FILE *pdefid=NULL;
     gaprnt (2,pout);
     goto retrn;
   }
-  else if (cmpwrd("clear",cmd) || cmpwrd("c",cmd)) {
-    rc = 0;
+  else if (cmpwrd("clear",cmd) || cmpwrd("c",cmd) || cmpwrd("cc",cmd)) {
+    keepcanvas = cmpwrd("cc",cmd);
+    canvasaa = pcm->aaflg;
+    rc = keepcanvas ? 1 : 0;
     if ((cmd=nxtwrd(cmd)) != NULL) {
+      if (keepcanvas) {
+        gaprnt(0,"CC error: Clear Canvas takes no arguments\n");
+        retcod = 1;
+        goto retrn;
+      }
       rc=99;
+      if (cmpwrd("canvas",cmd)) {
+        if (nxtwrd(cmd)!=NULL) {
+          gaprnt(0,"CC error: Clear Canvas takes no arguments\n");
+          retcod = 1;
+          goto retrn;
+        }
+        keepcanvas = 1;
+        rc = 1;
+      }
       if (cmpwrd("norset",cmd))   rc = 1;  /* clears without resetting user options */
       if (cmpwrd("events",cmd))   rc = 2;  /* flushes the Xevents buffer */
       if (cmpwrd("graphics",cmd)) rc = 3;  /* clears the graphics but not the widgets */
@@ -867,7 +996,7 @@ FILE *pdefid=NULL;
     }
     else if (rc==9) gxmaskclear();
     /* call gacln (reset gacmn) with different options */
-    if (pcm->aaflg==0) dsubs->gxdsignal(3); /* tell hardware to re-enable anti-aliasing */
+    if (pcm->aaflg==0 && !keepcanvas) dsubs->gxdsignal(3); /* re-enable anti-aliasing */
     if (rc==1) gacln(pcm,0);
     else if (rc<5 || rc==99) {
       gacln (pcm,1);
@@ -875,6 +1004,17 @@ FILE *pdefid=NULL;
     }
     else if (rc==8) gacln(pcm,2);  /* clears sdfwrite file name and attributes */
     else if (rc==10) gacln(pcm,3);  /* clears user-provided shapefile attributes */
+    if (keepcanvas) {
+      gaccrestore(pcm);
+      /* A new canvas must not inherit computed overlay ranges. Explicit
+         vrange uses -1 and is retained, as are all other live user options. */
+      if (pcm->aflag==1) pcm->aflag = 0;
+      if (pcm->aflag2==1) pcm->aflag2 = 0;
+      pcm->aaflg = canvasaa;
+      if (!canvasaa) gxsignal(2);
+    } else if (rc<2 || rc==3 || rc==4) {
+      memset(&canvas,0,sizeof(canvas));
+    }
     goto retrn;
   }
 
@@ -1200,6 +1340,7 @@ FILE *pdefid=NULL;
   }
   else if (cmpwrd("set",cmd)) {
     retcod = gaset (cmd, com, pcm);
+    if (!retcod) gaccset(nxtwrd(cmd));
     goto retrn;
   }
   else if (cmpwrd("open",cmd)) {
@@ -1546,6 +1687,7 @@ struct dbfld *fld,*nextfld;
 
   /* reset user options */
   if (flg==1) {
+    memset(&canvas,0,sizeof(canvas));
     pcm->cstyle = -9;
     pcm->ccolor = -9;
     pcm->cthick = 4;
@@ -5180,6 +5322,7 @@ gaint gahelp (char *cmd, struct gacmn *pcm) {
   printf (" OPEN <descr>      opens a data file \n");
   printf (" Query             shows current status \n");
   printf (" Clear             clears graphics window \n");
+  printf (" Clear Canvas (CC) clears the picture, retaining explicit plot settings \n");
   printf (" SET <args>        sets options \n");
   printf (" Display expr      displays a variable graphically \n");
   printf (" QUIT              exits the program \n");
@@ -5291,6 +5434,7 @@ collerr2:
 /* Handle display command */
 
 gaint gadspl (char *cmd, struct gacmn *pcm) {
+struct gaccstyle canvasstyle;
 struct gastat *pst;
 struct gafile *pfi;
 gadouble (*conv) (gadouble *, gadouble) = NULL;
@@ -5311,6 +5455,8 @@ static gaint dcolor[10] = {-1, 1, 3, 7, 2, 6, 9, 10, 11, 12 };
 
   pst = getpst(pcm);
   if (pst==NULL) return(1);
+
+  gaccsave(pcm,&canvasstyle);
 
   vcnt = 0;
   for (i=0; i<5; i++) if (pcm->vdim[i]) vcnt++;
@@ -5441,6 +5587,11 @@ static gaint dcolor[10] = {-1, 1, 3, 7, 2, 6, 9, 10, 11, 12 };
     pcm->ptflg = 0;
     pcm->xexflg = 0; pcm->yexflg = 0;
   }
+  if (pcm->gout0==0) {
+    canvas.style = canvasstyle;
+    canvas.valid = 1;
+  }
+  canvas.changed = 0;
   gree(pst,"f103");
   return (0);
 

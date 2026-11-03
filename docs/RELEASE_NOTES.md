@@ -119,6 +119,14 @@ calculations, and native archives for Linux and macOS.
 
 ### Added in 1.0.10
 
+- **Clear Canvas (`clear canvas` / `cc`).** Clear the whole picture, including annotations and
+  color bars, while retaining plot settings. Explicit contour levels, colors,
+  intervals, line styles, vector scales, and fills used by the last display
+  can be reused on the next one. Automatic levels and colors remain automatic;
+  later `set` commands take precedence. Existing `c` and `clear norset` keep
+  their behavior. `cc` participates in undo and command completion. See
+  [CLEAR_CANVAS.md](CLEAR_CANVAS.md).
+
 - **Plots in the terminal, without X.** A new display, `-d Term`, draws GrADS
   pictures inside the terminal (iTerm2, WezTerm, kitty, Ghostty, and sixel
   terminals such as foot and mlterm), so a session on a cluster needs no X
