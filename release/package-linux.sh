@@ -51,7 +51,11 @@ cp -a "$repo_root/docs/." "$bundle_root/docs/"
 # machine without udunits2 installed fails sdfopen with "UDUNITS package
 # initialization failure". Bundle the database and point the launcher at it.
 udunits_xml=""
-for candidate in /usr/share/udunits /usr/local/share/udunits; do
+udunits_candidates=(/usr/share/udunits /usr/local/share/udunits)
+if [[ -n "${UDUNITS2_XML_PATH:-}" ]]; then
+  udunits_candidates=("$(dirname -- "$UDUNITS2_XML_PATH")" "${udunits_candidates[@]}")
+fi
+for candidate in "${udunits_candidates[@]}"; do
   if [[ -r "$candidate/udunits2.xml" ]]; then
     udunits_xml="$candidate"
     break
@@ -101,6 +105,11 @@ copy_notice "$work_root/sources/readline-$READLINE_VERSION/COPYING" \
   "$bundle_root/licenses/Readline-COPYING"
 copy_notice "$work_root/sources/ncurses-$NCURSES_VERSION/COPYING" \
   "$bundle_root/licenses/ncurses-COPYING"
+if [[ ! -r "$deps_root/share/licenses/blosc2/LICENSE.txt" ]]; then
+  printf 'Blosc2/codec notices missing; run release/build-dependencies.sh first.\n' >&2
+  exit 1
+fi
+cp -a "$deps_root/share/licenses/blosc2" "$bundle_root/licenses/blosc2"
 
 library_path="$adios2_root/lib:$adios2_root/lib64:$deps_root/lib:$deps_root/lib64"
 queue=("$bundle_root/build/src/grads" "$plugin_root/libgxdummy.so" \
@@ -178,6 +187,11 @@ while (( ${#queue[@]} )); do
 done
 
 sort -o "$bundle_root/runtime-libraries.txt" "$bundle_root/runtime-libraries.txt"
+
+if ! compgen -G "$runtime_lib_root/libblosc2.so*" > /dev/null; then
+  printf 'ADIOS2 must link shared Blosc2 so compressed BP5 support is bundled.\n' >&2
+  exit 1
+fi
 
 # Invariant: no part of glibc may sit in a directory that reaches
 # LD_LIBRARY_PATH. If it does, a host loader newer than the bundled libc loads
@@ -258,6 +272,30 @@ if env -u LD_LIBRARY_PATH ldd "$bundle_root/build/src/grads" 2>&1 \
   env -u LD_LIBRARY_PATH ldd "$bundle_root/build/src/grads" >&2
   exit 1
 fi
+
+# Resolution must stay inside the archive, not merely succeed through an
+# absolute build/site path. The launcher may choose the host's glibc family.
+canonical_bundle="$(readlink -f "$bundle_root")"
+for binary in "$bundle_root/build/src/grads" "$plugin_root"/*.so \
+              "$runtime_lib_root"/*.so*; do
+  [[ -f "$binary" ]] || continue
+  ldd_output="$(env -u LD_LIBRARY_PATH -u LD_PRELOAD ldd "$binary" 2>&1)"
+  if grep -Fq 'not found' <<< "$ldd_output"; then
+    printf 'Unresolved packaged library for %s:\n%s\n' "$binary" "$ldd_output" >&2
+    exit 1
+  fi
+  while read -r soname arrow resolved remainder; do
+    [[ "$arrow" == '=>' && "$resolved" == /* ]] || continue
+    is_system_abi "$soname" && continue
+    is_glibc_lib "$soname" && continue
+    resolved="$(readlink -f "$resolved")"
+    if [[ "$resolved" != "$canonical_bundle/"* ]]; then
+      printf 'Packaged dependency escapes the archive: %s needs %s at %s\n' \
+        "$binary" "$soname" "$resolved" >&2
+      exit 1
+    fi
+  done <<< "$ldd_output"
+done
 
 # And it must keep resolving to the bundle when LD_LIBRARY_PATH points
 # somewhere else, as it does on most clusters. A decoy directory holds empty
@@ -377,6 +415,16 @@ if ! grep -Fq 'adios2-bp5' <<< "$locale_output"; then
 fi
 
 mkdir -p "$output_root"
+# Startup alone does not exercise decompression. Write real compressed arrays
+# with the build dependencies, then read them with only the archive's runtime.
+compression_root="$(mktemp -d /tmp/opengrads-package-bp5.XXXXXX)"
+trap 'rm -rf -- "$compression_root"' EXIT
+OPENGRADS_ADIOS2_ROOT="$adios2_root" OPENGRADS_DEPS_ROOT="$deps_root" \
+  "$repo_root/pytests/TestBP5Compression.sh" --write-fixtures "$compression_root"
+env -i HOME="${HOME:-/tmp}" PATH=/usr/bin:/bin \
+  OPENGRADS_LAUNCHER="$bundle_root/opengrads" \
+  "$repo_root/pytests/TestBP5Compression.sh" --read-fixtures "$compression_root"
+
 tar -C "$output_root" -czf "$output_root/$archive_base.tar.gz" "$archive_base"
 (
   cd "$output_root"

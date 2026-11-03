@@ -68,6 +68,9 @@ make -C src --jobs "$jobs" \
 OPENGRADS_BUILD_ROOT="$build_root" \
 OPENGRADS_ADIOS2_ROOT="$adios2_root" \
   "$repo_root/pytests/TestBP5.sh"
+OPENGRADS_BUILD_ROOT="$build_root" \
+OPENGRADS_ADIOS2_ROOT="$adios2_root" OPENGRADS_DEPS_ROOT="$deps_root" \
+  "$repo_root/pytests/TestBP5Compression.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestSDFOpen.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestOpenMP.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestAveSection.sh"

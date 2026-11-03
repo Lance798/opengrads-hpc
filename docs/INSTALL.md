@@ -49,17 +49,20 @@ incrementally.
 export OPENGRADS_WORK="$HOME/opengrads-deps"
 ./release/build-dependencies.sh "$OPENGRADS_WORK"
 
-deps_root="$OPENGRADS_WORK/deps"        # ncurses, readline
+deps_root="$OPENGRADS_WORK/deps"        # ncurses, readline, Blosc2
 adios2_root="$OPENGRADS_WORK/adios2"    # serial ADIOS2
 ```
 
-This builds ncurses, GNU Readline, and ADIOS2 from checksum-pinned upstream
+This builds ncurses, GNU Readline, Blosc2, and ADIOS2 from checksum-pinned upstream
 releases recorded in [`release/versions.env`](../release/versions.env). It is
-incremental: components already installed are skipped.
+incremental: components already installed are skipped, except that an older
+ADIOS2 build without Blosc2 is rebuilt to enable compressed BP5 reads.
 
 To reuse dependencies you already have, skip this and point `deps_root` and
 `adios2_root` at your own prefixes. `$adios2_root/bin/adios2-config` must
-exist.
+exist, and ADIOS2 must have Blosc2 enabled for compressed output. The Linux
+packager requires shared Blosc2 and its codec notices under
+`$deps_root/share/licenses/blosc2`, which the bootstrap installs.
 
 ### 2. Configure and build
 

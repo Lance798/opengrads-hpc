@@ -12,6 +12,9 @@ automatically.
 - Passing a parent directory that contains exactly one `*.bp` dataset.
 - Explicit descriptors with `dtype bp5` or `dtype adios2`.
 - Serial `ReadRandomAccess` access to global numeric arrays.
+- Lossless Blosc2-compressed arrays, including BloscLZ, LZ4/LZ4HC, zlib,
+  and Zstd codecs. Linux releases bundle the shared Blosc2 runtime and its
+  built-in codecs; the writer's library installation is not required.
 - Float, double, long double, and signed/unsigned 8/16/32/64-bit integers, converted to GrADS `gadouble`.
 - ADIOS2 steps mapped to GrADS T when the array has no explicit T dimension.
 - One bulk ADIOS2 selection for in-bounds X/Y grids, with the row reader retained as a fallback.
@@ -26,7 +29,9 @@ An explicit descriptor takes precedence. Its `UNDEF` line controls masking unles
 
 A manual source build needs a C/C++ toolchain and an ADIOS2 installation containing the serial C API and `adios2-config`. The release builder supplies the pinned dependency automatically. ADIOS2 2.11.0 was used for the verified build.
 
-A small CPU-only ADIOS2 configuration is sufficient:
+The pinned bootstrap in `release/build-dependencies.sh` builds Blosc2 and
+enables it in serial ADIOS2. For a manual build, install Blosc2 first and
+point ADIOS2 at its CMake package:
 
 ```bash
 cmake -S /path/to/ADIOS2-2.11.0 -B /tmp/adios2-cpu-build \
@@ -39,12 +44,18 @@ cmake -S /path/to/ADIOS2-2.11.0 -B /tmp/adios2-cpu-build \
   -DADIOS2_USE_Fortran=OFF \
   -DADIOS2_USE_Python=OFF \
   -DADIOS2_USE_CUDA=OFF \
-  -DADIOS2_USE_Kokkos=OFF
+  -DADIOS2_USE_Kokkos=OFF \
+  -DADIOS2_USE_Blosc2=ON \
+  -DADIOS2_Blosc2_PREFER_SHARED=ON \
+  -DBlosc2_DIR=/opt/blosc2/lib/cmake/Blosc2
 cmake --build /tmp/adios2-cpu-build --parallel
 cmake --install /tmp/adios2-cpu-build
 ```
 
-ADIOS2 enables other optional packages when it finds them. Inspect its CMake summary and disable unwanted transports, compression packages, and language bindings for a minimal deployment. The exact dependency-minimized configuration used in this workspace is recorded in [INSTALL.md](INSTALL.md).
+ADIOS2 enables other optional packages when it finds them. Inspect its CMake
+summary and disable unwanted transports and language bindings. Keep Blosc2
+enabled to read compressed VVMex output. Other compression operators such as
+ZFP and SZ need their own libraries and are not enabled by the Linux bootstrap.
 
 GNU Readline is optional. When available at configure time it provides command history, editing, and the Tab completion added by this fork. Color prompts are enabled at runtime by the development launcher.
 
@@ -183,6 +194,21 @@ OPENGRADS_ADIOS2_ROOT=/opt/adios2-cpu \
 The test creates a temporary two-step BP5 fixture. It covers a planned TDEF
 that is longer than the currently available BP5 steps, attribute metadata, descriptor precedence, two time steps, float and double conversion, missing masks, full 2-D statistics, shaded contours, invalid paths and shapes, ambiguous parent directories, and repeated open/close/reinit cleanup. It also checks that a descriptor-free open and the fixture's descriptor report the same X, Y, Z, and T axes, with metre X and Y mapped to degrees and T taken from the CF time coordinate, that a dataset without a time coordinate falls back to counted steps and says so, and that a Z profile, a field written at the first step only, and a per-step global value read the same through both opens, including a profile subtracted from a 3-D field in an x-z section.
 
+Run the compressed-array regression against the same build with:
+
+```bash
+OPENGRADS_BUILD_ROOT=/tmp/opengrads-build-cpu \
+OPENGRADS_ADIOS2_ROOT=/opt/adios2-cpu \
+OPENGRADS_DEPS_ROOT=/opt/blosc2 \
+  ./pytests/TestBP5Compression.sh
+```
+
+It checks five codecs with both `open` and `bpopen`, float and double data,
+two time steps, plane statistics, and bulk versus ordinary time averages.
+The fixture sizes are checked against uncompressed output to ensure the
+test actually exercises decompression. The Linux packager repeats these
+reads with a clean environment using only the archive's runtime.
+
 For sanitizer testing, configure a separate build with:
 
 ```bash
@@ -212,6 +238,12 @@ OPENGRADS_ADIOS2_ROOT="$adios2_root" \
 On 15 August 2026, `bpopen /raid/mog/rcemip_f_tc_bp5` resolved `vvm_output.bp`, discovered 35 fields on a 512 x 512 x 44 grid with 21 steps, and plotted `w` at T=21 and Z=7. The full plane contained 262,144 valid values with a range of approximately -0.0731651 to 0.102873. This is a functional observation on one host, not a portable performance claim.
 
 ## Launcher troubleshooting
+
+If a descriptor opens but displaying a field reports `ADIOS2 didn't compile
+with blosc library`, ADIOS2 lacks the decoder. Re-run
+`release/build-dependencies.sh`: it upgrades an existing bootstrap installation
+that had Blosc2 disabled. Rebuild/repackage with that prefix. Adding a library
+search path alone cannot enable a decoder absent from the ADIOS2 build.
 
 The historical graphics bundle contains its own old `libstdc++.so.6`. ADIOS2
 2.11 built with a newer compiler may then report missing `GLIBCXX_*` or
