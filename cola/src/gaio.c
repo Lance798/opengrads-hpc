@@ -1,5 +1,5 @@
 /* Copyright (C) 1988-2018 by George Mason University. See file COPYRIGHT for more information. */
-/* Modified in 2026 to add optional ADIOS2 BP5 grid I/O; see COPYING. */
+/* Modified in 2026 for optional ADIOS2 BP5 and indexed vertical I/O; see COPYING. */
 
 /* Authored by B. Doty and Jennifer Adams */
 
@@ -20,6 +20,7 @@
 #include "grads.h"
 #include <math.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #if USENETCDF == 1
@@ -466,6 +467,176 @@ gaint gagrdsteps (struct gagrid *pgr, gaint t0, gaint n, gaint incr,
   return -1;
 }
 
+
+#if USEHDF5==1
+struct h5slice_point { size_t chunk, output; };
+static int h5slice_compare(const void *a, const void *b) {
+  const struct h5slice_point *x=a, *y=b;
+  return x->chunk<y->chunk ? -1 : x->chunk>y->chunk ? 1 :
+         x->output<y->output ? -1 : x->output>y->output;
+}
+
+static void h5slice_coords(struct gagrid *grid, gaint z, size_t pos,
+                           gaint t, gaint e, gaint rank, hsize_t *coords) {
+  gaint d, i=(gaint)(pos%grid->isiz), j=(gaint)(pos/grid->isiz);
+  gaint x=grid->dimmin[0]+(grid->idim==0 ? i : 0);
+  gaint y=grid->dimmin[1]+(grid->idim==1 ? i : grid->jdim==1 ? j : 0);
+  for (d=0;d<rank;d++) {
+    if (pvr->units[d]==-100) coords[d]=(hsize_t)(x-1);
+    else if (pvr->units[d]==-101) coords[d]=(hsize_t)(pfi->yrflg ? pfi->dnum[1]-y : y-1);
+    else if (pvr->units[d]==-102) coords[d]=(hsize_t)(pfi->zrflg ? pvr->levels-z : z-1);
+    else if (pvr->units[d]==-103) coords[d]=(hsize_t)(t-1);
+    else if (pvr->units[d]==-104) coords[d]=(hsize_t)(e-1);
+    else coords[d]=(hsize_t)pvr->units[d];
+  }
+}
+
+/* Group sparse element selections by physical HDF5 chunk. Each compressed
+   chunk is requested once, regardless of how often the surface index changes
+   across a row; this also avoids depending on a large decompressed cache. */
+static gaint gah5zslice(struct gagrid *grid, const gaint *indices,
+                        gadouble *values, char *mask) {
+  hid_t prop=-1, memory=-1, dsid, vid;
+  hsize_t shape[16], chunks[16], point[16], *coords=NULL, length;
+  struct h5slice_point *points=NULL;
+  gadouble *buffer=NULL, tolerance, value;
+  size_t size=(size_t)grid->isiz*grid->jsiz, n=0, pos, a,b,i,key,maxgroup=0, groups=0;
+  gaint rank,d,t=grid->dimmin[3],e=grid->dimmin[4],ee=e,oflg=0,rc=1;
+  if (pfi->tmplat) {
+    t=gaopfn(t,e,&ee,&oflg,pfi);
+    if (t==-99999) return 1;
+    if (t==-88888) {
+      for (pos=0;pos<size;pos++) { values[pos]=grid->undef; mask[pos]=0; }
+      return 0;
+    }
+  }
+  if (oflg || pvr->h5varflg<0) {
+    char *name=pvr->longnm[0] ? pvr->longnm : pvr->abbrv;
+    if (h5openvar(pfi->h5id,name,&dsid,&vid)) return 1;
+    pvr->dataspace=dsid; pvr->h5varflg=vid;
+    if (pvr->h5vid==-999 && h5setup()) return 1;
+    pvr->h5vid=vid;
+  }
+  rank=H5Sget_simple_extent_ndims(pvr->dataspace);
+  if (rank<1 || rank>16 || H5Sget_simple_extent_dims(pvr->dataspace,shape,NULL)<0) goto cleanup;
+  for (d=0;d<rank;d++) chunks[d]=shape[d];
+  prop=H5Dget_create_plist(pvr->h5varflg);
+  if (prop<0) goto cleanup;
+  if (H5Pget_layout(prop)==H5D_CHUNKED && H5Pget_chunk(prop,rank,chunks)!=rank) goto cleanup;
+  H5Pclose(prop); prop=-1;
+  points=galloc(size*sizeof(*points),"h5sliceindex");
+  if (!points) goto cleanup;
+  for (pos=0;pos<size;pos++) {
+    if (!indices[pos]) continue;
+    h5slice_coords(grid,indices[pos],pos,t,ee,rank,point);
+    key=0;
+    for (d=0;d<rank;d++) {
+      size_t nchunks;
+      if (!chunks[d] || point[d]>=shape[d]) break;
+      nchunks=(size_t)((shape[d]-1)/chunks[d]+1);
+      if (key>SIZE_MAX/nchunks) goto cleanup;
+      key=key*nchunks+(size_t)(point[d]/chunks[d]);
+    }
+    if (d!=rank) continue;
+    points[n].chunk=key; points[n++].output=pos;
+  }
+  qsort(points,n,sizeof(*points),h5slice_compare);
+  for (a=0;a<n;a=b) {
+    for (b=a+1;b<n && points[b].chunk==points[a].chunk;b++);
+    if (b-a>maxgroup) maxgroup=b-a;
+    groups++;
+  }
+  if (maxgroup>SIZE_MAX/((size_t)rank*sizeof(*coords))) goto cleanup;
+  if (maxgroup) {
+    coords=galloc(maxgroup*(size_t)rank*sizeof(*coords),"h5slicecoords");
+    buffer=galloc(maxgroup*sizeof(*buffer),"h5slicevalues");
+    if (!coords || !buffer) goto cleanup;
+  }
+  tolerance=dequal(pvr->undef,0.0,1e-8)==0 ? 1e-5 : fabs(pvr->undef/EPSILON);
+  for (pos=0;pos<size;pos++) { values[pos]=grid->undef; mask[pos]=0; }
+  gaprogtotal(groups>(size_t)INT_MAX ? INT_MAX : (gaint)groups);
+  groups=0;
+  for (a=0;a<n;a=b) {
+    for (b=a+1;b<n && points[b].chunk==points[a].chunk;b++);
+    for (i=a;i<b;i++)
+      h5slice_coords(grid,indices[points[i].output],points[i].output,t,ee,rank,coords+(i-a)*rank);
+    length=(hsize_t)(b-a);
+    memory=H5Screate_simple(1,&length,NULL);
+    if (memory<0 || H5Sselect_elements(pvr->dataspace,H5S_SELECT_SET,b-a,coords)<0 ||
+        H5Dread(pvr->h5varflg,H5T_NATIVE_DOUBLE,memory,pvr->dataspace,H5P_DEFAULT,buffer)<0) goto cleanup;
+    H5Sclose(memory); memory=-1;
+    for (i=a;i<b;i++) {
+      value=buffer[i-a];
+      if (!isfinite(value) || (value>=pvr->undef-tolerance && value<=pvr->undef+tolerance)) continue;
+      pos=points[i].output;
+      values[pos]=pfi->packflg ? value*pvr->scale+pvr->add : value;
+      mask[pos]=1;
+    }
+    gaprogstep((gaint)++groups);
+  }
+  if (getenv("GA_ZSLICE_TRACE")) {
+    snprintf(pout,1255,"ZSLICE I/O: HDF5 chunks=%lu, selected points=%lu\n",
+             (unsigned long)groups,(unsigned long)n);
+    gaprnt(2,pout);
+  }
+  rc=0;
+cleanup:
+  if (prop>=0) H5Pclose(prop);
+  if (memory>=0) H5Sclose(memory);
+  if (points) gree(points,"h5sliceindex");
+  if (coords) gree(coords,"h5slicecoords");
+  if (buffer) gree(buffer,"h5slicevalues");
+  if (rc) gaprnt(0,"HDF5 I/O Error: ZSLICE indexed chunk read failed\n");
+  return rc;
+}
+#endif
+
+/* Indexed X/Y extraction for unmodified variables. Contiguous equal-Z runs
+   are read together, so ordinary binary and NetCDF/HDF files seek/select only
+   the requested portions. Formats with whole-plane compression use the
+   level-at-a-time evaluator instead. BP5 groups by writer blocks below. */
+gaint gagrdzslice(struct gagrid *grid, const gaint *indices,
+                  gadouble *values, char *mask) {
+  gaint row, x, end, z, y, width=grid->isiz, rows=grid->jsiz, rc;
+  size_t offset, pos, count=0;
+  if (!grid->pfile || !grid->pvar || grid->pfile->type!=1 ||
+      grid->pfile->ppflag || grid->toff ||
+      grid->dimmin[0]<1 || grid->dimmax[0]>grid->pfile->dnum[0] ||
+      grid->dimmin[1]<1 || grid->dimmax[1]>grid->pfile->dnum[1] ||
+      grid->dimmin[3]<1 || grid->dimmax[3]>grid->pfile->dnum[3] ||
+      grid->dimmin[4]<1 || grid->dimmax[4]>grid->pfile->dnum[4]) return -1;
+#if USEADIOS2==1
+  if (grid->pfile->adios2flg)
+    return gaadios_read_zslice(grid->pfile,grid->pvar,grid,indices,values,mask);
+#endif
+  pgr=grid; pfi=grid->pfile; pvr=grid->pvar;
+#if USEHDF5==1
+  if (pfi->ncflg==3) return gah5zslice(grid,indices,values,mask);
+#endif
+  if (grid->pfile->idxflg || grid->idim!=0 || (grid->jdim!=1 && grid->jdim!=-1)) return -1;
+  if (pfi->ncflg==1 && !pfi->tmplat && gancsetup()) return 1;
+  gaprogtotal(rows);
+  for (row=0; row<rows; row++) {
+    offset=(size_t)row*width;
+    y=grid->dimmin[1]+row;
+    for (x=0; x<width; x=end) {
+      pos=offset+x; z=indices[pos]; end=x+1;
+      if (!z) { values[pos]=grid->undef; mask[pos]=0; continue; }
+      while (end<width && indices[offset+end]==z) end++;
+      rc=garrow(grid->dimmin[0]+x,y,z,grid->dimmin[3],grid->dimmin[4],
+                 end-x,values+pos,mask+pos,0);
+      if (rc) return rc;
+      count++;
+    }
+    gaprogstep(row+1);
+  }
+  if (getenv("GA_ZSLICE_TRACE")) {
+    snprintf(pout,1255,"ZSLICE I/O: indexed row runs=%lu, output points=%lu\n",
+             (unsigned long)count,(unsigned long)((size_t)width*rows));
+    gaprnt(2,pout);
+  }
+  return 0;
+}
 
 /*  Basic read of a row of data elements -- a row is always
     in the X direction, which for grads binary is the fastest

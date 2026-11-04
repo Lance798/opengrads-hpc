@@ -1738,6 +1738,130 @@ static void gaadios_plan_convert(struct gafile *pfi, struct gavar *pvar,
 
 #undef GAADIOS_CONVERT
 
+/* Gather a varying Z index on an X/Y grid. One bounding selection per
+   intersecting writer block avoids decompressing the same BP5 block for
+   every surface point or every selected level. Only the selected Z range
+   within each block is materialized, then gathered into the output. */
+gaint gaadios_read_zslice(struct gafile *pfi, struct gavar *pvar,
+                         struct gagrid *grid, const gaint *indices,
+                         gadouble *out, char *mask) {
+  struct gaadios_state *state = pfi->adios2;
+  struct gaadios_plan base, part;
+  adios2_varinfo *info;
+  adios2_blockinfo *block;
+  size_t b, d, size, bytes, strides[GA_ADIOS_MAX_DIMS], nativez, zmin, zmax;
+  size_t nvalues, pos, offset, step, type_size, total=0, reads=0, selected=0;
+  gaint rc, t, status, xd=-1, yd=-1, zd=-1, lo[2], hi[2], a, dim;
+  gaint i,j,x,y, imin,imax,jmin,jmax, k, inside;
+  void *native;
+  if (grid->idim>1 || grid->jdim>1 || pvar->levels<1) return -1;
+  rc=gaadios_plan_grid(pfi,pvar,grid,&base);
+  if (rc) return rc;
+  type_size=gaadios_type_size(base.type);
+  if (!type_size) return 1;
+  for (d=0; d<base.ndims; d++) {
+    if (pvar->units[d]==-100) xd=(gaint)d;
+    if (pvar->units[d]==-101) yd=(gaint)d;
+    if (pvar->units[d]==-102) zd=(gaint)d;
+  }
+  if (zd<0) return -1;
+  t=grid->dimmin[3];
+  status=gaadios_time_available(pfi,pvar,base.variable,t);
+  size=(size_t)grid->isiz*grid->jsiz;
+  if (status==0) { gaadios_set_undefined(pfi,size,out,mask); return 0; }
+  if (status<0 || gaadios_plan_select(&base,t,status)!=adios2_error_none) return 1;
+  step=base.tdim>=0 || status==2 ? 0 : (size_t)(t-1);
+  info=adios2_inquire_blockinfo(state->engine,base.variable,step);
+  if (!info) return -1;
+  if (info->Dims!=(int)base.ndims) { adios2_free_blockinfo(info); return -1; }
+  gaadios_set_undefined(pfi,size,out,mask);
+  gaprogtotal(info->nblocks>(size_t)INT_MAX ? INT_MAX : (gaint)info->nblocks);
+  rc=0;
+  for (b=0; b<info->nblocks; b++) {
+    block=info->BlocksInfo+b;
+    part=base;
+    inside=1;
+    for (d=0; d<base.ndims; d++) {
+      size_t start=base.start[d], end=start+base.count[d];
+      if ((gaint)d==zd) continue;
+      if (!block->Count[d] || start>=block->Start[d]+block->Count[d] ||
+          end<=block->Start[d]) { inside=0; break; }
+      if (start<block->Start[d]) start=block->Start[d];
+      if (end>block->Start[d]+block->Count[d]) end=block->Start[d]+block->Count[d];
+      part.start[d]=start; part.count[d]=end-start;
+    }
+    if (!inside || !block->Count[zd]) continue;
+    lo[0]=grid->dimmin[0]; hi[0]=grid->dimmax[0];
+    lo[1]=grid->dimmin[1]; hi[1]=grid->dimmax[1];
+    if (xd>=0) { lo[0]=(gaint)part.start[xd]+1; hi[0]=lo[0]+(gaint)part.count[xd]-1; }
+    if (yd>=0) {
+      if (pfi->yrflg) {
+        lo[1]=pfi->dnum[1]-(gaint)(part.start[yd]+part.count[yd])+1;
+        hi[1]=pfi->dnum[1]-(gaint)part.start[yd];
+      } else { lo[1]=(gaint)part.start[yd]+1; hi[1]=lo[1]+(gaint)part.count[yd]-1; }
+    }
+    imin=jmin=0; imax=grid->isiz-1; jmax=grid->jsiz-1;
+    for (a=0; a<2; a++) {
+      dim=a ? grid->jdim : grid->idim;
+      if (dim<0) continue;
+      if (a) { jmin=lo[dim]-grid->dimmin[dim]; jmax=hi[dim]-grid->dimmin[dim]; }
+      else { imin=lo[dim]-grid->dimmin[dim]; imax=hi[dim]-grid->dimmin[dim]; }
+    }
+    zmin=(size_t)pvar->levels; zmax=0; inside=0;
+    for (j=jmin; j<=jmax; j++) for (i=imin; i<=imax; i++) {
+      pos=(size_t)j*grid->isiz+i; k=indices[pos];
+      if (!k) continue;
+      nativez=pfi->zrflg ? (size_t)(pvar->levels-k) : (size_t)(k-1);
+      if (nativez<block->Start[zd] || nativez-block->Start[zd]>=block->Count[zd]) continue;
+      if (nativez<zmin) zmin=nativez;
+      if (nativez>zmax) zmax=nativez;
+      inside=1;
+    }
+    if (!inside) continue;
+    part.start[zd]=zmin; part.count[zd]=zmax-zmin+1;
+    nvalues=1;
+    for (d=part.ndims; d>0; d--) {
+      strides[d-1]=nvalues;
+      if (part.count[d-1]>SIZE_MAX/nvalues) { rc=1; break; }
+      nvalues*=part.count[d-1];
+    }
+    if (rc || nvalues>SIZE_MAX/type_size) { rc=1; break; }
+    bytes=nvalues*type_size;
+    native=galloc(bytes,"adios2slice");
+    if (!native) { rc=1; break; }
+    if (gaadios_plan_select(&part,t,status)!=adios2_error_none ||
+        adios2_get(state->engine,part.variable,native,adios2_mode_sync)!=adios2_error_none) {
+      gree(native,"adios2slice"); rc=1; break;
+    }
+    for (j=jmin; j<=jmax; j++) for (i=imin; i<=imax; i++) {
+      gadouble value;
+      pos=(size_t)j*grid->isiz+i; k=indices[pos];
+      if (!k) continue;
+      nativez=pfi->zrflg ? (size_t)(pvar->levels-k) : (size_t)(k-1);
+      if (nativez<zmin || nativez>zmax) continue;
+      x=grid->dimmin[0]+(grid->idim==0 ? i : 0);
+      y=grid->dimmin[1]+(grid->idim==1 ? i : grid->jdim==1 ? j : 0);
+      offset=(nativez-zmin)*strides[zd];
+      if (xd>=0) offset+=((size_t)(x-1)-part.start[xd])*strides[xd];
+      if (yd>=0) offset+=((size_t)(pfi->yrflg ? pfi->dnum[1]-y : y-1)-part.start[yd])*strides[yd];
+      value=gaadios_value(native,part.type,offset);
+      if (!gaadios_is_missing(pfi,pvar,value)) { out[pos]=value; mask[pos]=1; }
+      selected++;
+    }
+    gree(native,"adios2slice");
+    reads++; total+=nvalues;
+    gaprogstep((gaint)b+1);
+  }
+  adios2_free_blockinfo(info);
+  if (getenv("GA_ZSLICE_TRACE")) {
+    snprintf(pout,1255,"ZSLICE I/O: BP5 blocks=%lu, selected points=%lu, native values=%lu\n",
+             (unsigned long)reads,(unsigned long)selected,(unsigned long)total);
+    gaprnt(2,pout);
+  }
+  if (rc) gaprnt(0,"BP5 I/O Error: ZSLICE indexed block read failed\n");
+  return rc;
+}
+
 gaint gaadios_read_grid (struct gafile *pfi, struct gavar *pvar,
                           struct gagrid *pgrid, gadouble *gr, char *gru) {
   struct gaadios_state *state;

@@ -5,6 +5,30 @@ is **4 calculation threads**. OpenMP is detected automatically by
 `configure`; no extra user action is needed with a supported GCC, Clang, or
 vendor compiler.
 
+## Indexed vertical slices
+
+[`zslice`](ZSLICE.md) reads a different Z index at each horizontal point.
+Unmodified BP5 fields group selections by writer block, which avoids repeated
+decompression of a block for each requested model level. HDF5 groups sparse
+element reads by chunk; NetCDF and ordinary binary fields merge adjacent
+same-level points into row segments.
+
+On the compressed Taiwan VVMex output, a 64 x 64 `th` slice at T=73 produced
+4096 identical values through `zslice(th,topo)` and the expression fallback
+`zslice(th+0,topo)`. Three process invocations had median wall times of 0.181 s
+and 0.734 s, respectively, including startup: about 4.1 times faster for this
+region on this host. The direct selection read one writer block region,
+containing 131072 native values. This is an observed comparison for that
+dataset and storage state; different block layouts and index maps can change
+the result substantially.
+
+The gzip-compressed `sea_grass_mountain` HDF5 output was also tested over its
+1024 x 64 domain at T=6. Indexed reads selected 65536 points from 22 chunks;
+both indexed and per-level evaluation took about 0.078 s including startup
+and produced the same statistics. The HDF5 layout and its existing cache made
+the elapsed times similar on this host; chunk grouping is not a universal
+speed multiplier.
+
 ## Choosing the CPU count
 
 Choose the setting that fits the machine and workload:

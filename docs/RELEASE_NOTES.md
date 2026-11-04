@@ -119,6 +119,15 @@ calculations, and native archives for Linux and macOS.
 
 ### Added in 1.0.10
 
+- **Terrain-indexed vertical slices (`zslice`).** `d zslice(u,topo)` selects
+  one Z index at each horizontal grid point; `define` works too.
+  `zslice(lev,topo)` returns the height of the selected atmospheric cell.
+  BP5 gathers by writer block to avoid repeated decompression; HDF5 groups
+  sparse reads by compression chunk. NetCDF and ordinary binary fields read
+  contiguous indexed row segments. Time-file templates are supported. Expressions
+  use a fallback that evaluates only the requested levels. See
+  [ZSLICE.md](ZSLICE.md).
+
 - **Clear Canvas (`clear canvas` / `cc`).** Clear the whole picture, including annotations and
   color bars, while retaining plot settings. Explicit contour levels, colors,
   intervals, line styles, vector scales, and fills used by the last display
