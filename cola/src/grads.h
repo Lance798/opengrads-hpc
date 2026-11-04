@@ -1032,6 +1032,19 @@ gaint gaadios_read_steps (struct gafile *, struct gavar *, struct gagrid *,
                           gaint, gaint, gaint, gadouble *, char *);
 gaint gagrdsteps (struct gagrid *, gaint, gaint, gaint, gadouble *, char *);
 gaint gagrdzslice (struct gagrid *, const gaint *, gadouble *, char *);
+/* A column reduction: edges follow GrADS Z order; factors are per level.
+   Bounds and the result follow the horizontal grid's storage order. */
+struct gazint {
+  gaint nz;
+  const gadouble *edges, *bottom, *top, *factor;
+  gadouble minbottom, maxtop;
+  gadouble *sum;
+  char *mask;
+};
+void gazintadd (struct gazint *, size_t, gaint, gadouble);
+gaint gazintlevel (struct gazint *, gaint);
+gaint gagrdzint (struct gagrid *, struct gazint *);
+gaint gaadios_read_zint (struct gafile *, struct gavar *, struct gagrid *, struct gazint *);
 gaint gaadios_read_zslice (struct gafile *, struct gavar *, struct gagrid *,
                           const gaint *, gadouble *, char *);
 gaint h5setup (void);

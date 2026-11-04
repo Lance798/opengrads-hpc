@@ -118,6 +118,7 @@ Use `q config` to see whether this build includes `adios2-bp5`, `openmp`,
 - [The prompt: Tab completion, usage after errors, ~ in file names](docs/PROMPT.md)
 - [Clear Canvas: clear the picture and reuse plot settings](docs/CLEAR_CANVAS.md)
 - [Z slices: extract a different vertical index at each grid point](docs/ZSLICE.md)
+- [Height-coordinate column integrals and column water vapor](docs/ZINT.md)
 - [OpenMP controls and benchmark notes](docs/PERFORMANCE.md)
 - [Architecture and development roadmap](docs/ARCHITECTURE.md)
 
