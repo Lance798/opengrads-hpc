@@ -1,14 +1,14 @@
-## opengrads-hpc 1.0.12
+## opengrads-hpc 1.0.13
 
 GrADS for modern simulation output: an ADIOS2/BP5 reader, OpenMP-threaded
 calculations, and native archives for Linux and macOS.
 
-### Added since 1.0.12 (not yet released)
+### Added in 1.0.13
 
-- **Blosc-compressed BP5 on macOS.** The macOS release now builds ADIOS2 with
-  Blosc2 enabled and bundles its runtime, matching Linux support. It reads BP5
-  data compressed with BloscLZ, LZ4, LZ4HC, zlib, and Zstd without requiring
-  the writer's Blosc2 installation.
+- **Blosc-compressed BP5 on Linux and macOS.** Both release archives build
+  ADIOS2 with Blosc2 enabled and bundle its runtime. They read BP5 data
+  compressed with BloscLZ, LZ4, LZ4HC, zlib, and Zstd without requiring the
+  writer's Blosc2 installation. See [BP5.md](BP5.md).
 - **Scripts from gscript.** 76 scripts and script functions from Chihiro
   Kodama's gscript (GPLv3) ship in `lib/scripts/gscript`, which the
   launchers put on `GASCRP` after `lib/scripts`: `color` sets shading
@@ -20,7 +20,45 @@ calculations, and native archives for Linux and macOS.
   already here and seven depend on one of them, so those eleven are left
   out; `lib/scripts/gscript/README.md` lists them.
 
-### Fixed since 1.0.12 (not yet released)
+- **Underscores in defined variable names.** Both `define qs_sat=...` and
+  `qs_sat=...` accept letters, digits, and underscores after the initial letter,
+  matching expression parsing and existing file variables. Querying, replacing,
+  and undefining these variables use the full name.
+
+- **P3 saturation diagnostics (`esat`, `qvsat`).** Compute saturation vapor
+  pressure in Pa and mixing ratio in kg/kg from temperature in K and pressure
+  in Pa. Phase defaults to `auto`: ice below 273.15 K and liquid at or above
+  it, following P3. Explicit numeric modes, logical expressions, and compatible
+  phase grids are also supported. Scalar and shared-axis expansion follow
+  GrADS grid rules. The original P3 low-temperature branches and pressure floor
+  are retained. Direct display and define work, with OpenMP acceleration. Help
+  describes the input and output units; the former `es` and `qvs` names are
+  now `esat` and `qvsat`. See [SATURATION.md](SATURATION.md).
+
+- **Height-coordinate column integrals (`zint`).** Integrate expressions with
+  inferred layer thickness, scalar or 2-D bounds, default 0 m bottom/full-column
+  top, and missing-value skipping. Direct display and define work. BP5 writer
+  blocks and HDF5 compression chunks are reduced directly, including field
+  times vertical-profile products. HDF5 profiles now broadcast correctly
+  across horizontal rows in ordinary expressions too. See [ZINT.md](ZINT.md).
+
+- **Terrain-indexed vertical slices (`zslice`).** `d zslice(u,topo)` selects
+  one Z index at each horizontal grid point; `define` works too.
+  `zslice(lev,topo)` returns the height of the selected atmospheric cell.
+  BP5 gathers by writer block to avoid repeated decompression; HDF5 groups
+  sparse reads by compression chunk. NetCDF and ordinary binary fields read
+  contiguous indexed row segments. Time-file templates are supported. See
+  [ZSLICE.md](ZSLICE.md).
+
+- **Clear Canvas (`clear canvas` / `cc`).** Clear the whole picture, including
+  annotations and color bars, while retaining plot settings. Explicit contour
+  levels, colors, intervals, line styles, vector scales, and fills used by the
+  last display can be reused on the next one. Automatic levels and colors
+  remain automatic; later `set` commands take precedence. Existing `c` and
+  `clear norset` keep their behavior. `cc` participates in undo and command
+  completion. See [CLEAR_CANVAS.md](CLEAR_CANVAS.md).
+
+### Fixed in 1.0.13
 
 - **`GASCRP` with directories separated by colons.** GrADS split the list
   at colons, semicolons and commas as well as spaces, but went on to the
@@ -122,46 +160,6 @@ calculations, and native archives for Linux and macOS.
   cells.
 
 ### Added in 1.0.10
-
-- **Underscores in defined variable names.** Both `define qs_sat=...` and
-  `qs_sat=...` accept letters, digits, and underscores after the initial letter,
-  matching expression parsing and existing file variables. Querying, replacing,
-  and undefining these variables use the full name.
-
-- **P3 saturation diagnostics (`esat`, `qvsat`).** Compute saturation vapor
-  pressure in Pa and mixing ratio in kg/kg from temperature in K and pressure
-  in Pa. Phase defaults to `auto`: ice below 273.15 K and liquid at or above
-  it, following P3. Explicit numeric modes, logical expressions, and compatible
-  phase grids are also supported.
-  Scalar and shared-axis expansion follow GrADS grid rules. The original P3
-  low-temperature branches and pressure floor are retained. Direct display
-  and define work, with OpenMP acceleration. Error help describes the physical
-  quantity and units; `qvsat` explicitly identifies its output as mixing ratio.
-  The initial `es` and `qvs` names have been removed. See [SATURATION.md](SATURATION.md).
-
-- **Height-coordinate column integrals (`zint`).** Integrate expressions with
-  inferred layer thickness, scalar or 2-D bounds, default 0 m bottom/full-column
-  top, and missing-value skipping. Direct display and define work. BP5 writer
-  blocks and HDF5 compression chunks are reduced directly, including field
-  times vertical-profile products. HDF5 profiles now broadcast correctly
-  across horizontal rows in ordinary expressions too. See [ZINT.md](ZINT.md).
-
-- **Terrain-indexed vertical slices (`zslice`).** `d zslice(u,topo)` selects
-  one Z index at each horizontal grid point; `define` works too.
-  `zslice(lev,topo)` returns the height of the selected atmospheric cell.
-  BP5 gathers by writer block to avoid repeated decompression; HDF5 groups
-  sparse reads by compression chunk. NetCDF and ordinary binary fields read
-  contiguous indexed row segments. Time-file templates are supported. Expressions
-  use a fallback that evaluates only the requested levels. See
-  [ZSLICE.md](ZSLICE.md).
-
-- **Clear Canvas (`clear canvas` / `cc`).** Clear the whole picture, including annotations and
-  color bars, while retaining plot settings. Explicit contour levels, colors,
-  intervals, line styles, vector scales, and fills used by the last display
-  can be reused on the next one. Automatic levels and colors remain automatic;
-  later `set` commands take precedence. Existing `c` and `clear norset` keep
-  their behavior. `cc` participates in undo and command completion. See
-  [CLEAR_CANVAS.md](CLEAR_CANVAS.md).
 
 - **Plots in the terminal, without X.** A new display, `-d Term`, draws GrADS
   pictures inside the terminal (iTerm2, WezTerm, kitty, Ghostty, and sixel
