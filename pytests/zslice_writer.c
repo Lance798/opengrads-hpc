@@ -138,7 +138,11 @@ int main(int argc, char **argv) {
     adios2_adios *adios=adios2_init_serial();
     int compressed;
     check(adios!=NULL,"ADIOS init");
+#ifdef ZS_BLOSC
     for (compressed=0;compressed<2;compressed++) {
+#else
+    for (compressed=0;compressed<1;compressed++) {
+#endif
       const size_t shape[3]={NZ,NY,NX}, start[3]={0,0,0}, count[3]={2,NY,8};
       const size_t rshape[1]={NZ}, rstart[1]={0};
       const double rho[NZ]={1.2,1.1,1.0,0.9};

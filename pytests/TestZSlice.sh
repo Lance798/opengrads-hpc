@@ -12,6 +12,10 @@ if [[ -x "$adios_root/bin/adios2-config" ]]; then
   read -r -a aflags <<< "$("$adios_root/bin/adios2-config" --serial --c-flags)"
   read -r -a alibs <<< "$("$adios_root/bin/adios2-config" --serial --c-libs)"
   flags+=(-DZS_ADIOS "${aflags[@]}"); libs+=("${alibs[@]}")
+  adios_config="$adios_root/include/adios2/common/ADIOSConfig.h"
+  if [[ -r "$adios_config" ]] && grep -Eq '^#define ADIOS2_HAVE_BLOSC2($|[[:space:]]+1)' "$adios_config"; then
+    flags+=(-DZS_BLOSC)
+  fi
 fi
 nc_config="${OPENGRADS_TEST_NETCDF_ROOT:+$OPENGRADS_TEST_NETCDF_ROOT/bin/}nc-config"
 if command -v "$nc_config" >/dev/null 2>&1; then
@@ -99,7 +103,8 @@ if (root/'slice.nc').exists() and 'netcdf' in config:
 if (root/'slice.h5').exists() and 'hdf5' in config:
     formats += [('h5','slice.h5','hdf5_grid'),('h5-template','slice%tm1.h5','hdf5_grid')]
 if (root/'slice.bp').exists() and 'adios2-bp5' in config:
-    formats += [('bp','slice.bp','bp5'),('bpzstd','slicezstd.bp','bp5')]
+    formats += [('bp','slice.bp','bp5')]
+    if (root/'slicezstd.bp').exists(): formats += [('bpzstd','slicezstd.bp','bp5')]
 for label, dataset, dtype in formats:
     for reverse in (False,True):
         name=label+('-reverse' if reverse else '')
