@@ -1,6 +1,6 @@
 # Saturation vapor pressure and mixing ratio
 
-The built-in functions `es(T[,phase])` and `qvs(T,p[,phase])` use the saturation
+The built-in functions `es(T[,phase=auto])` and `qvs(T,p[,phase=auto])` use the saturation
 formulation of VVM P3's `polysvp1` and `qv_sat`. They work in `display` (`d`),
 `define`, and other expressions, including `zslice` and `zint`.
 
@@ -8,7 +8,7 @@ formulation of VVM P3's `polysvp1` and `qv_sat`. They work in `display` (`d`),
 | --- | --- |
 | `T` | Actual air temperature in K |
 | `p` | Air pressure in Pa |
-| `phase` | Optional number, logical expression, or compatible grid; default 0 |
+| `phase` | Optional `auto`, number, logical expression, or compatible grid; default `auto` |
 | `es` result | Saturation vapor pressure in Pa |
 | `qvs` result | Saturation mixing ratio in kg/kg, relative to dry-air mass |
 
@@ -16,11 +16,11 @@ For already prepared temperature and pressure fields `tk` and `p_pa`:
 
 ```text
 d es(tk)
-d es(tk,1)
-d es(tk,tk<273.15)
+d es(tk,auto)
+d es(tk,0)
 d qvs(tk,p_pa)
-d qvs(tk,p_pa,tk<273.15)
-define qs = qvs(tk,p_pa,tk<273.15)
+d qvs(tk,p_pa,auto)
+define qs = qvs(tk,p_pa)
 ```
 
 The functions do not convert potential temperature, Exner pressure, hPa, or
@@ -32,19 +32,35 @@ water-vapor mixing ratio are not required inputs.
 
 ## Phase and formulas
 
-A **positive phase selects ice below 273.15 K**. Zero or a negative phase selects
-liquid. At 273.15 K and above, both selections use liquid, as in P3.
-Consequently, both the conventional 0/1 choices and GrADS logical expressions
-work: GrADS comparisons return 1 for true and -1 for false.
+Omitting phase, or passing the literal `auto`, selects **ice strictly below
+273.15 K and liquid at 273.15 K and above**, following P3's ice-selection
+branch. The numeric modes retain their existing P3 behavior:
+
+| Phase | T < 273.15 K | T >= 273.15 K |
+| --- | --- | --- |
+| Omitted / `auto` | Ice | Liquid |
+| `0` | Liquid | Liquid |
+| `1` | Ice | Liquid |
+
+Thus `auto` and `1` give the same result; neither forces the ice polynomial
+above freezing. Explicit `0` permits supercooled liquid saturation. In
+particular, exactly 273.15 K uses the liquid coefficients in every mode.
 
 ```text
-d qvs(tk,p_pa,tk<273.15)
+d qvs(tk,p_pa)
+d qvs(tk,p_pa,auto)
+d qvs(tk,p_pa,0)
 ```
 
-This selects ice saturation below freezing and liquid saturation above it.
-The default remains liquid, including supercooled liquid at colder temperatures.
-A phase field can vary independently of temperature. A missing phase propagates
-as missing, including at warm points.
+The `[phase=auto]` notation documents an optional argument and its default;
+do not type the brackets or `phase=` in the command. Use the positional token
+`auto`, or omit that argument entirely.
+
+Existing logical expressions and compatible phase grids remain supported.
+A positive value selects the P3 ice branch; zero or a negative value selects
+liquid. GrADS comparisons return 1 for true and -1 for false. A missing phase
+propagates as missing, including at warm points. `auto` is a reserved literal
+in the phase position and is evaluated from each temperature point.
 
 The Flatau et al. (1992, table 4) polynomials are evaluated in double precision.
 The original Goff-Gratch branches are retained for liquid below 202 K and ice
@@ -107,7 +123,7 @@ OPENGRADS_ADIOS2_ROOT=/path/to/adios2 \
 
 The test creates analytic float/double fixtures for binary, compressed NetCDF,
 compressed HDF5 (including time templates), BP5, and compressed BP5, when those
-backends are available. It checks phase comparisons and missing phase fields,
+backends are available. It checks omitted/explicit `auto`, phase comparisons and missing phase fields,
 scalar and X/Y/Z expansion, reversed axes, two times, nonuniform heights,
 volume definitions, incompatible coordinates, invalid arguments, pressure
 floor behavior, and display/define PNG equality. The OpenMP regression also
@@ -133,6 +149,6 @@ levels with 4096 points each were compared against the original double-precision
 Fortran, including liquid, ice, conditional phase, and defined results. Native
 ADIOS2/HDF5 reads supplied the reference data independently of GrADS. Temperature
 was converted with `th*pibar`; pressure used the Exner definition and constants
-confirmed in each run's saved source/configuration. All 90112 compared values
+confirmed in each run's saved source/configuration. All 172032 compared values
 per dataset agreed within the test tolerance, with zero observed numerical
 difference in these cases.

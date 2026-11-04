@@ -50,7 +50,7 @@ water=(6.11239921,.443987641,.142986287e-1,.264847430e-3,.302950461e-5,.20673945
 ice=(6.11147274,.503160820,.188439774e-1,.420895665e-3,.615021634e-5,.602588177e-7,.385852041e-9,.146898966e-11,.252751365e-14)
 hardcopy='Cairo' if any((Path(build)/('src/.libs/libgxpCairo'+ext)).exists() for ext in ('.so','.dylib')) else 'gxdummy'
 
-def es(t,phase=0):
+def es(t,phase=1):
     if t is None or phase is None or not math.isfinite(t) or not math.isfinite(phase) or t<=0:return None
     frozen=phase>0 and t<273.15
     if t>=(195.8 if frozen else 202):
@@ -62,7 +62,7 @@ def es(t,phase=0):
         exponent=-7.90298*(373.16/t-1)+5.02808*math.log10(373.16/t)-1.3816e-7*(10**(11.344*(1-t/373.16))-1)+8.1328e-3*(10**(-3.49149*(373.16/t-1))-1)+math.log10(1013.246)
     return 100*10**exponent
 
-def qvs(t,p,phase=0):
+def qvs(t,p,phase=1):
     e=es(t,phase)
     return None if e is None or p is None or not math.isfinite(p) or p<=0 else .622*e/max(.001,p-e)
 
@@ -162,12 +162,13 @@ for label,dataset,dtype in formats:
         expressions=['es(f*0.1+180)','es(f*0.1+180,0)','es(f*0.1+180,1)','es(f*0.1+180,f*0.1+180<273.15)',
                      'qvs(f*0.1+180,50000+surface*10)','qvs(f*0.1+180,50000+surface*10,f*0.1+180<273.15)',
                      'qvs(f*0.1+180,100000,1)','qvs(250,50000+surface*10,1)','es(250,kmap)',
-                     'qvs(f*0.1+180,kmap*10000,1)','qvs(250,50000+surface*10,kmap)']
+                     'qvs(f*0.1+180,kmap*10000,1)','qvs(250,50000+surface*10,kmap)',
+                     'es(f*0.1+180,auto)','qvs(f*0.1+180,50000+surface*10,auto)']
         commands+=''.join('d '+expr+'\n' for expr in expressions)
         funcs=[lambda a:es(a[0]),lambda a:es(a[0],0),lambda a:es(a[0],1),lambda a:es(a[0],a[2]),
                lambda a:qvs(a[0],a[1]),lambda a:qvs(a[0],a[1],a[2]),lambda a:qvs(a[0],100000,1),
                lambda a:qvs(250,a[1],1),lambda a:es(250,a[3]),
-               lambda a:qvs(a[0],None if a[3] is None else a[3]*10000,1),lambda a:qvs(250,a[1],a[3])]
+               lambda a:qvs(a[0],None if a[3] is None else a[3]*10000,1),lambda a:qvs(250,a[1],a[3]),lambda a:es(a[0]),lambda a:qvs(a[0],a[1])]
         wanted += [[fn(v) for v in values] for fn in funcs]
     out=run(prefix+commands);actual=grids(out)
     assert len(actual)==len(wanted),(name,len(actual),len(wanted))
@@ -208,6 +209,8 @@ for label,dataset,dtype in formats:
 prefix='open '+str(root/'dat.ctl')+'\nset gxout print\nset prnopts %.17g 16 1\n'
 commands='';wanted=[]
 for t in [150,190,195.8-1e-5,195.8,195.8+1e-5,202-1e-5,202,202+1e-5,250,273.15-1e-5,273.15,273.15+1e-5,300,330]:
+  commands+='d es(%s)\nd es(%s,auto)\nd qvs(%s,100000)\nd qvs(%s,100000,auto)\n'%(t,t,t,t)
+  wanted += [[es(t)],[es(t)],[qvs(t,100000)],[qvs(t,100000)]]
   for phase in (0,1,-1,.5):
     commands+='d es(%s,%s)\nd qvs(%s,100000,%s)\n'%(t,phase,t,phase)
     wanted += [[es(t,phase)],[qvs(t,100000,phase)]]
@@ -217,7 +220,7 @@ for expr,value in [('es(0)',None),('es(-1)',None),('qvs(300,0)',None),('qvs(300,
   commands+='d '+expr+'\n';wanted.append([value])
 actual=grids(run(prefix+commands));assert len(actual)==len(wanted)
 for i,(a,w) in enumerate(zip(actual,wanted)):same(a,w,'scalar case '+str(i))
-# Reject incompatible shared axes and malformed/station/unknown arguments cleanly.
+# Reject incompatible shared axes and malformed/unknown arguments cleanly.
 different=root/'different.ctl';different.write_text((root/'dat.ctl').read_text().replace('xdef 16 linear 10 0.1','xdef 16 linear 10 0.2'))
 out=run(prefix+'open '+str(different)+'\nd qvs(f.1*0.1+180,surface.2)\n'+
         'd es(f.1*0.1+180,kmap.2)\nd qvs(250,surface.1,kmap.2)\n'+
@@ -225,5 +228,5 @@ out=run(prefix+'open '+str(different)+'\nd qvs(f.1*0.1+180,surface.2)\n'+
         'd es(250,unknown)\nd qvs(250,unknown)\n',errors=True)
 assert out.count('matching shared coordinate axes')==3,out
 assert 'ES error:' in out and 'QVS error:' in out,out
-print('Saturation regression passed: P3 branches, conditional phases, scalar/axis expansion, missing/invalid inputs, pressure guard, volumes, display/define, and compressed readers.')
+print('Saturation regression passed: P3 branches, default/explicit auto, conditional phases, scalar/axis expansion, missing/invalid inputs, pressure guard, volumes, display/define, and compressed readers.')
 PY

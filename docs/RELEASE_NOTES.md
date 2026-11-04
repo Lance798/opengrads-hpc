@@ -121,7 +121,9 @@ calculations, and native archives for Linux and macOS.
 
 - **P3 saturation diagnostics (`es`, `qvs`).** Compute saturation vapor
   pressure in Pa and mixing ratio in kg/kg from temperature in K and pressure
-  in Pa. Phase accepts numbers, logical expressions, and compatible grids.
+  in Pa. Phase defaults to `auto`: ice below 273.15 K and liquid at or above
+  it, following P3. Explicit numeric modes, logical expressions, and compatible
+  phase grids are also supported.
   Scalar and shared-axis expansion follow GrADS grid rules. The original P3
   low-temperature branches and pressure floor are retained. Direct display
   and define work, with OpenMP acceleration. See [SATURATION.md](SATURATION.md).
