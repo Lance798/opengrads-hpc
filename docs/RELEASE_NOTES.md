@@ -119,14 +119,16 @@ calculations, and native archives for Linux and macOS.
 
 ### Added in 1.0.10
 
-- **P3 saturation diagnostics (`es`, `qvs`).** Compute saturation vapor
+- **P3 saturation diagnostics (`esat`, `qvsat`).** Compute saturation vapor
   pressure in Pa and mixing ratio in kg/kg from temperature in K and pressure
   in Pa. Phase defaults to `auto`: ice below 273.15 K and liquid at or above
   it, following P3. Explicit numeric modes, logical expressions, and compatible
   phase grids are also supported.
   Scalar and shared-axis expansion follow GrADS grid rules. The original P3
   low-temperature branches and pressure floor are retained. Direct display
-  and define work, with OpenMP acceleration. See [SATURATION.md](SATURATION.md).
+  and define work, with OpenMP acceleration. Error help describes the physical
+  quantity and units; `qvsat` explicitly identifies its output as mixing ratio.
+  The initial `es` and `qvs` names have been removed. See [SATURATION.md](SATURATION.md).
 
 - **Height-coordinate column integrals (`zint`).** Integrate expressions with
   inferred layer thickness, scalar or 2-D bounds, default 0 m bottom/full-column

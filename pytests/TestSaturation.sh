@@ -50,7 +50,7 @@ water=(6.11239921,.443987641,.142986287e-1,.264847430e-3,.302950461e-5,.20673945
 ice=(6.11147274,.503160820,.188439774e-1,.420895665e-3,.615021634e-5,.602588177e-7,.385852041e-9,.146898966e-11,.252751365e-14)
 hardcopy='Cairo' if any((Path(build)/('src/.libs/libgxpCairo'+ext)).exists() for ext in ('.so','.dylib')) else 'gxdummy'
 
-def es(t,phase=1):
+def esat(t,phase=1):
     if t is None or phase is None or not math.isfinite(t) or not math.isfinite(phase) or t<=0:return None
     frozen=phase>0 and t<273.15
     if t>=(195.8 if frozen else 202):
@@ -62,8 +62,8 @@ def es(t,phase=1):
         exponent=-7.90298*(373.16/t-1)+5.02808*math.log10(373.16/t)-1.3816e-7*(10**(11.344*(1-t/373.16))-1)+8.1328e-3*(10**(-3.49149*(373.16/t-1))-1)+math.log10(1013.246)
     return 100*10**exponent
 
-def qvs(t,p,phase=1):
-    e=es(t,phase)
+def qvsat(t,p,phase=1):
+    e=esat(t,phase)
     return None if e is None or p is None or not math.isfinite(p) or p<=0 else .622*e/max(.001,p-e)
 
 def run(commands,errors=False):
@@ -116,7 +116,7 @@ if Path(p3source).is_file() and shutil.which(compiler[0]):
         output=subprocess.check_output([str(executable)],input=''.join('%s %s %s\n'%row for row in selected),universal_newlines=True)
         maxrelative=0
         for row,line in zip(selected,output.splitlines()):
-            t,p,phase=row;got=[float(x) for x in line.split()];wanted=[es(t,phase),qvs(t,p,phase)]
+            t,p,phase=row;got=[float(x) for x in line.split()];wanted=[esat(t,phase),qvsat(t,p,phase)]
             for a,w in zip(got,wanted):
                 relative=abs(a-w)/w;maxrelative=max(maxrelative,relative)
                 assert abs(a-w)<=max(2e-10,abs(w)*(3e-10 if double else 1e-2)),(row,a,w)
@@ -159,16 +159,16 @@ for label,dataset,dtype in formats:
             km=1+(x//2+yy+t)%4
             if yy==0 and x<6:km=(0,5,1.5,None,None,None)[x]
             values.append((temp,pressure,phase,km))
-        expressions=['es(f*0.1+180)','es(f*0.1+180,0)','es(f*0.1+180,1)','es(f*0.1+180,f*0.1+180<273.15)',
-                     'qvs(f*0.1+180,50000+surface*10)','qvs(f*0.1+180,50000+surface*10,f*0.1+180<273.15)',
-                     'qvs(f*0.1+180,100000,1)','qvs(250,50000+surface*10,1)','es(250,kmap)',
-                     'qvs(f*0.1+180,kmap*10000,1)','qvs(250,50000+surface*10,kmap)',
-                     'es(f*0.1+180,auto)','qvs(f*0.1+180,50000+surface*10,auto)']
+        expressions=['esat(f*0.1+180)','esat(f*0.1+180,0)','esat(f*0.1+180,1)','esat(f*0.1+180,f*0.1+180<273.15)',
+                     'qvsat(f*0.1+180,50000+surface*10)','qvsat(f*0.1+180,50000+surface*10,f*0.1+180<273.15)',
+                     'qvsat(f*0.1+180,100000,1)','qvsat(250,50000+surface*10,1)','esat(250,kmap)',
+                     'qvsat(f*0.1+180,kmap*10000,1)','qvsat(250,50000+surface*10,kmap)',
+                     'esat(f*0.1+180,auto)','qvsat(f*0.1+180,50000+surface*10,auto)']
         commands+=''.join('d '+expr+'\n' for expr in expressions)
-        funcs=[lambda a:es(a[0]),lambda a:es(a[0],0),lambda a:es(a[0],1),lambda a:es(a[0],a[2]),
-               lambda a:qvs(a[0],a[1]),lambda a:qvs(a[0],a[1],a[2]),lambda a:qvs(a[0],100000,1),
-               lambda a:qvs(250,a[1],1),lambda a:es(250,a[3]),
-               lambda a:qvs(a[0],None if a[3] is None else a[3]*10000,1),lambda a:qvs(250,a[1],a[3]),lambda a:es(a[0]),lambda a:qvs(a[0],a[1])]
+        funcs=[lambda a:esat(a[0]),lambda a:esat(a[0],0),lambda a:esat(a[0],1),lambda a:esat(a[0],a[2]),
+               lambda a:qvsat(a[0],a[1]),lambda a:qvsat(a[0],a[1],a[2]),lambda a:qvsat(a[0],100000,1),
+               lambda a:qvsat(250,a[1],1),lambda a:esat(250,a[3]),
+               lambda a:qvsat(a[0],None if a[3] is None else a[3]*10000,1),lambda a:qvsat(250,a[1],a[3]),lambda a:esat(a[0]),lambda a:qvsat(a[0],a[1])]
         wanted += [[fn(v) for v in values] for fn in funcs]
     out=run(prefix+commands);actual=grids(out)
     assert len(actual)==len(wanted),(name,len(actual),len(wanted))
@@ -176,57 +176,71 @@ for label,dataset,dtype in formats:
     # One-axis results from mean exercise expansion along each coordinate axis.
     out=run(prefix+'set t 1\nset z 2\n'+
             'define tt=f*0.1+180\ndefine pp=50000+surface*10\n'+
-            'd qvs(mean(tt,y=1,y=8),pp,1)\nd es(tt,mean(surface,x=1,x=16)>940)\n')
+            'd qvsat(mean(tt,y=1,y=8),pp,1)\nd esat(tt,mean(surface,x=1,x=16)>940)\n')
     yyvalues=list(reversed(range(8))) if reverse else list(range(8));zz=2 if reverse else 1
     expected=[];expectedphase=[]
     for y,yy in enumerate(yyvalues):
       for x in range(16):
         avgtemp=(100*(zz+1)+35+x)*0.1+180
-        expected.append(qvs(avgtemp,50000+(900+10*yy+x)*10,1))
-        expectedphase.append(es((100*(zz+1)+10*yy+x)*0.1+180,1 if yy>=4 else -1))
+        expected.append(qvsat(avgtemp,50000+(900+10*yy+x)*10,1))
+        expectedphase.append(esat((100*(zz+1)+10*yy+x)*0.1+180,1 if yy>=4 else -1))
     same(grids(out)[0],expected,name+' Y expansion');same(grids(out)[1],expectedphase,name+' X expansion')
     if dtype in ('bp5','hdf5_grid'):
       out=run(prefix+'set y 4\nset z 1 4\n'+
-              'd qvs(f*0.1+180,50000*rho,1)\n'+
-              'd qvs(f*0.1+180,mean(50000*rho,x=1,x=16),f*0.1+180<273.15)\n')
+              'd qvsat(f*0.1+180,50000*rho,1)\n'+
+              'd qvsat(f*0.1+180,mean(50000*rho,x=1,x=16),f*0.1+180<273.15)\n')
       expected=[];yy=4 if reverse else 3
       for z in range(4):
         zz=3-z if reverse else z
-        for x in range(16):expected.append(qvs((100*(zz+1)+10*yy+x)*0.1+180,50000*(1.2,1.1,1.,.9)[zz],1))
+        for x in range(16):expected.append(qvsat((100*(zz+1)+10*yy+x)*0.1+180,50000*(1.2,1.1,1.,.9)[zz],1))
       same(grids(out)[0],expected,name+' Z profile');same(grids(out)[1],expected,name+' Z expansion')
     # Define a volume and select a level again; direct display must agree.
-    out=run(prefix+'set z 1 4\ndefine cube=qvs(f*0.1+180,100000,1)\nset z 3\n'+
-            'd cube\nd qvs(f*0.1+180,100000,1)\n')
+    out=run(prefix+'set z 1 4\ndefine cube=qvsat(f*0.1+180,100000,1)\nset z 3\n'+
+            'd cube\nd qvsat(f*0.1+180,100000,1)\n')
     a=grids(out);same(a[0],a[1],name+' volume define')
     if not reverse and hardcopy=='Cairo':
       a,b=root/(label+'-direct.png'),root/(label+'-defined.png')
       run('open '+str(ctl)+'\nset t 2\nset grads off\nset timelab off\nset gxout shaded\n'+
-          'd qvs(f*0.1+180,50000+surface*10,1)\nprintim '+str(a)+' x640 y480\nclear canvas\n'+
-          'define qs=qvs(f*0.1+180,50000+surface*10,1)\nd qs\nprintim '+str(b)+' x640 y480\n')
+          'd qvsat(f*0.1+180,50000+surface*10,1)\nprintim '+str(a)+' x640 y480\nclear canvas\n'+
+          'define qs=qvsat(f*0.1+180,50000+surface*10,1)\nd qs\nprintim '+str(b)+' x640 y480\n')
       assert a.read_bytes()==b.read_bytes(),name+' display/define PNG mismatch'
     print('Saturation passed: '+name)
 
 prefix='open '+str(root/'dat.ctl')+'\nset gxout print\nset prnopts %.17g 16 1\n'
 commands='';wanted=[]
 for t in [150,190,195.8-1e-5,195.8,195.8+1e-5,202-1e-5,202,202+1e-5,250,273.15-1e-5,273.15,273.15+1e-5,300,330]:
-  commands+='d es(%s)\nd es(%s,auto)\nd qvs(%s,100000)\nd qvs(%s,100000,auto)\n'%(t,t,t,t)
-  wanted += [[es(t)],[es(t)],[qvs(t,100000)],[qvs(t,100000)]]
+  commands+='d esat(%s)\nd esat(%s,auto)\nd qvsat(%s,100000)\nd qvsat(%s,100000,auto)\n'%(t,t,t,t)
+  wanted += [[esat(t)],[esat(t)],[qvsat(t,100000)],[qvsat(t,100000)]]
   for phase in (0,1,-1,.5):
-    commands+='d es(%s,%s)\nd qvs(%s,100000,%s)\n'%(t,phase,t,phase)
-    wanted += [[es(t,phase)],[qvs(t,100000,phase)]]
-for expr,value in [('es(0)',None),('es(-1)',None),('qvs(300,0)',None),('qvs(300,-1)',None),
-                   ('qvs(300,100)',qvs(300,100)),('es(250,maskout(1,-1))',None),
-                   ('qvs(250,maskout(1,-1))',None),('qvs(250,100000,maskout(1,-1))',None)]:
+    commands+='d esat(%s,%s)\nd qvsat(%s,100000,%s)\n'%(t,phase,t,phase)
+    wanted += [[esat(t,phase)],[qvsat(t,100000,phase)]]
+for expr,value in [('esat(0)',None),('esat(-1)',None),('qvsat(300,0)',None),('qvsat(300,-1)',None),
+                   ('qvsat(300,100)',qvsat(300,100)),('esat(250,maskout(1,-1))',None),
+                   ('qvsat(250,maskout(1,-1))',None),('qvsat(250,100000,maskout(1,-1))',None)]:
   commands+='d '+expr+'\n';wanted.append([value])
 actual=grids(run(prefix+commands));assert len(actual)==len(wanted)
 for i,(a,w) in enumerate(zip(actual,wanted)):same(a,w,'scalar case '+str(i))
 # Reject incompatible shared axes and malformed/unknown arguments cleanly.
 different=root/'different.ctl';different.write_text((root/'dat.ctl').read_text().replace('xdef 16 linear 10 0.1','xdef 16 linear 10 0.2'))
-out=run(prefix+'open '+str(different)+'\nd qvs(f.1*0.1+180,surface.2)\n'+
-        'd es(f.1*0.1+180,kmap.2)\nd qvs(250,surface.1,kmap.2)\n'+
-        'd es()\nd es(250,0,1)\nd qvs(250)\nd qvs(250,100000,0,1)\n'+
-        'd es(250,unknown)\nd qvs(250,unknown)\n',errors=True)
+out=run(prefix+'open '+str(different)+'\nd qvsat(f.1*0.1+180,surface.2)\n'+
+        'd esat(f.1*0.1+180,kmap.2)\nd qvsat(250,surface.1,kmap.2)\n'+
+        'd esat()\nd esat(250,0,1)\nd qvsat(250)\nd qvsat(250,100000,0,1)\n'+
+        'd esat(250,unknown)\nd qvsat(250,unknown)\n',errors=True)
 assert out.count('matching shared coordinate axes')==3,out
-assert 'ES error:' in out and 'QVS error:' in out,out
+assert 'ESAT error:' in out and 'QVSAT error:' in out,out
+# Help on bare names includes a short physical description and units.
+for name,description,usage in (
+    ('esat','ESAT: saturation vapor pressure (Pa).','esat(T[,phase=auto])'),
+    ('qvsat','QVSAT: saturation water vapor mixing ratio (kg/kg of dry air).','qvsat(T,p[,phase=auto])')):
+    out=run(prefix+'d '+name+'\n',errors=True)
+    assert description in out and usage in out,out
+# Errors in expressions and grid alignment also identify the mixing ratio.
+for expr in ('qvsat(unknown,100000)','qvsat(250,unknown)','qvsat(250,100000,unknown)'):
+    out=run(prefix+'d '+expr+'\n',errors=True)
+    assert 'QVSAT: saturation water vapor mixing ratio (kg/kg of dry air).' in out,out
+# The former function names were removed rather than retained as aliases.
+for name in ('es','qvs'):
+    out=run(prefix+'d '+name+'(250,100000)\n',errors=True)
+    assert "'%s' not a variable or function name"%name in out,out
 print('Saturation regression passed: P3 branches, default/explicit auto, conditional phases, scalar/axis expansion, missing/invalid inputs, pressure guard, volumes, display/define, and compressed readers.')
 PY
