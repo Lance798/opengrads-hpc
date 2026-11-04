@@ -122,7 +122,7 @@ for index, command in enumerate(('clear canvas', 'CC', 'Clear Canvas', 'c canvas
 script = root / 'canvas.gs'
 script.write_text("'clear canvas'\n'd ts'\n")
 out = run(old + 'd ts\nset undo 10\n' + f'run {script}\nq undo\nq shades\nundo\nq shades\n')
-assert '1 of 10 steps available' in out and shades(out) == shades(ref) * 2, out
+assert '2 steps can be undone (up to 10 kept)' in out and shades(out) == shades(ref) * 2, out
 out = run(old + 'd ts\nset gxout stat\nd ts\nset gxout shaded\ncc\nd ts\nq shades\n')
 assert shades(out) == shades(ref), out
 
