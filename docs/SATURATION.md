@@ -1,6 +1,6 @@
 # Saturation vapor pressure and mixing ratio
 
-The built-in functions `es(T[,phase=auto])` and `qvs(T,p[,phase=auto])` use the saturation
+The built-in functions `esat(T[,phase=auto])` and `qvsat(T,p[,phase=auto])` use the saturation
 formulation of VVM P3's `polysvp1` and `qv_sat`. They work in `display` (`d`),
 `define`, and other expressions, including `zslice` and `zint`.
 
@@ -9,26 +9,41 @@ formulation of VVM P3's `polysvp1` and `qv_sat`. They work in `display` (`d`),
 | `T` | Actual air temperature in K |
 | `p` | Air pressure in Pa |
 | `phase` | Optional `auto`, number, logical expression, or compatible grid; default `auto` |
-| `es` result | Saturation vapor pressure in Pa |
-| `qvs` result | Saturation mixing ratio in kg/kg, relative to dry-air mass |
+| `esat` result | Saturation vapor pressure in Pa |
+| `qvsat` result | Saturation mixing ratio in kg/kg, relative to dry-air mass |
 
 For already prepared temperature and pressure fields `tk` and `p_pa`:
 
 ```text
-d es(tk)
-d es(tk,auto)
-d es(tk,0)
-d qvs(tk,p_pa)
-d qvs(tk,p_pa,auto)
-define qs = qvs(tk,p_pa)
+d esat(tk)
+d esat(tk,auto)
+d esat(tk,0)
+d qvsat(tk,p_pa)
+d qvsat(tk,p_pa,auto)
+define qs = qvsat(tk,p_pa)
 ```
 
 The functions do not convert potential temperature, Exner pressure, hPa, or
 Celsius. Supply actual temperature and pressure explicitly. For VVM, actual
 temperature can be prepared as `th*pibar` when those fields have compatible
 grids. Pressure conversion from Exner must use the simulation's own reference
-pressure and exponent; `qvs` accepts pressure itself. Density and the actual
+pressure and exponent; `qvsat` accepts pressure itself. Density and the actual
 water-vapor mixing ratio are not required inputs.
+
+## Error help and renamed functions
+
+Calling a function without its required arguments prints a short description
+and its usage. For example, `d qvsat` reports:
+
+```text
+QVSAT: saturation water vapor mixing ratio (kg/kg of dry air).
+QVSAT error: expected qvsat(T,p[,phase=auto]); T in K, p in Pa
+```
+
+`esat` identifies its result as saturation vapor pressure in Pa. Errors in
+input expressions or incompatible grids also include the function description.
+The former `es` and `qvs` function names have been removed; update scripts to
+use `esat` and `qvsat`.
 
 ## Phase and formulas
 
@@ -47,9 +62,9 @@ above freezing. Explicit `0` permits supercooled liquid saturation. In
 particular, exactly 273.15 K uses the liquid coefficients in every mode.
 
 ```text
-d qvs(tk,p_pa)
-d qvs(tk,p_pa,auto)
-d qvs(tk,p_pa,0)
+d qvsat(tk,p_pa)
+d qvsat(tk,p_pa,auto)
+d qvsat(tk,p_pa,0)
 ```
 
 The `[phase=auto]` notation documents an optional argument and its default;
@@ -67,11 +82,11 @@ The original Goff-Gratch branches are retained for liquid below 202 K and ice
 below 195.8 K. The mixing ratio is computed exactly with P3's pressure guard:
 
 ```text
-qvs = 0.622 * es / max(0.001, p - es)
+qvsat = 0.622 * esat / max(0.001, p - esat)
 ```
 
 The result is a mixing ratio, not specific humidity. The denominator floor
-is retained for positive pressures at or below `es`, and can produce very large
+is retained for positive pressures at or below `esat`, and can produce very large
 values there. Undefined/nonfinite inputs, T <= 0 K, p <= 0 Pa, negative or
 nonfinite computed vapor pressure, and nonfinite results produce undefined
 output. Finite phase values are interpreted by their sign, so a fractional
@@ -80,8 +95,8 @@ saturation-law temperature clipping is applied.
 
 ## Dimensions and missing data
 
-`es` preserves the temperature grid unless a varying phase expands a scalar
-or lower-dimensional input. `qvs` similarly expands its operands to the
+`esat` preserves the temperature grid unless a varying phase expands a scalar
+or lower-dimensional input. `qvsat` similarly expands its operands to the
 compatible grid with more varying axes. The rules follow ordinary GrADS grid
 arithmetic:
 

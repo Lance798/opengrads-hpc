@@ -56,8 +56,8 @@ gaint ffhcrl   (struct gafunc *, struct gastat *);
 gaint ffvint   (struct gafunc *, struct gastat *);
 gaint ffzslice (struct gafunc *, struct gastat *);
 gaint ffzint   (struct gafunc *, struct gastat *);
-gaint ffes     (struct gafunc *, struct gastat *);
-gaint ffqvs    (struct gafunc *, struct gastat *);
+gaint ffesat   (struct gafunc *, struct gastat *);
+gaint ffqvsat  (struct gafunc *, struct gastat *);
 gaint ffelp    (struct gafunc *, struct gastat *);
 gaint fftlp    (struct gafunc *, struct gastat *);
 gaint ffaav    (struct gafunc *, struct gastat *);
@@ -155,8 +155,8 @@ gaint (*fpntr)(struct gafunc *, struct gastat *);
   if (cmpwrd("vint",name)) fpntr = ffvint;
   if (cmpwrd("zslice",name)) fpntr = ffzslice;
   if (cmpwrd("zint",name)) fpntr = ffzint;
-  if (cmpwrd("es",name)) fpntr = ffes;
-  if (cmpwrd("qvs",name)) fpntr = ffqvs;
+  if (cmpwrd("esat",name)) fpntr = ffesat;
+  if (cmpwrd("qvsat",name)) fpntr = ffqvsat;
   if (cmpwrd("tloop",name)) fpntr = fftlp;
   if (cmpwrd("eloop",name)) fpntr = ffelp;
   if (cmpwrd("aave",name)) fpntr = ffaav;
@@ -4551,6 +4551,11 @@ incompatible:
   return NULL;
 }
 
+static void saturation_description(gaint mixing) {
+  gaprnt(0,mixing ? "QVSAT: saturation water vapor mixing ratio (kg/kg of dry air).\n" :
+                   "ESAT: saturation vapor pressure (Pa).\n");
+}
+
 static gaint saturation_function(struct gafunc *pfc, struct gastat *pst, gaint mixing) {
   struct gastat other;
   struct gagrid *grid=NULL,*operand=NULL,*result;
@@ -4559,8 +4564,9 @@ static gaint saturation_function(struct gafunc *pfc, struct gastat *pst, gaint m
   gadouble value;
   char *phase_text;
   if (pfc->argnum<phase_arg || pfc->argnum>phase_arg+1) {
-    gaprnt(0,mixing ? "QVS error: expected qvs(T,p[,phase]); T in K, p in Pa\n" :
-                     "ES error: expected es(T[,phase]); T in K\n");
+    saturation_description(mixing);
+    gaprnt(0,mixing ? "QVSAT error: expected qvsat(T,p[,phase=auto]); T in K, p in Pa\n" :
+                     "ESAT error: expected esat(T[,phase=auto]); T in K\n");
     return 1;
   }
   automatic=pfc->argnum==phase_arg;
@@ -4574,7 +4580,7 @@ static gaint saturation_function(struct gafunc *pfc, struct gastat *pst, gaint m
     }
   }
   rc=gaexpr(pfc->argpnt[0],pst);
-  if (rc) return rc;
+  if (rc) { saturation_description(mixing); return rc; }
   if (pst->type!=1) { gafree(pst); goto invalid; }
   grid=pst->result.pgr;
   if (!automatic) {
@@ -4613,17 +4619,18 @@ static gaint saturation_function(struct gafunc *pfc, struct gastat *pst, gaint m
 invalid:
   gaprnt(0,"Saturation error: inputs must be grid expressions or numbers\n");
 error:
+  saturation_description(mixing);
   if (grid) gagfre(grid);
   if (operand) gagfre(operand);
   pst->type=1; pst->result.pgr=NULL;
   return 1;
 }
 
-gaint ffes(struct gafunc *pfc, struct gastat *pst) {
+gaint ffesat(struct gafunc *pfc, struct gastat *pst) {
   return saturation_function(pfc,pst,0);
 }
 
-gaint ffqvs(struct gafunc *pfc, struct gastat *pst) {
+gaint ffqvsat(struct gafunc *pfc, struct gastat *pst) {
   return saturation_function(pfc,pst,1);
 }
 
