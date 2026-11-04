@@ -4475,7 +4475,8 @@ gaint i;
 
 /* Saturation diagnostics use the Flatau (1992, table 4) coefficients and
    low-temperature Goff-Gratch branches of VVM P3 polysvp1. T is K, es is Pa.
-   Phase > 0 selects ice below freezing; all warmer points use liquid. */
+   Automatic phase is P3's ice selection: ice strictly below 273.15 K,
+   liquid otherwise. Explicit phase 0 selects liquid at all temperatures. */
 static gadouble saturation_es(gadouble t, gadouble phase) {
   static const gadouble liquid[9]={6.11239921,0.443987641,0.142986287e-1,
     0.264847430e-3,0.302950461e-5,0.206739458e-7,
@@ -4553,19 +4554,30 @@ incompatible:
 static gaint saturation_function(struct gafunc *pfc, struct gastat *pst, gaint mixing) {
   struct gastat other;
   struct gagrid *grid=NULL,*operand=NULL,*result;
-  gaint phase_arg=mixing ? 2 : 1,n,rc;
+  gaint phase_arg=mixing ? 2 : 1,n,rc,automatic;
   size_t i,size;
   gadouble value;
+  char *phase_text;
   if (pfc->argnum<phase_arg || pfc->argnum>phase_arg+1) {
     gaprnt(0,mixing ? "QVS error: expected qvs(T,p[,phase]); T in K, p in Pa\n" :
                      "ES error: expected es(T[,phase]); T in K\n");
     return 1;
   }
+  automatic=pfc->argnum==phase_arg;
+  if (!automatic) {
+    phase_text=pfc->argpnt[phase_arg];
+    while (*phase_text==' ') phase_text++;
+    if (!strncmp(phase_text,"auto",4)) {
+      phase_text+=4;
+      while (*phase_text==' ') phase_text++;
+      automatic=!*phase_text;
+    }
+  }
   rc=gaexpr(pfc->argpnt[0],pst);
   if (rc) return rc;
   if (pst->type!=1) { gafree(pst); goto invalid; }
   grid=pst->result.pgr;
-  if (pfc->argnum>phase_arg) {
+  if (!automatic) {
     other=*pst;
     if (gaexpr(pfc->argpnt[phase_arg],&other)) goto error;
     if (other.type!=1) { gafree(&other); goto invalid; }
@@ -4582,7 +4594,7 @@ static gaint saturation_function(struct gafunc *pfc, struct gastat *pst, gaint m
 #pragma omp parallel for schedule(static) private(value) if(ga_omp_parallelize(n))
 #endif
     for (i=0;i<(size_t)n;i++) {
-      value=grid->umask[i] ? saturation_es(grid->grid[i],0) : NAN;
+      value=grid->umask[i] ? saturation_es(grid->grid[i],1) : NAN;
       if (!isfinite(value)) { grid->umask[i]=0; grid->grid[i]=grid->undef; }
       else grid->grid[i]=value;
     }
