@@ -13,8 +13,13 @@ if [[ "$(uname -s)" != Darwin ]]; then
 fi
 
 repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=versions.env
+source "$repo_root/release/versions.env"
 build_root="$1"
 output_root="$2"
+work_root="${OPENGRADS_RELEASE_WORK_ROOT:-$(dirname -- "$build_root")}"
+deps_root="${OPENGRADS_DEPS_ROOT:-$work_root/deps}"
+adios2_root="${OPENGRADS_ADIOS2_ROOT:-$work_root/adios2}"
 grads_version="$(<"$repo_root/cola/src/VERSION")"
 dist_version="$(<"$repo_root/release/VERSION")"
 machine="$(uname -m)"
@@ -110,10 +115,28 @@ copy_formula_notice()
     -type f 2>/dev/null)
 }
 
-for formula in adios2 cairo libgeotiff hdf5 libomp netcdf gcc \
+copy_notice()
+{
+  local source_file="$1"
+  local target_file="$2"
+  if [[ -r "$source_file" ]]; then
+    install -m 0644 "$source_file" "$target_file"
+  fi
+}
+
+for formula in cairo libgeotiff hdf5 libomp netcdf gcc \
                libx11 libxcb libxau libxdmcp libxext libxrender; do
   copy_formula_notice "$formula"
 done
+copy_notice "$work_root/sources/ADIOS2-$ADIOS2_VERSION/LICENSE" \
+  "$bundle_root/licenses/ADIOS2-LICENSE"
+copy_notice "$work_root/sources/ADIOS2-$ADIOS2_VERSION/Copyright.txt" \
+  "$bundle_root/licenses/ADIOS2-Copyright.txt"
+if [[ ! -r "$deps_root/share/licenses/blosc2/LICENSE.txt" ]]; then
+  printf 'Blosc2/codec notices are missing from %s.\n' "$deps_root" >&2
+  exit 1
+fi
+cp -a "$deps_root/share/licenses/blosc2" "$bundle_root/licenses/"
 install -m 0755 "$repo_root/release/opengrads-macos" "$bundle_root/opengrads"
 
 executable_dir="$bundle_root/bin"
@@ -201,6 +224,11 @@ while (( index < ${#queue[@]} )); do
     queue+=("$resolved")
   done < <(otool -L "$binary" | awk 'NR > 1 { print $1 }')
 done
+
+if ! find "$lib_root" -maxdepth 1 -name 'libblosc2*.dylib' -print -quit | grep -q .; then
+  printf 'The macOS archive does not bundle the shared Blosc2 runtime.\n' >&2
+  exit 1
+fi
 
 # Repoint every recorded path at the bundle itself, then re-sign: editing a
 # Mach-O header invalidates the ad-hoc signature that arm64 macOS requires.
@@ -323,6 +351,13 @@ GRADS
   exit 1
 done
 printf 'The Term display drew from the macOS bundle.\n'
+
+# Read all supported Blosc codecs through the relocated archive, not the
+# build prefix. This proves the packaged ADIOS2 and Blosc2 work together.
+OPENGRADS_ADIOS2_ROOT="$adios2_root" \
+OPENGRADS_DEPS_ROOT="$deps_root" \
+OPENGRADS_LAUNCHER="$bundle_root/opengrads" \
+  "$repo_root/pytests/TestBP5Compression.sh"
 
 # Where XQuartz is installed, draw in a window on its virtual X server and
 # print from that session.

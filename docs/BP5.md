@@ -13,8 +13,8 @@ automatically.
 - Explicit descriptors with `dtype bp5` or `dtype adios2`.
 - Serial `ReadRandomAccess` access to global numeric arrays.
 - Lossless Blosc2-compressed arrays, including BloscLZ, LZ4/LZ4HC, zlib,
-  and Zstd codecs. Linux releases bundle the shared Blosc2 runtime and its
-  built-in codecs; the writer's library installation is not required.
+  and Zstd codecs. Linux and macOS releases bundle the shared Blosc2 runtime
+  and its built-in codecs; the writer's library installation is not required.
 - Float, double, long double, and signed/unsigned 8/16/32/64-bit integers, converted to GrADS `gadouble`.
 - ADIOS2 steps mapped to GrADS T when the array has no explicit T dimension.
 - One bulk ADIOS2 selection for in-bounds X/Y grids, with the row reader retained as a fallback.
@@ -30,8 +30,8 @@ An explicit descriptor takes precedence. Its `UNDEF` line controls masking unles
 A manual source build needs a C/C++ toolchain and an ADIOS2 installation containing the serial C API and `adios2-config`. The release builder supplies the pinned dependency automatically. ADIOS2 2.11.0 was used for the verified build.
 
 The pinned bootstrap in `release/build-dependencies.sh` builds Blosc2 and
-enables it in serial ADIOS2. For a manual build, install Blosc2 first and
-point ADIOS2 at its CMake package:
+enables it in serial ADIOS2 on Linux and macOS. For a manual build, install
+Blosc2 first and point ADIOS2 at its CMake package:
 
 ```bash
 cmake -S /path/to/ADIOS2-2.11.0 -B /tmp/adios2-cpu-build \
@@ -55,7 +55,7 @@ cmake --install /tmp/adios2-cpu-build
 ADIOS2 enables other optional packages when it finds them. Inspect its CMake
 summary and disable unwanted transports and language bindings. Keep Blosc2
 enabled to read compressed VVMex output. Other compression operators such as
-ZFP and SZ need their own libraries and are not enabled by the Linux bootstrap.
+ZFP and SZ need their own libraries and are not enabled by the release builders.
 
 GNU Readline is optional. When available at configure time it provides command history, editing, and the Tab completion added by this fork. Color prompts are enabled at runtime by the development launcher.
 

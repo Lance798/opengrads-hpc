@@ -13,6 +13,12 @@ build_root="$work_root/dependency-build"
 deps_root="$work_root/deps"
 adios2_root="$work_root/adios2"
 jobs="${OPENGRADS_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf 4)}"
+platform="$(uname -s)"
+
+case "$platform" in
+  Linux|Darwin) ;;
+  *) printf 'Unsupported dependency build platform: %s\n' "$platform" >&2; exit 2 ;;
+esac
 
 mkdir -p "$download_root" "$source_root" "$build_root" "$deps_root" "$adios2_root"
 
@@ -106,35 +112,39 @@ readline_archive="$download_root/readline-$READLINE_VERSION.tar.gz"
 adios2_archive="$download_root/adios2-$ADIOS2_VERSION.tar.gz"
 blosc2_archive="$download_root/c-blosc2-$BLOSC2_VERSION.tar.gz"
 
-fetch "$NCURSES_URL" "$NCURSES_SHA256" "$ncurses_archive"
-fetch "$READLINE_URL" "$READLINE_SHA256" "$readline_archive"
-for readline_patch in $READLINE_PATCHES; do
-  fetch "$READLINE_PATCH_URL/readline${READLINE_VERSION//./}-${readline_patch%%:*}" \
-    "${readline_patch#*:}" \
-    "$download_root/readline${READLINE_VERSION//./}-${readline_patch%%:*}"
-done
+if [[ "$platform" == Linux ]]; then
+  fetch "$NCURSES_URL" "$NCURSES_SHA256" "$ncurses_archive"
+  fetch "$READLINE_URL" "$READLINE_SHA256" "$readline_archive"
+  for readline_patch in $READLINE_PATCHES; do
+    fetch "$READLINE_PATCH_URL/readline${READLINE_VERSION//./}-${readline_patch%%:*}" \
+      "${readline_patch#*:}" \
+      "$download_root/readline${READLINE_VERSION//./}-${readline_patch%%:*}"
+  done
+fi
 fetch "$ADIOS2_URL" "$ADIOS2_SHA256" "$adios2_archive"
 fetch "$BLOSC2_URL" "$BLOSC2_SHA256" "$blosc2_archive"
-extract "$ncurses_archive" "$source_root/ncurses-$NCURSES_VERSION"
-extract "$readline_archive" "$source_root/readline-$READLINE_VERSION"
+if [[ "$platform" == Linux ]]; then
+  extract "$ncurses_archive" "$source_root/ncurses-$NCURSES_VERSION"
+  extract "$readline_archive" "$source_root/readline-$READLINE_VERSION"
 # Apply the official patches once; the stamp records how far a source tree
 # that survived an earlier run has got.
-readline_source="$source_root/readline-$READLINE_VERSION"
-readline_stamp="$readline_source/.opengrads-patches"
-for readline_patch in $READLINE_PATCHES; do
-  number="${readline_patch%%:*}"
-  if ! grep -qx "$number" "$readline_stamp" 2>/dev/null; then
-    (cd "$readline_source" &&
-       patch -p0 --forward --batch \
-         < "$download_root/readline${READLINE_VERSION//./}-$number")
-    printf '%s\n' "$number" >> "$readline_stamp"
-    rm -f "$deps_root/lib/libreadline.so"   # rebuild with the patch
-  fi
-done
+  readline_source="$source_root/readline-$READLINE_VERSION"
+  readline_stamp="$readline_source/.opengrads-patches"
+  for readline_patch in $READLINE_PATCHES; do
+    number="${readline_patch%%:*}"
+    if ! grep -qx "$number" "$readline_stamp" 2>/dev/null; then
+      (cd "$readline_source" &&
+         patch -p0 --forward --batch \
+           < "$download_root/readline${READLINE_VERSION//./}-$number")
+      printf '%s\n' "$number" >> "$readline_stamp"
+      rm -f "$deps_root/lib/libreadline.so"   # rebuild with the patch
+    fi
+  done
+fi
 extract "$adios2_archive" "$source_root/ADIOS2-$ADIOS2_VERSION"
 extract "$blosc2_archive" "$source_root/c-blosc2-$BLOSC2_VERSION"
 
-if [[ ! -f "$deps_root/lib/libncurses.so" ]]; then
+if [[ "$platform" == Linux && ! -f "$deps_root/lib/libncurses.so" ]]; then
   ncurses_build="$build_root/ncurses-$NCURSES_VERSION"
   mkdir -p "$ncurses_build"
   cd "$ncurses_build"
@@ -150,7 +160,7 @@ if [[ ! -f "$deps_root/lib/libncurses.so" ]]; then
   make install
 fi
 
-if [[ ! -f "$deps_root/lib/libreadline.so" ]]; then
+if [[ "$platform" == Linux && ! -f "$deps_root/lib/libreadline.so" ]]; then
   readline_build="$build_root/readline-$READLINE_VERSION"
   mkdir -p "$readline_build"
   cd "$readline_build"
@@ -248,4 +258,9 @@ fi
 
 printf 'Dependency prefix: %s\n' "$deps_root"
 printf 'ADIOS2 prefix: %s\n' "$adios2_root"
+grep -Eq '^#define ADIOS2_HAVE_BLOSC2($|[[:space:]]+1)' \
+  "$adios2_root/include/adios2/common/ADIOSConfig.h" || {
+    printf 'ADIOS2 was built without Blosc2 support.\n' >&2
+    exit 1
+  }
 "$adios2_root/bin/adios2-config" --version

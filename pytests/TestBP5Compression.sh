@@ -28,9 +28,17 @@ if [[ "$mode" != --read-fixtures ]]; then
     "$repo_root/pytests/bp5_compressed_writer.c" "${libs[@]}" -o "$test_root/writer"
   # Honor the private Blosc2 prefix when testing a development build.
   writer_path="${OPENGRADS_DEPS_ROOT:-${adios2_root%/*}/deps}/lib"
-  writer_path="$adios2_root/lib:$adios2_root/lib64:$writer_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  case "$(uname -s)" in
+    Darwin)
+      library_variable=DYLD_LIBRARY_PATH
+      writer_path="$adios2_root/lib:$adios2_root/lib64:$writer_path${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" ;;
+    *)
+      library_variable=LD_LIBRARY_PATH
+      writer_path="$adios2_root/lib:$adios2_root/lib64:$writer_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+  esac
   for codec in none "${codecs[@]}"; do
-    LD_LIBRARY_PATH="$writer_path" "$test_root/writer" "$test_root/$codec.bp" "$codec"
+    env "$library_variable=$writer_path" \
+      "$test_root/writer" "$test_root/$codec.bp" "$codec"
     cat > "$test_root/$codec.ctl" <<CTL
 dset ^$codec.bp
 dtype bp5

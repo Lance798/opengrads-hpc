@@ -54,9 +54,11 @@ adios2_root="$OPENGRADS_WORK/adios2"    # serial ADIOS2
 ```
 
 This builds ncurses, GNU Readline, Blosc2, and ADIOS2 from checksum-pinned upstream
-releases recorded in [`release/versions.env`](../release/versions.env). It is
-incremental: components already installed are skipped, except that an older
-ADIOS2 build without Blosc2 is rebuilt to enable compressed BP5 reads.
+releases recorded in [`release/versions.env`](../release/versions.env) on Linux.
+On macOS it builds only Blosc2 and ADIOS2; Homebrew provides the terminal and
+graphics dependencies. It is incremental: components already installed are
+skipped, except that an older ADIOS2 build without Blosc2 is rebuilt to enable
+compressed BP5 reads.
 
 To reuse dependencies you already have, skip this and point `deps_root` and
 `adios2_root` at your own prefixes. `$adios2_root/bin/adios2-config` must

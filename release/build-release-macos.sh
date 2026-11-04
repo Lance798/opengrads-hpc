@@ -13,8 +13,9 @@ work_root="${OPENGRADS_RELEASE_WORK_ROOT:-$repo_root/.release-work-macos}"
 output_root="${OPENGRADS_RELEASE_OUTPUT_ROOT:-$repo_root/release-dist}"
 build_root="$work_root/opengrads-build"
 jobs="${OPENGRADS_BUILD_JOBS:-$(sysctl -n hw.ncpu)}"
+export OPENGRADS_RELEASE_WORK_ROOT="$work_root"
 
-for formula in adios2 autoconf automake cairo coreutils gcc libgeotiff hdf5 libomp \
+for formula in autoconf automake cairo cmake coreutils gcc libgeotiff hdf5 libomp \
                libtool libx11 libxext libxmu netcdf pkgconf readline udunits; do
   if ! brew list --versions "$formula" >/dev/null 2>&1; then
     printf 'Required Homebrew formula is not installed: %s\n' "$formula" >&2
@@ -32,19 +33,29 @@ gcc_suffix="${gcc_bin##*-}"
 export CC="$gcc_bin"
 export CXX="$(dirname -- "$gcc_bin")/g++-$gcc_suffix"
 export PATH="$(brew --prefix coreutils)/libexec/gnubin:$PATH"
-export PKG_CONFIG_PATH="$(brew --prefix adios2)/lib/pkgconfig:$(brew --prefix cairo)/lib/pkgconfig:$(brew --prefix libgeotiff)/lib/pkgconfig:$(brew --prefix hdf5)/lib/pkgconfig:$(brew --prefix netcdf)/lib/pkgconfig:$(brew --prefix udunits)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+
+"$repo_root/release/build-dependencies.sh" "$work_root"
+deps_root="$work_root/deps"
+adios2_root="$work_root/adios2"
+adios_config="$adios2_root/include/adios2/common/ADIOSConfig.h"
+if ! grep -Eq '^#define ADIOS2_HAVE_BLOSC2($|[[:space:]]+1)' "$adios_config"; then
+  printf 'The release ADIOS2 build does not have Blosc2 support.\n' >&2
+  exit 1
+fi
+
+brew_prefix="$(brew --prefix)"
+export PKG_CONFIG_PATH="$adios2_root/lib/pkgconfig:$deps_root/lib/pkgconfig:$brew_prefix/lib/pkgconfig:$(brew --prefix cairo)/lib/pkgconfig:$(brew --prefix libgeotiff)/lib/pkgconfig:$(brew --prefix hdf5)/lib/pkgconfig:$(brew --prefix netcdf)/lib/pkgconfig:$(brew --prefix udunits)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 
 # Homebrew symlinks every non-keg-only formula's headers and libraries into its
 # own prefix, but Homebrew GCC does not search there by default. configure's
 # NetCDF, HDF5, Cairo, GeoTIFF, and UDUNITS probes try an empty include
 # directory first and then fall back to hardcoded /usr/local and /opt paths
 # that do not match Homebrew's layout, so without this they all miss.
-brew_prefix="$(brew --prefix)"
 # Homebrew's readline is keg-only because it shadows the editline shim in the
 # macOS SDK, so its include and lib directories go ahead of everything else.
 readline_prefix="$(brew --prefix readline)"
-export CPPFLAGS="-I$readline_prefix/include -I$brew_prefix/include${CPPFLAGS:+ $CPPFLAGS}"
-export LDFLAGS="-L$readline_prefix/lib -L$brew_prefix/lib${LDFLAGS:+ $LDFLAGS}"
+export CPPFLAGS="-I$deps_root/include -I$readline_prefix/include -I$brew_prefix/include${CPPFLAGS:+ $CPPFLAGS}"
+export LDFLAGS="-L$adios2_root/lib -L$deps_root/lib -L$readline_prefix/lib -L$brew_prefix/lib${LDFLAGS:+ $LDFLAGS}"
 export PKG_CONFIG_PATH="$readline_prefix/lib/pkgconfig:$PKG_CONFIG_PATH"
 
 rm -rf -- "$build_root"
@@ -56,7 +67,7 @@ cd "$build_root"
   --enable-sdfopen \
   --with-opengrads \
   --without-gadap \
-  --with-adios2="$(brew --prefix adios2)"
+  --with-adios2="$adios2_root"
 # The X displays need Homebrew's X libraries (Cairo already depends on them)
 # and, for the X11 display, the Xmu headers. They are loaded only when asked
 # for, so the archive still runs without XQuartz. The terminal display
@@ -64,13 +75,15 @@ cd "$build_root"
 make -C src --jobs "$jobs" grads libgxdummy.la libgxpCairo.la libgxdCairo.la libgxdX11.la \
   libgxdTerm.la
 
-runtime_libraries="$(brew --prefix adios2)/lib:$(brew --prefix gcc)/lib/gcc/current:$(brew --prefix libomp)/lib:$(brew --prefix netcdf)/lib"
+runtime_libraries="$adios2_root/lib:$deps_root/lib:$(brew --prefix gcc)/lib/gcc/current:$(brew --prefix libomp)/lib:$(brew --prefix netcdf)/lib"
 export OPENGRADS_BUILD_ROOT="$build_root"
-export OPENGRADS_ADIOS2_ROOT="$(brew --prefix adios2)"
+export OPENGRADS_ADIOS2_ROOT="$adios2_root"
+export OPENGRADS_DEPS_ROOT="$deps_root"
 export OPENGRADS_LAUNCHER="$repo_root/release/launch-local.sh"
 export OPENGRADS_RELEASE_PLATFORM=Darwin
 export OPENGRADS_RUNTIME_LIBRARY_PATH="$runtime_libraries"
 "$repo_root/pytests/TestBP5.sh"
+"$repo_root/pytests/TestBP5Compression.sh"
 "$repo_root/pytests/TestSDFOpen.sh"
 "$repo_root/pytests/TestOpenMP.sh"
 "$repo_root/pytests/TestAveSection.sh"
