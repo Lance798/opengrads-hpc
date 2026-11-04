@@ -5,6 +5,10 @@ calculations, and native archives for Linux and macOS.
 
 ### Added since 1.0.12 (not yet released)
 
+- **Blosc-compressed BP5 on macOS.** The macOS release now builds ADIOS2 with
+  Blosc2 enabled and bundles its runtime, matching Linux support. It reads BP5
+  data compressed with BloscLZ, LZ4, LZ4HC, zlib, and Zstd without requiring
+  the writer's Blosc2 installation.
 - **Scripts from gscript.** 76 scripts and script functions from Chihiro
   Kodama's gscript (GPLv3) ship in `lib/scripts/gscript`, which the
   launchers put on `GASCRP` after `lib/scripts`: `color` sets shading
