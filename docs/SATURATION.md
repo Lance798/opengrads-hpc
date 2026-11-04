@@ -20,7 +20,7 @@ d esat(tk,auto)
 d esat(tk,0)
 d qvsat(tk,p_pa)
 d qvsat(tk,p_pa,auto)
-define qs = qvsat(tk,p_pa)
+define qs_sat = qvsat(tk,p_pa)
 ```
 
 The functions do not convert potential temperature, Exner pressure, hPa, or

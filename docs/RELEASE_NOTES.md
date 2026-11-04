@@ -119,6 +119,11 @@ calculations, and native archives for Linux and macOS.
 
 ### Added in 1.0.10
 
+- **Underscores in defined variable names.** Both `define qs_sat=...` and
+  `qs_sat=...` accept letters, digits, and underscores after the initial letter,
+  matching expression parsing and existing file variables. Querying, replacing,
+  and undefining these variables use the full name.
+
 - **P3 saturation diagnostics (`esat`, `qvsat`).** Compute saturation vapor
   pressure in Pa and mixing ratio in kg/kg from temperature in K and pressure
   in Pa. Phase defaults to `auto`: ice below 273.15 K and liquid at or above
