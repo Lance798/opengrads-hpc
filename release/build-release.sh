@@ -82,6 +82,8 @@ OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
   "$repo_root/pytests/TestZSlice.sh"
 OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
   "$repo_root/pytests/TestZInt.sh"
+OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
+  "$repo_root/pytests/TestSaturation.sh"
 
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestProgress.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestAxisScale.sh"
