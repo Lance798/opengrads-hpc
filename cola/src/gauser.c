@@ -1,5 +1,5 @@
 /* Copyright (C) 1988-2018 by George Mason University. See file COPYRIGHT for more information. */
-/* Modified in 2026 for optional ADIOS2 BP5 and CLI support; see COPYING. */
+/* Modified in 2026 for optional ADIOS2 BP5, CLI support, and defined names; see COPYING. */
 
 /* Authored by B. Doty */
 
@@ -625,8 +625,9 @@ FILE *pdefid=NULL;
   if (*cmd>='a' && *cmd<='z') {
     i = 0;
     ch = cmd;
-    /* defined variable names are alphanumeric, and must start with a letter */
-    while ( (*ch>='a' && *ch<='z') || (*ch>='0' && *ch<='9' ) ) {
+    /* Names start with a letter, then allow letters, digits, and underscores,
+       matching the variable parser and explicit DEFINE. */
+    while ( (*ch>='a' && *ch<='z') || (*ch>='0' && *ch<='9' ) || *ch=='_' ) {
       i++;
       if (i>16) break;
       ch++;
@@ -2989,8 +2990,12 @@ char name[20];
     }
   }
   garemb (cmd);
+  if (*cmd<'a' || *cmd>'z') {
+    gaprnt (0,"DEFINE error: The variable name must start with a letter\n");
+    goto retrn;
+  }
   i=0;
-  while ( (*cmd>='a' && *cmd<='z') || (*cmd>='0' && *cmd<='9' ) ) {
+  while ( (*cmd>='a' && *cmd<='z') || (*cmd>='0' && *cmd<='9' ) || *cmd=='_' ) {
     name[i] = *cmd;
     cmd++; i++;
     if (i>16) break;
@@ -2998,7 +3003,7 @@ char name[20];
   name[i] = '\0';
   if (*cmd!='=') {
     gaprnt (0,"DEFINE error: Failed to find '=' after parsing the defined variable name \n");
-    gaprnt (0,"              The name may be too long or contain non-alphanumeric characters \n");
+    gaprnt (0,"              The name may be too long or contain characters other than letters, digits, or '_'\n");
     goto retrn;
   }
   cmd++;

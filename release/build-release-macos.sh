@@ -81,6 +81,7 @@ export OPENGRADS_RUNTIME_LIBRARY_PATH="$runtime_libraries"
 "$repo_root/pytests/TestZSlice.sh"
 "$repo_root/pytests/TestZInt.sh"
 "$repo_root/pytests/TestSaturation.sh"
+"$repo_root/pytests/TestDefineNames.sh"
 
 "$repo_root/pytests/TestProgress.sh"
 "$repo_root/pytests/TestAxisScale.sh"
