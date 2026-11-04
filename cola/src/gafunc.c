@@ -1,5 +1,5 @@
 /* Copyright (C) 1988-2018 by George Mason University. See file COPYRIGHT for more information. */
-/* Modified in 2026 for OpenMP-parallel functions, ZSLICE, and ZINT; see COPYING. */
+/* Modified in 2026 for OpenMP, vertical functions, and saturation diagnostics; see COPYING. */
 
 /*  Originally authored by B. Doty.
     Some functions provided by others. */
@@ -56,6 +56,8 @@ gaint ffhcrl   (struct gafunc *, struct gastat *);
 gaint ffvint   (struct gafunc *, struct gastat *);
 gaint ffzslice (struct gafunc *, struct gastat *);
 gaint ffzint   (struct gafunc *, struct gastat *);
+gaint ffes     (struct gafunc *, struct gastat *);
+gaint ffqvs    (struct gafunc *, struct gastat *);
 gaint ffelp    (struct gafunc *, struct gastat *);
 gaint fftlp    (struct gafunc *, struct gastat *);
 gaint ffaav    (struct gafunc *, struct gastat *);
@@ -153,6 +155,8 @@ gaint (*fpntr)(struct gafunc *, struct gastat *);
   if (cmpwrd("vint",name)) fpntr = ffvint;
   if (cmpwrd("zslice",name)) fpntr = ffzslice;
   if (cmpwrd("zint",name)) fpntr = ffzint;
+  if (cmpwrd("es",name)) fpntr = ffes;
+  if (cmpwrd("qvs",name)) fpntr = ffqvs;
   if (cmpwrd("tloop",name)) fpntr = fftlp;
   if (cmpwrd("eloop",name)) fpntr = ffelp;
   if (cmpwrd("aave",name)) fpntr = ffaav;
@@ -4467,6 +4471,148 @@ gaint i;
   *qret = qn;
   *tret = tn;
   return(0);
+}
+
+/* Saturation diagnostics use the Flatau (1992, table 4) coefficients and
+   low-temperature Goff-Gratch branches of VVM P3 polysvp1. T is K, es is Pa.
+   Phase > 0 selects ice below freezing; all warmer points use liquid. */
+static gadouble saturation_es(gadouble t, gadouble phase) {
+  static const gadouble liquid[9]={6.11239921,0.443987641,0.142986287e-1,
+    0.264847430e-3,0.302950461e-5,0.206739458e-7,
+    0.640689451e-10,-0.952447341e-13,-0.976195544e-15};
+  static const gadouble ice[9]={6.11147274,0.503160820,0.188439774e-1,
+    0.420895665e-3,0.615021634e-5,0.602588177e-7,
+    0.385852041e-9,0.146898966e-11,0.252751365e-14};
+  const gadouble *coeff;
+  gadouble dt,value,exponent;
+  gaint k,frozen;
+  if (!isfinite(t) || !isfinite(phase) || t<=0) return NAN;
+  frozen=phase>0 && t<273.15;
+  if (t>=(frozen ? 195.8 : 202.0)) {
+    coeff=frozen ? ice : liquid;
+    dt=t-273.15; value=coeff[8];
+    for (k=7;k>=0;k--) value=coeff[k]+dt*value;
+    value*=100;
+  } else {
+    if (frozen) exponent=-9.09718*(273.16/t-1)-3.56654*log10(273.16/t)+
+                         0.876793*(1-t/273.16)+log10(6.1071);
+    else exponent=-7.90298*(373.16/t-1)+5.02808*log10(373.16/t)-
+                  1.3816e-7*(pow(10,11.344*(1-t/373.16))-1)+
+                  8.1328e-3*(pow(10,-3.49149*(373.16/t-1))-1)+log10(1013.246);
+    value=pow(10,exponent)*100;
+  }
+  return isfinite(value) && value>=0 ? value : NAN;
+}
+
+/* As in ordinary GrADS arithmetic, align shared coordinate axes and expand
+   a scalar or a one-axis grid along axes it lacks. No interpolation. a is
+   temperature (mode 0) or es (mode 1); b is phase or pressure respectively.
+   Success consumes both inputs, returning the grid with more varying axes. */
+static struct gagrid *saturation_combine(struct gagrid *a, struct gagrid *b, gaint mode) {
+  struct gagrid *out,*small;
+  gaint na=(a->idim>=0)+(a->jdim>=0),nb=(b->idim>=0)+(b->jdim>=0);
+  gaint broadcast=0,n;
+  size_t i,j,size;
+  gadouble av,bv,value;
+  out=na>=nb ? a : b; small=out==a ? b : a;
+  if (na==nb) {
+    if (a->idim!=b->idim || a->jdim!=b->jdim ||
+        a->isiz!=b->isiz || a->jsiz!=b->jsiz ||
+        gagchk(a,b,a->idim) || gagchk(a,b,a->jdim)) goto incompatible;
+  } else if (small->idim<0) broadcast=1;
+  else {
+    if (gagchk(small,out,small->idim)) goto incompatible;
+    if (small->idim==out->idim) broadcast=2;
+    else if (small->idim==out->jdim) broadcast=3;
+    else goto incompatible;
+  }
+  size=(size_t)out->isiz*out->jsiz;
+  if (size>(size_t)INT_MAX) goto incompatible;
+  n=(gaint)size;
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(j,av,bv,value) if(ga_omp_parallelize(n))
+#endif
+  for (i=0;i<(size_t)n;i++) {
+    j=broadcast==0 ? i : broadcast==1 ? 0 : broadcast==2 ? i%small->isiz : i/out->isiz;
+    if (!out->umask[i] || !small->umask[j]) { out->umask[i]=0; out->grid[i]=out->undef; continue; }
+    av=a==out ? out->grid[i] : small->grid[j];
+    bv=b==out ? out->grid[i] : small->grid[j];
+    if (!mode) value=saturation_es(av,bv);
+    else value=isfinite(av) && isfinite(bv) && av>=0 && bv>0 ?
+                 0.622*av/fmax(1.e-3,bv-av) : NAN;
+    if (!isfinite(value)) { out->umask[i]=0; out->grid[i]=out->undef; }
+    else out->grid[i]=value;
+  }
+  gagfre(small);
+  return out;
+incompatible:
+  gaprnt(0,"Saturation error: input grids must have matching shared coordinate axes\n");
+  return NULL;
+}
+
+static gaint saturation_function(struct gafunc *pfc, struct gastat *pst, gaint mixing) {
+  struct gastat other;
+  struct gagrid *grid=NULL,*operand=NULL,*result;
+  gaint phase_arg=mixing ? 2 : 1,n,rc;
+  size_t i,size;
+  gadouble value;
+  if (pfc->argnum<phase_arg || pfc->argnum>phase_arg+1) {
+    gaprnt(0,mixing ? "QVS error: expected qvs(T,p[,phase]); T in K, p in Pa\n" :
+                     "ES error: expected es(T[,phase]); T in K\n");
+    return 1;
+  }
+  rc=gaexpr(pfc->argpnt[0],pst);
+  if (rc) return rc;
+  if (pst->type!=1) { gafree(pst); goto invalid; }
+  grid=pst->result.pgr;
+  if (pfc->argnum>phase_arg) {
+    other=*pst;
+    if (gaexpr(pfc->argpnt[phase_arg],&other)) goto error;
+    if (other.type!=1) { gafree(&other); goto invalid; }
+    operand=other.result.pgr;
+    result=saturation_combine(grid,operand,0);
+    if (!result) goto error;
+    grid=result; operand=NULL;
+    pst->result.pgr=grid;
+  } else {
+    size=(size_t)grid->isiz*grid->jsiz;
+    if (size>(size_t)INT_MAX) goto invalid;
+    n=(gaint)size;
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(value) if(ga_omp_parallelize(n))
+#endif
+    for (i=0;i<(size_t)n;i++) {
+      value=grid->umask[i] ? saturation_es(grid->grid[i],0) : NAN;
+      if (!isfinite(value)) { grid->umask[i]=0; grid->grid[i]=grid->undef; }
+      else grid->grid[i]=value;
+    }
+  }
+  if (mixing) {
+    other=*pst;
+    if (gaexpr(pfc->argpnt[1],&other)) goto error;
+    if (other.type!=1) { gafree(&other); goto invalid; }
+    operand=other.result.pgr;
+    result=saturation_combine(grid,operand,1);
+    if (!result) goto error;
+    grid=result; operand=NULL;
+  }
+  pst->type=1; pst->result.pgr=grid;
+  return 0;
+invalid:
+  gaprnt(0,"Saturation error: inputs must be grid expressions or numbers\n");
+error:
+  if (grid) gagfre(grid);
+  if (operand) gagfre(operand);
+  pst->type=1; pst->result.pgr=NULL;
+  return 1;
+}
+
+gaint ffes(struct gafunc *pfc, struct gastat *pst) {
+  return saturation_function(pfc,pst,0);
+}
+
+gaint ffqvs(struct gafunc *pfc, struct gastat *pst) {
+  return saturation_function(pfc,pst,1);
 }
 
 /* Identify an unmodified field (also file-qualified), for indexed I/O. All

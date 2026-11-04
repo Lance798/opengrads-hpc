@@ -119,6 +119,13 @@ calculations, and native archives for Linux and macOS.
 
 ### Added in 1.0.10
 
+- **P3 saturation diagnostics (`es`, `qvs`).** Compute saturation vapor
+  pressure in Pa and mixing ratio in kg/kg from temperature in K and pressure
+  in Pa. Phase accepts numbers, logical expressions, and compatible grids.
+  Scalar and shared-axis expansion follow GrADS grid rules. The original P3
+  low-temperature branches and pressure floor are retained. Direct display
+  and define work, with OpenMP acceleration. See [SATURATION.md](SATURATION.md).
+
 - **Height-coordinate column integrals (`zint`).** Integrate expressions with
   inferred layer thickness, scalar or 2-D bounds, default 0 m bottom/full-column
   top, and missing-value skipping. Direct display and define work. BP5 writer
