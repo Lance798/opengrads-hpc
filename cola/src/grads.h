@@ -1031,6 +1031,9 @@ gaint gaadios_read_grid (struct gafile *, struct gavar *, struct gagrid *,
 gaint gaadios_read_steps (struct gafile *, struct gavar *, struct gagrid *,
                           gaint, gaint, gaint, gadouble *, char *);
 gaint gagrdsteps (struct gagrid *, gaint, gaint, gaint, gadouble *, char *);
+gaint gagrdzslice (struct gagrid *, const gaint *, gadouble *, char *);
+gaint gaadios_read_zslice (struct gafile *, struct gavar *, struct gagrid *,
+                          const gaint *, gadouble *, char *);
 gaint h5setup (void);
 #if USEHDF5==1
 gaint h5openvar (gah5id,char*,hid_t*,hid_t*);

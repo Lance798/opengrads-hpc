@@ -78,6 +78,7 @@ export OPENGRADS_RUNTIME_LIBRARY_PATH="$runtime_libraries"
 "$repo_root/pytests/TestPrompt.sh"
 "$repo_root/pytests/TestGscript.sh"
 "$repo_root/pytests/TestClearCanvas.sh"
+"$repo_root/pytests/TestZSlice.sh"
 
 "$repo_root/pytests/TestProgress.sh"
 "$repo_root/pytests/TestAxisScale.sh"

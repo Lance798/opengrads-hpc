@@ -1,5 +1,5 @@
 /* Copyright (C) 1988-2018 by George Mason University. See file COPYRIGHT for more information. */
-/* Modified in 2026 for OpenMP-parallel functions; see COPYING. */
+/* Modified in 2026 for OpenMP-parallel functions and ZSLICE; see COPYING. */
 
 /*  Originally authored by B. Doty.
     Some functions provided by others. */
@@ -54,6 +54,7 @@ gaint ffgint   (struct gafunc *, struct gastat *);
 gaint ffhdiv   (struct gafunc *, struct gastat *);
 gaint ffhcrl   (struct gafunc *, struct gastat *);
 gaint ffvint   (struct gafunc *, struct gastat *);
+gaint ffzslice (struct gafunc *, struct gastat *);
 gaint ffelp    (struct gafunc *, struct gastat *);
 gaint fftlp    (struct gafunc *, struct gastat *);
 gaint ffaav    (struct gafunc *, struct gastat *);
@@ -149,6 +150,7 @@ gaint (*fpntr)(struct gafunc *, struct gastat *);
   if (cmpwrd("hdivg",name)) fpntr = ffhdiv;
   if (cmpwrd("hcurl",name)) fpntr = ffhcrl;
   if (cmpwrd("vint",name)) fpntr = ffvint;
+  if (cmpwrd("zslice",name)) fpntr = ffzslice;
   if (cmpwrd("tloop",name)) fpntr = fftlp;
   if (cmpwrd("eloop",name)) fpntr = ffelp;
   if (cmpwrd("aave",name)) fpntr = ffaav;
@@ -4463,6 +4465,187 @@ gaint i;
   *qret = qn;
   *tret = tn;
   return(0);
+}
+
+/* Identify an unmodified field (also file-qualified), for indexed I/O. All
+   other expressions use the normal evaluator once per requested Z level. */
+static struct gafile *zslice_field(char *expr, struct gastat *pst,
+                                  struct gavar **var, gaint *height) {
+  struct gafile *file = pst->pfid;
+  char name[17], *ch = expr;
+  gaint n=0, number, i;
+  *var = NULL; *height = 0;
+  while (*ch==' ') ch++;
+  if (*ch<'a' || *ch>'z') return NULL;
+  while ((*ch>='a' && *ch<='z') || (*ch>='0' && *ch<='9') || *ch=='_') {
+    if (n>=16) return NULL;
+    name[n++] = *ch++;
+  }
+  name[n] = '\0';
+  if (*ch=='.') {
+    ch = intprs(ch+1,&number);
+    if (!ch || number<1) return NULL;
+    file = pst->pfi1;
+    for (i=1; i<number && file; i++) file = file->pforw;
+  } else if (getdfn(name,pst)!=NULL) return NULL;
+  while (*ch==' ') ch++;
+  if (*ch || !file || file->type!=1) return NULL;
+  if (!strcmp(name,"lev")) { *height = 1; return file; }
+  for (i=0; i<file->vnum; i++)
+    if (cmpwrd(name,file->pvar1[i].abbrv)) {
+      *var = file->pvar1+i;
+      return file;
+    }
+  return NULL;
+}
+
+/* Select one (1-based) Z index per horizontal point. Invalid indices remain
+   missing, rather than rounding or searching upwards. No interpolation. */
+static gaint zslice_run(struct gafunc *pfc, struct gastat *pst) {
+  struct gafile *file;
+  struct gavar *var;
+  struct gagrid *map=NULL, *out=NULL, *plane=NULL;
+  gadouble value, level;
+  gaint *indices=NULL, height, nz, first=1, k, rc=1, nused=0, done=0;
+  gaint metadata=0, number;
+  struct gafile *search;
+  char coordinate[32], *expression;
+  unsigned char *used=NULL;
+  size_t i, size;
+
+  if (pfc->argnum!=2 || !pst->pfid) {
+    gaprnt(0,"ZSLICE error: expected zslice(expression,index_map) with a grid file open\n");
+    return 1;
+  }
+  expression=pfc->argpnt[0];
+  if (pst->idim==2) { pst->idim = pst->jdim; pst->jdim = -1; }
+  if (pst->jdim==2) pst->jdim = -1;
+  if (pst->idim>1 || pst->jdim>1 || pst->pfid->type==2 || pst->pfid->type==3) {
+    gaprnt(0,"ZSLICE error: only X/Y may vary; fix T/E or use tloop/eloop\n");
+    return 1;
+  }
+  file = zslice_field(pfc->argpnt[0],pst,&var,&height);
+  if (!file) file = pst->pfid;
+  nz = var && var->levels>0 ? var->levels : file->dnum[2];
+  pst->dmin[2] = pst->dmax[2] = pst->pfid->gr2ab[2](pst->pfid->grvals[2],1.0);
+  if (gaexpr(pfc->argpnt[1],pst)) return 1;
+  if (pst->type!=1) { gafree(pst); goto invalid; }
+  map = pst->result.pgr;
+  if (map->idim>1 || map->jdim>1 || nz<1) goto invalid;
+  size = (size_t)map->isiz*map->jsiz;
+  for (i=0; i<size; i++)
+    if (map->umask[i] && isfinite(map->grid[i]) && map->grid[i]>=1 &&
+        map->grid[i]<=nz && floor(map->grid[i])==map->grid[i]) {
+      first = (gaint)map->grid[i]; break;
+    }
+  level = file->gr2ab[2](file->grvals[2],(gadouble)first);
+  pst->dmin[2] = pst->dmax[2] = level;
+  /* A coordinate request supplies identical grid metadata without reading a
+     data plane. Native readers can then gather only the requested indices. */
+  if (var && var->levels>0 && !file->ppflag &&
+      !file->idxflg && file->ncflg!=2) {
+    search=pst->pfi1; number=1;
+    while (search && search!=file) { search=search->pforw; number++; }
+    if (search) {
+      snprintf(coordinate,sizeof(coordinate),"lev.%d",number);
+      expression=coordinate; metadata=1;
+    }
+  }
+  if (gaexpr(expression,pst)) goto cleanup;
+  if (pst->type!=1) { gafree(pst); goto invalid; }
+  out = pst->result.pgr;
+  if (metadata) { out->pvar=var; out->undef=file->undef; }
+  if (out->idim>1 || out->jdim>1) goto invalid;
+  if (map->idim>=0 && (map->idim!=out->idim || map->jdim!=out->jdim ||
+      map->isiz!=out->isiz || map->jsiz!=out->jsiz ||
+      gagchk(map,out,map->idim) || gagchk(map,out,map->jdim))) goto invalid;
+  size = (size_t)out->isiz*out->jsiz;
+  if (size>(size_t)INT_MAX) goto invalid;
+  indices = galloc(size*sizeof(*indices),"zsliceindex");
+  used = galloc((size_t)nz+1,"zslicelevels");
+  if (!indices || !used) {
+    gaprnt(0,"ZSLICE error: unable to allocate index buffer\n");
+    goto cleanup;
+  }
+  memset(used,0,(size_t)nz+1);
+  for (i=0; i<size; i++) {
+    k = map->idim<0 ? 0 : (gaint)i;
+    value = map->grid[k];
+    indices[i] = 0;
+    if (map->umask[k] && isfinite(value) && value>=1 && value<=nz && floor(value)==value) {
+      indices[i] = (gaint)value;
+      if (!used[indices[i]]) { used[indices[i]] = 1; nused++; }
+    }
+  }
+  gagfre(map); map = NULL;
+  gaprogtotal(nused);
+  if (height) {
+    for (i=0; i<size; i++) {
+      out->umask[i] = indices[i]!=0;
+      out->grid[i] = indices[i] ? file->gr2ab[2](file->grvals[2],indices[i]) : out->undef;
+    }
+    rc = 0; goto cleanup;
+  }
+  if (var && var->levels>0 && out->pfile==file && out->pvar==var && nused && (metadata || nused>1)) {
+    rc = gagrdzslice(out,indices,out->grid,out->umask);
+    if (rc>=0) goto cleanup;
+  }
+  if (metadata && nused) {
+    if (gaexpr(pfc->argpnt[0],pst)) { rc=1; goto cleanup; }
+    if (pst->type!=1) { gafree(pst); goto invalid; }
+    plane=pst->result.pgr;
+    if (plane->idim!=out->idim || plane->jdim!=out->jdim ||
+        plane->isiz!=out->isiz || plane->jsiz!=out->jsiz ||
+        gagchk(plane,out,out->idim) || gagchk(plane,out,out->jdim)) goto invalid;
+    gagfre(out); out=plane; plane=NULL;
+  }
+  for (i=0; i<size; i++)
+    if (!indices[i] || (indices[i]!=first && !(var && !var->levels))) {
+      out->umask[i] = 0; out->grid[i] = out->undef;
+    }
+  rc = 0;
+  for (k=1; k<=nz; k++) {
+    if (!used[k]) continue;
+    if (k!=first && !(var && !var->levels)) {
+      level = file->gr2ab[2](file->grvals[2],(gadouble)k);
+      pst->dmin[2] = pst->dmax[2] = level;
+      if (gaexpr(pfc->argpnt[0],pst)) { rc=1; goto cleanup; }
+      if (pst->type!=1) { gafree(pst); goto invalid; }
+      plane = pst->result.pgr;
+      if (plane->idim!=out->idim || plane->jdim!=out->jdim ||
+          plane->isiz!=out->isiz || plane->jsiz!=out->jsiz ||
+          gagchk(plane,out,out->idim) || gagchk(plane,out,out->jdim)) goto invalid;
+#if USEOPENMP == 1
+#pragma omp parallel for simd schedule(static) if(ga_omp_parallelize((gaint)size))
+#endif
+      for (i=0; i<size; i++) if (indices[i]==k) {
+        out->umask[i] = plane->umask[i];
+        out->grid[i] = plane->umask[i] ? plane->grid[i] : out->undef;
+      }
+      gagfre(plane); plane = NULL;
+    }
+    gaprogstep(++done);
+  }
+  goto cleanup;
+
+invalid:
+  gaprnt(0,"ZSLICE error: expression and index map must have matching horizontal grids\n");
+  rc = 1;
+cleanup:
+  if (map) gagfre(map);
+  if (plane) gagfre(plane);
+  if (indices) gree(indices,"zsliceindex");
+  if (used) gree(used,"zslicelevels");
+  if (rc) { if (out) gagfre(out); pst->result.pgr=NULL; }
+  else { pst->type=1; pst->result.pgr=out; }
+  return rc;
+}
+
+gaint ffzslice(struct gafunc *pfc, struct gastat *pst) {
+  gaint level=gaprogbeg("zslice",0), rc;
+  rc = zslice_run(pfc,pst);
+  gaprogend(level);
+  return rc;
 }
 
 gaint ffvint (struct gafunc *pfc, struct gastat *pst) {
