@@ -5,6 +5,24 @@ is **4 calculation threads**. OpenMP is detected automatically by
 `configure`; no extra user action is needed with a supported GCC, Clang, or
 vendor compiler.
 
+## Height-coordinate column integrals
+
+[`zint`](ZINT.md) reduces unmodified BP5 inputs by writer block and HDF5 inputs
+by physical chunk, with a per-level multiplier for a simple field/profile
+product such as `qv*rhobar`. General expressions use the evaluator once per
+intersecting Z level. All paths use the same midpoint-derived thicknesses and
+skip missing values without changing other cells' weights.
+
+On Taiwan VVM's compressed BP5 output, 4096 columns at T=73 matched independent
+native-data layer sums. Three process invocations of `zint(qv*rhobar)` and
+`zint((qv*rhobar)+0)` had median wall times of 0.187 s and 1.425 s including
+startup, about 7.6 times faster for this 64 x 64 region. The direct reader
+selected one writer-block region containing 282624 native values. For compressed
+`sea_grass_mountain` HDF5 at T=6, a 64 x 64 region selected 198 chunks and 405504
+native values; corresponding times were 0.152 s and 0.166 s. The measured speedup
+depends on the dataset, compression layout, cache and storage state. These are
+observations on this host, not general throughput guarantees.
+
 ## Indexed vertical slices
 
 [`zslice`](ZSLICE.md) reads a different Z index at each horizontal point.

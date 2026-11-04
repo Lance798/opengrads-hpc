@@ -1,5 +1,5 @@
 /* Copyright (C) 1988-2018 by George Mason University. See file COPYRIGHT for more information. */
-/* Modified in 2026 for optional ADIOS2 BP5 and indexed vertical I/O; see COPYING. */
+/* Modified in 2026 for optional ADIOS2 BP5, indexed vertical I/O, and ZINT; see COPYING. */
 
 /* Authored by B. Doty and Jennifer Adams */
 
@@ -636,6 +636,186 @@ gaint gagrdzslice(struct gagrid *grid, const gaint *indices,
     gaprnt(2,pout);
   }
   return 0;
+}
+
+/* Both native readers and the evaluator use the same overlap and nansum
+   rules. k is zero-based in GrADS (not native) vertical order. */
+gaint gazintlevel(struct gazint *z, gaint k) {
+  return isfinite(z->factor[k]) &&
+         fmax(z->edges[k],z->edges[k+1])>z->minbottom &&
+         fmin(z->edges[k],z->edges[k+1])<z->maxtop;
+}
+
+void gazintadd(struct gazint *z, size_t pos, gaint k, gadouble value) {
+  gadouble low,high,weight;
+  if (!z->mask[pos] || !isfinite(value) || !isfinite(z->factor[k])) return;
+  low=fmax(fmin(z->edges[k],z->edges[k+1]),z->bottom[pos]);
+  high=fmin(fmax(z->edges[k],z->edges[k+1]),z->top[pos]);
+  weight=high-low;
+  value*=z->factor[k];
+  if (weight>0 && isfinite(value)) z->sum[pos]+=value*weight;
+}
+
+#if USEHDF5==1
+/* Read each intersecting physical chunk once, reducing it immediately. The
+   chunk buffer is reused and no complete global 3-D cube is constructed. */
+static gaint gah5zint(struct gagrid *grid, struct gazint *integral) {
+  hid_t prop=-1,memory=-1,dsid,vid;
+  hsize_t shape[16],chunks[16],begin[16],finish[16],origin[16],start[16],count[16],length;
+  size_t strides[16],nvalues,capacity=0,offset,reads=0,total=0;
+  gadouble *buffer=NULL,tolerance,value;
+  gaint rank,d,xd=-1,yd=-1,zd=-1,t=grid->dimmin[3],e=grid->dimmin[4],ee=e,oflg=0;
+  gaint rc=1,k,i,j,x,y,lo[2],hi[2],imin,imax,jmin,jmax,a,dim,finished=0;
+  size_t nativez;
+  if (pfi->tmplat) {
+    t=gaopfn(t,e,&ee,&oflg,pfi);
+    if (t==-99999) return 1;
+    if (t==-88888) return 0;
+  }
+  if (oflg || pvr->h5varflg<0) {
+    char *name=pvr->longnm[0] ? pvr->longnm : pvr->abbrv;
+    if (h5openvar(pfi->h5id,name,&dsid,&vid)) return 1;
+    pvr->dataspace=dsid; pvr->h5varflg=vid;
+    if (pvr->h5vid==-999 && h5setup()) return 1;
+    pvr->h5vid=vid;
+  }
+  rank=H5Sget_simple_extent_ndims(pvr->dataspace);
+  if (rank<1 || rank>16) return -1;
+  if (H5Sget_simple_extent_dims(pvr->dataspace,shape,NULL)<0) goto cleanup;
+  for (d=0;d<rank;d++) {
+    gaint unit=(gaint)pvr->units[d];
+    count[d]=1;
+    if (unit==-100) { xd=d; begin[d]=grid->dimmin[0]-1; finish[d]=grid->dimmax[0]; }
+    else if (unit==-101) {
+      yd=d; begin[d]=pfi->yrflg ? pfi->dnum[1]-grid->dimmax[1] : grid->dimmin[1]-1;
+      finish[d]=pfi->yrflg ? pfi->dnum[1]-grid->dimmin[1]+1 : grid->dimmax[1];
+    }
+    else if (unit==-102) { zd=d; begin[d]=0; finish[d]=integral->nz; }
+    else { begin[d]=unit==-103 ? t-1 : unit==-104 ? ee-1 : unit; finish[d]=begin[d]+1; }
+    if (!shape[d] || finish[d]>shape[d] || begin[d]>=finish[d]) return -1;
+    chunks[d]=shape[d];
+  }
+  if (zd<0) return -1;
+  while (begin[zd]<finish[zd]) {
+    k=pfi->zrflg ? integral->nz-1-(gaint)begin[zd] : (gaint)begin[zd];
+    if (gazintlevel(integral,k)) break;
+    begin[zd]++;
+  }
+  while (finish[zd]>begin[zd]) {
+    k=pfi->zrflg ? integral->nz-(gaint)finish[zd] : (gaint)finish[zd]-1;
+    if (gazintlevel(integral,k)) break;
+    finish[zd]--;
+  }
+  if (begin[zd]==finish[zd]) return 0;
+  prop=H5Dget_create_plist(pvr->h5varflg);
+  if (prop<0) goto cleanup;
+  if (H5Pget_layout(prop)==H5D_CHUNKED) {
+    if (H5Pget_chunk(prop,rank,chunks)!=rank) goto cleanup;
+  } else {
+    /* Bound workspace for a contiguous dataset with virtual tiles. */
+    for (d=0;d<rank;d++) {
+      hsize_t limit=d==zd ? 8 : d==xd ? 256 : d==yd ? 32 : 1;
+      if (chunks[d]>limit) chunks[d]=limit;
+    }
+  }
+  H5Pclose(prop); prop=-1;
+  for (d=0;d<rank;d++) {
+    if (!chunks[d]) goto cleanup;
+    origin[d]=(begin[d]/chunks[d])*chunks[d];
+  }
+  tolerance=dequal(pvr->undef,0.0,1e-8)==0 ? 1e-5 : fabs(pvr->undef/EPSILON);
+  while (!finished) {
+    nvalues=1;
+    for (d=rank-1;d>=0;d--) {
+      hsize_t end=origin[d]+chunks[d];
+      start[d]=origin[d]>begin[d] ? origin[d] : begin[d];
+      if (end>finish[d]) end=finish[d];
+      count[d]=end-start[d]; strides[d]=nvalues;
+      if (!count[d] || count[d]>SIZE_MAX/nvalues) goto cleanup;
+      nvalues*=(size_t)count[d];
+    }
+    if (nvalues>SIZE_MAX/sizeof(*buffer)) goto cleanup;
+    if (nvalues>capacity) {
+      if (buffer) gree(buffer,"h5zintvalues");
+      buffer=galloc(nvalues*sizeof(*buffer),"h5zintvalues");
+      if (!buffer) goto cleanup;
+      capacity=nvalues;
+    }
+    length=(hsize_t)nvalues;
+    memory=H5Screate_simple(1,&length,NULL);
+    if (memory<0 || H5Sselect_hyperslab(pvr->dataspace,H5S_SELECT_SET,start,NULL,count,NULL)<0 ||
+        H5Dread(pvr->h5varflg,H5T_NATIVE_DOUBLE,memory,pvr->dataspace,H5P_DEFAULT,buffer)<0) goto cleanup;
+    H5Sclose(memory); memory=-1;
+    lo[0]=grid->dimmin[0]; hi[0]=grid->dimmax[0];
+    lo[1]=grid->dimmin[1]; hi[1]=grid->dimmax[1];
+    if (xd>=0) { lo[0]=(gaint)start[xd]+1; hi[0]=lo[0]+(gaint)count[xd]-1; }
+    if (yd>=0) {
+      lo[1]=pfi->yrflg ? pfi->dnum[1]-(gaint)(start[yd]+count[yd])+1 : (gaint)start[yd]+1;
+      hi[1]=pfi->yrflg ? pfi->dnum[1]-(gaint)start[yd] : lo[1]+(gaint)count[yd]-1;
+    }
+    imin=jmin=0; imax=grid->isiz-1; jmax=grid->jsiz-1;
+    for (a=0;a<2;a++) {
+      dim=a ? grid->jdim : grid->idim;
+      if (dim<0) continue;
+      if (a) { jmin=lo[dim]-grid->dimmin[dim]; jmax=hi[dim]-grid->dimmin[dim]; }
+      else { imin=lo[dim]-grid->dimmin[dim]; imax=hi[dim]-grid->dimmin[dim]; }
+    }
+    for (k=0;k<integral->nz;k++) {
+      nativez=(size_t)(pfi->zrflg ? integral->nz-1-k : k);
+      if (nativez<start[zd] || nativez-start[zd]>=count[zd] || !gazintlevel(integral,k)) continue;
+      for (j=jmin;j<=jmax;j++) for (i=imin;i<=imax;i++) {
+        x=grid->dimmin[0]+(grid->idim==0 ? i : 0);
+        y=grid->dimmin[1]+(grid->idim==1 ? i : grid->jdim==1 ? j : 0);
+        offset=(nativez-start[zd])*strides[zd];
+        if (xd>=0) offset+=((size_t)(x-1)-start[xd])*strides[xd];
+        if (yd>=0) offset+=((size_t)(pfi->yrflg ? pfi->dnum[1]-y : y-1)-start[yd])*strides[yd];
+        value=buffer[offset];
+        if (!isfinite(value) || (value>=pvr->undef-tolerance && value<=pvr->undef+tolerance)) continue;
+        if (pfi->packflg) value=value*pvr->scale+pvr->add;
+        gazintadd(integral,(size_t)j*grid->isiz+i,k,value);
+      }
+    }
+    reads++; total+=nvalues;
+    gaprogstep(reads>(size_t)INT_MAX ? INT_MAX : (gaint)reads);
+    for (d=rank-1;d>=0;d--) {
+      origin[d]+=chunks[d];
+      if (origin[d]<finish[d]) break;
+      origin[d]=(begin[d]/chunks[d])*chunks[d];
+    }
+    if (d<0) finished=1;
+  }
+  if (getenv("GA_ZINT_TRACE")) {
+    snprintf(pout,1255,"ZINT I/O: HDF5 chunks=%lu, native values=%lu\n",(unsigned long)reads,(unsigned long)total);
+    gaprnt(2,pout);
+  }
+  rc=0;
+cleanup:
+  if (prop>=0) H5Pclose(prop);
+  if (memory>=0) H5Sclose(memory);
+  if (buffer) gree(buffer,"h5zintvalues");
+  if (rc) gaprnt(0,"HDF5 I/O Error: ZINT chunk read failed\n");
+  return rc;
+}
+#endif
+
+gaint gagrdzint(struct gagrid *grid, struct gazint *integral) {
+  struct gafile *file=grid->pfile;
+  if (!file || !grid->pvar || file->type!=1 || file->ppflag || grid->toff ||
+      grid->idim>1 || grid->jdim>1 ||
+      grid->dimmin[0]<1 || grid->dimmax[0]>file->dnum[0] ||
+      grid->dimmin[1]<1 || grid->dimmax[1]>file->dnum[1] ||
+      grid->dimmin[3]<1 || grid->dimmax[3]>file->dnum[3] ||
+      grid->dimmin[4]<1 || grid->dimmax[4]>file->dnum[4]) return -1;
+#if USEADIOS2==1
+  if (file->adios2flg) return gaadios_read_zint(file,grid->pvar,grid,integral);
+#endif
+#if USEHDF5==1
+  if (file->ncflg==3) {
+    pgr=grid; pfi=file; pvr=grid->pvar;
+    return gah5zint(grid,integral);
+  }
+#endif
+  return -1;
 }
 
 /*  Basic read of a row of data elements -- a row is always
@@ -3815,7 +3995,7 @@ gaint h5closevar (hid_t dsid, hid_t vid) {
 /* Read a row varying in the X direction from an HDF5 grid */
 gaint gah5row (gaint x, gaint y, gaint z, gaint t, gaint e, gaint len, gadouble *gr, char *gru) {
 #if USEHDF5 == 1
-gaint i,yy,zz;
+gaint i,yy,zz,hasx=0,nout=len;
 hsize_t  start[16], count[16];
 hid_t vid, datatype, memspace;
 size_t sz, datasize;
@@ -3862,13 +4042,15 @@ gafloat *fval;
   for (i=0; i<16; i++) {
     start[i] = -999;
     count[i] = -999;
-    if (pvr->units[i] == -100) { start[i] = x-1; count[i] = len; }
+    if (pvr->units[i] == -100) { start[i] = x-1; count[i] = len; hasx=1; }
     if (pvr->units[i] == -101) { start[i] = yy;  count[i] = 1;   }
     if (pvr->units[i] == -102) { start[i] = zz;  count[i] = 1;   }
     if (pvr->units[i] == -103) { start[i] = t-1; count[i] = 1;   }
     if (pvr->units[i] == -104) { start[i] = e-1; count[i] = 1;   }
     if (pvr->units[i] >= 0) { start[i] = pvr->units[i];   count[i] = 1; }
   }
+  /* A variable without X contributes one native value to the whole row. */
+  if (!hasx) len=1;
   /* select the desired hyperslab in the source dataspace */
   if ((H5Sselect_hyperslab(pvr->dataspace, H5S_SELECT_SET, start, NULL, count, NULL))<0) {
     gaprnt(0,"HDF5 Error: unable to select dataspace hyperslab\n");
@@ -4069,6 +4251,10 @@ gafloat *fval;
     return(1);
   }
 
+  if (!hasx) {
+    for (i=1;i<nout;i++) gr[i]=gr[0];
+    len=nout;
+  }
   /* Set missing data values to exact value if specified */
   /* Use the gavar undef to set the fuzzy test limits */
   /* If gavar undef equals zero, change it to 1/EPSILON */

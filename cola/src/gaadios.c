@@ -1862,6 +1862,119 @@ gaint gaadios_read_zslice(struct gafile *pfi, struct gavar *pvar,
   return rc;
 }
 
+/* Integrate native writer-block selections without re-reading compressed
+   blocks once for every model level. A profile factor is already in Z order. */
+gaint gaadios_read_zint(struct gafile *pfi, struct gavar *pvar,
+                        struct gagrid *grid, struct gazint *integral) {
+  struct gaadios_state *state=pfi->adios2;
+  struct gaadios_plan base,part;
+  adios2_varinfo *info;
+  adios2_blockinfo *block;
+  size_t b,d,stride[GA_ADIOS_MAX_DIMS],nvalues,type_size,offset,reads=0,total=0;
+  size_t nativez,step;
+  gaint rc,status,t=grid->dimmin[3],xd=-1,yd=-1,zd=-1,inside,k,i,j,x,y;
+  gaint lo[2],hi[2],imin,imax,jmin,jmax,a,dim;
+  void *native;
+  gadouble value;
+  rc=gaadios_plan_grid(pfi,pvar,grid,&base);
+  if (rc) return rc;
+  for (d=0;d<base.ndims;d++) {
+    if (pvar->units[d]==-100) xd=(gaint)d;
+    if (pvar->units[d]==-101) yd=(gaint)d;
+    if (pvar->units[d]==-102) zd=(gaint)d;
+  }
+  if (zd<0 || pvar->levels!=integral->nz) return -1;
+  type_size=gaadios_type_size(base.type);
+  if (!type_size) return 1;
+  base.start[zd]=0; base.count[zd]=(size_t)integral->nz;
+  status=gaadios_time_available(pfi,pvar,base.variable,t);
+  if (!status) return 0;  /* no available cells: nansum is zero */
+  if (status<0 || gaadios_plan_select(&base,t,status)!=adios2_error_none) return 1;
+  step=base.tdim>=0 || status==2 ? 0 : (size_t)(t-1);
+  info=adios2_inquire_blockinfo(state->engine,base.variable,step);
+  if (!info) return -1;
+  if (info->Dims!=(int)base.ndims) { adios2_free_blockinfo(info); return -1; }
+  rc=0;
+  gaprogtotal(info->nblocks>(size_t)INT_MAX ? INT_MAX : (gaint)info->nblocks);
+  for (b=0;b<info->nblocks;b++) {
+    part=base; block=info->BlocksInfo+b; inside=1;
+    for (d=0;d<base.ndims;d++) {
+      size_t start=base.start[d],end=start+base.count[d];
+      if (!block->Count[d] || start>=block->Start[d]+block->Count[d] || end<=block->Start[d]) { inside=0; break; }
+      if (start<block->Start[d]) start=block->Start[d];
+      if (end>block->Start[d]+block->Count[d]) end=block->Start[d]+block->Count[d];
+      part.start[d]=start; part.count[d]=end-start;
+    }
+    if (!inside) continue;
+    /* Trim away levels outside every valid column's integration interval. */
+    {
+      size_t zlo=part.start[zd],zhi=zlo+part.count[zd];
+      while (zlo<zhi) {
+        k=pfi->zrflg ? integral->nz-1-(gaint)zlo : (gaint)zlo;
+        if (gazintlevel(integral,k)) break;
+        zlo++;
+      }
+      while (zhi>zlo) {
+        k=pfi->zrflg ? integral->nz-(gaint)zhi : (gaint)zhi-1;
+        if (gazintlevel(integral,k)) break;
+        zhi--;
+      }
+      if (zlo==zhi) continue;
+      part.start[zd]=zlo; part.count[zd]=zhi-zlo;
+    }
+    nvalues=1;
+    for (d=part.ndims;d>0;d--) {
+      stride[d-1]=nvalues;
+      if (part.count[d-1]>SIZE_MAX/nvalues) { rc=1; break; }
+      nvalues*=part.count[d-1];
+    }
+    if (rc || nvalues>SIZE_MAX/type_size) { rc=1; break; }
+    native=galloc(nvalues*type_size,"adios2zint");
+    if (!native) { rc=1; break; }
+    if (gaadios_plan_select(&part,t,status)!=adios2_error_none ||
+        adios2_get(state->engine,part.variable,native,adios2_mode_sync)!=adios2_error_none) {
+      gree(native,"adios2zint"); rc=1; break;
+    }
+    lo[0]=grid->dimmin[0]; hi[0]=grid->dimmax[0];
+    lo[1]=grid->dimmin[1]; hi[1]=grid->dimmax[1];
+    if (xd>=0) { lo[0]=(gaint)part.start[xd]+1; hi[0]=lo[0]+(gaint)part.count[xd]-1; }
+    if (yd>=0) {
+      lo[1]=pfi->yrflg ? pfi->dnum[1]-(gaint)(part.start[yd]+part.count[yd])+1 : (gaint)part.start[yd]+1;
+      hi[1]=pfi->yrflg ? pfi->dnum[1]-(gaint)part.start[yd] : lo[1]+(gaint)part.count[yd]-1;
+    }
+    imin=jmin=0; imax=grid->isiz-1; jmax=grid->jsiz-1;
+    for (a=0;a<2;a++) {
+      dim=a ? grid->jdim : grid->idim;
+      if (dim<0) continue;
+      if (a) { jmin=lo[dim]-grid->dimmin[dim]; jmax=hi[dim]-grid->dimmin[dim]; }
+      else { imin=lo[dim]-grid->dimmin[dim]; imax=hi[dim]-grid->dimmin[dim]; }
+    }
+    /* Accumulate in GrADS level order even when native Z is reversed. */
+    for (k=0;k<integral->nz;k++) {
+      nativez=(size_t)(pfi->zrflg ? integral->nz-1-k : k);
+      if (nativez<part.start[zd] || nativez-part.start[zd]>=part.count[zd] || !gazintlevel(integral,k)) continue;
+      for (j=jmin;j<=jmax;j++) for (i=imin;i<=imax;i++) {
+        x=grid->dimmin[0]+(grid->idim==0 ? i : 0);
+        y=grid->dimmin[1]+(grid->idim==1 ? i : grid->jdim==1 ? j : 0);
+        offset=(nativez-part.start[zd])*stride[zd];
+        if (xd>=0) offset+=((size_t)(x-1)-part.start[xd])*stride[xd];
+        if (yd>=0) offset+=((size_t)(pfi->yrflg ? pfi->dnum[1]-y : y-1)-part.start[yd])*stride[yd];
+        value=gaadios_value(native,part.type,offset);
+        if (!gaadios_is_missing(pfi,pvar,value)) gazintadd(integral,(size_t)j*grid->isiz+i,k,value);
+      }
+    }
+    gree(native,"adios2zint"); reads++; total+=nvalues;
+    gaprogstep((gaint)b+1);
+  }
+  adios2_free_blockinfo(info);
+  if (getenv("GA_ZINT_TRACE")) {
+    snprintf(pout,1255,"ZINT I/O: BP5 blocks=%lu, native values=%lu\n",(unsigned long)reads,(unsigned long)total);
+    gaprnt(2,pout);
+  }
+  if (rc) gaprnt(0,"BP5 I/O Error: ZINT block read failed\n");
+  return rc;
+}
+
 gaint gaadios_read_grid (struct gafile *pfi, struct gavar *pvar,
                           struct gagrid *pgrid, gadouble *gr, char *gru) {
   struct gaadios_state *state;

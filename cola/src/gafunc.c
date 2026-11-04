@@ -1,5 +1,5 @@
 /* Copyright (C) 1988-2018 by George Mason University. See file COPYRIGHT for more information. */
-/* Modified in 2026 for OpenMP-parallel functions and ZSLICE; see COPYING. */
+/* Modified in 2026 for OpenMP-parallel functions, ZSLICE, and ZINT; see COPYING. */
 
 /*  Originally authored by B. Doty.
     Some functions provided by others. */
@@ -55,6 +55,7 @@ gaint ffhdiv   (struct gafunc *, struct gastat *);
 gaint ffhcrl   (struct gafunc *, struct gastat *);
 gaint ffvint   (struct gafunc *, struct gastat *);
 gaint ffzslice (struct gafunc *, struct gastat *);
+gaint ffzint   (struct gafunc *, struct gastat *);
 gaint ffelp    (struct gafunc *, struct gastat *);
 gaint fftlp    (struct gafunc *, struct gastat *);
 gaint ffaav    (struct gafunc *, struct gastat *);
@@ -151,6 +152,7 @@ gaint (*fpntr)(struct gafunc *, struct gastat *);
   if (cmpwrd("hcurl",name)) fpntr = ffhcrl;
   if (cmpwrd("vint",name)) fpntr = ffvint;
   if (cmpwrd("zslice",name)) fpntr = ffzslice;
+  if (cmpwrd("zint",name)) fpntr = ffzint;
   if (cmpwrd("tloop",name)) fpntr = fftlp;
   if (cmpwrd("eloop",name)) fpntr = ffelp;
   if (cmpwrd("aave",name)) fpntr = ffaav;
@@ -4645,6 +4647,212 @@ gaint ffzslice(struct gafunc *pfc, struct gastat *pst) {
   gaint level=gaprogbeg("zslice",0), rc;
   rc = zslice_run(pfc,pst);
   gaprogend(level);
+  return rc;
+}
+
+/* ZINT integrates a cellwise-constant expression in the file's height
+   coordinate. Unlike VINT it applies no pressure/gravity or density factor. */
+static gaint zint_match(struct gagrid *a, struct gagrid *b) {
+  return b->idim<0 || (a->idim==b->idim && a->jdim==b->jdim &&
+         a->isiz==b->isiz && a->jsiz==b->jsiz &&
+         !gagchk(a,b,a->idim) && !gagchk(a,b,a->jdim));
+}
+
+static gaint zint_auto(char *arg) {
+  while (*arg==' ') arg++;
+  if (strncmp(arg,"auto",4)) return 0;
+  arg+=4;
+  while (*arg==' ') arg++;
+  return !*arg;
+}
+
+static gaint zint_profile(struct gafile *file, struct gavar *var) {
+  gaint d, z=0;
+  if (!var || var->levels<1 || (!file->adios2flg && file->ncflg!=3)) return 0;
+  if (file->dnum[0]==1 && file->dnum[1]==1) return 1;
+  for (d=0; d<var->nh5vardims; d++) {
+    if (var->units[d]==-100 || var->units[d]==-101) return 0;
+    if (var->units[d]==-102) z=1;
+  }
+  return z;
+}
+
+static gaint zint_run(struct gafunc *pfc, struct gastat *pst) {
+  struct gafile *file, *pf=NULL, *f[2], *search;
+  struct gavar *var=NULL, *v[2];
+  struct gagrid *out=NULL, *plane=NULL;
+  struct gastat sample;
+  struct gazint integral;
+  gadouble *edges=NULL, *bottom=NULL, *top=NULL, *factor=NULL;
+  gadouble center, previous=0, first=0, last=0, direction=0, value, lo, hi;
+  gadouble minbottom=0, maxtop=0;
+  gaint nz,k,b,rc=1,height,number,active=0,done=0;
+  size_t i,n;
+  char coordinate[32], terms[2][1000], *star, *profile=NULL, *source;
+
+  if (pfc->argnum<1 || pfc->argnum>3 || !pst->pfid) {
+    gaprnt(0,"ZINT error: expected zint(expression[,bottom[,top]]) with a grid file open\n");
+    return 1;
+  }
+  if (pst->idim==2) { pst->idim=pst->jdim; pst->jdim=-1; }
+  if (pst->jdim==2) pst->jdim=-1;
+  if (pst->idim>1 || pst->jdim>1 || pst->pfid->type!=1) {
+    gaprnt(0,"ZINT error: only X/Y may vary; fix T/E or use tloop/eloop\n");
+    return 1;
+  }
+  file=zslice_field(pfc->argpnt[0],pst,&var,&height);
+  source=pfc->argpnt[0];
+  if (!file) file=pst->pfid;
+  /* The common CWV form can stream its 3-D input by native blocks/chunks,
+     with a small per-level multiplier. Other expressions use gaexpr. */
+  star=strchr(pfc->argpnt[0],'*');
+  if (!var && star && !strchr(star+1,'*') && strlen(pfc->argpnt[0])<sizeof(terms[0])) {
+    n=(size_t)(star-pfc->argpnt[0]);
+    memcpy(terms[0],pfc->argpnt[0],n); terms[0][n]=0;
+    strcpy(terms[1],star+1);
+    f[0]=zslice_field(terms[0],pst,v,&height);
+    f[1]=zslice_field(terms[1],pst,v+1,&height);
+    for (b=0;b<2;b++) if (f[b] && f[1-b] && v[b] && v[b]->levels>0 &&
+        zint_profile(f[1-b],v[1-b]) && f[b]->dnum[2]==pst->pfid->dnum[2] &&
+        v[b]->levels==v[1-b]->levels) {
+      for (k=1;k<=v[b]->levels;k++) {
+        center=f[b]->gr2ab[2](f[b]->grvals[2],k);
+        if (center!=f[1-b]->gr2ab[2](f[1-b]->grvals[2],k) ||
+            center!=pst->pfid->gr2ab[2](pst->pfid->grvals[2],k)) break;
+      }
+      if (k<=v[b]->levels) continue;
+      file=f[b]; var=v[b]; pf=f[1-b]; profile=terms[1-b]; source=terms[b]; break;
+    }
+  }
+  nz=var && var->levels>0 ? var->levels : file->dnum[2];
+  if (nz<2) {
+    gaprnt(0,"ZINT error: at least two distinct height levels are required to infer cell edges\n");
+    return 1;
+  }
+  edges=galloc(((size_t)nz+1)*sizeof(*edges),"zintedges");
+  factor=galloc((size_t)nz*sizeof(*factor),"zintfactor");
+  if (!edges || !factor) goto allocation;
+  for (k=0;k<nz;k++) {
+    center=file->gr2ab[2](file->grvals[2],k+1);
+    if (!isfinite(center) || (k && (center==previous ||
+        (k>1 && (center-previous)*direction<=0)))) {
+      gaprnt(0,"ZINT error: height levels must be finite and strictly monotonic\n"); goto cleanup;
+    }
+    if (!k) first=center;
+    else {
+      edges[k]=0.5*previous+0.5*center;
+      if (k==1) { direction=center-previous; edges[0]=first-0.5*direction; }
+    }
+    previous=center; factor[k]=1;
+  }
+  edges[nz]=previous+0.5*(previous-file->gr2ab[2](file->grvals[2],nz-1));
+  last=fmax(edges[0],edges[nz]);
+  for (k=0;k<=nz;k++) if (!isfinite(edges[k])) {
+    gaprnt(0,"ZINT error: inferred height edges overflow\n"); goto cleanup;
+  }
+  pst->dmin[2]=pst->dmax[2]=first;
+  search=pst->pfi1; number=1;
+  while (search && search!=file) { search=search->pforw; number++; }
+  if (!search) goto invalid;
+  snprintf(coordinate,sizeof(coordinate),"lev.%d",number);
+  if (gaexpr(coordinate,pst)) goto cleanup;
+  if (pst->type!=1) { gafree(pst); goto invalid; }
+  out=pst->result.pgr;
+  n=(size_t)out->isiz*out->jsiz;
+  if (out->idim>1 || out->jdim>1 || n>(size_t)INT_MAX) goto invalid;
+  bottom=galloc(n*sizeof(*bottom),"zintbottom");
+  top=galloc(n*sizeof(*top),"zinttop");
+  if (!bottom || !top) goto allocation;
+  for (i=0;i<n;i++) { bottom[i]=0; top[i]=last; }
+  for (b=1;b<pfc->argnum;b++) {
+    if (zint_auto(pfc->argpnt[b])) continue;
+    pst->dmin[2]=pst->dmax[2]=first;
+    if (gaexpr(pfc->argpnt[b],pst)) goto cleanup;
+    if (pst->type!=1) { gafree(pst); goto invalid; }
+    plane=pst->result.pgr;
+    if (!zint_match(out,plane)) goto invalid;
+    for (i=0;i<n;i++) {
+      size_t j=plane->idim<0 ? 0 : i;
+      value=plane->umask[j] && isfinite(plane->grid[j]) ? plane->grid[j] : NAN;
+      if (b==1) bottom[i]=value; else top[i]=value;
+    }
+    gagfre(plane); plane=NULL;
+  }
+  for (i=0;i<n;i++) {
+    out->umask[i]=isfinite(bottom[i]) && isfinite(top[i]) && bottom[i]<=top[i];
+    out->grid[i]=out->umask[i] ? 0 : out->undef;
+    if (out->umask[i] && bottom[i]<top[i]) {
+      if (!active || bottom[i]<minbottom) minbottom=bottom[i];
+      if (!active || top[i]>maxtop) maxtop=top[i];
+      active=1;
+    }
+  }
+  integral.nz=nz; integral.edges=edges; integral.bottom=bottom; integral.top=top;
+  integral.factor=factor; integral.sum=out->grid; integral.mask=out->umask;
+  integral.minbottom=minbottom; integral.maxtop=maxtop;
+  if (!active) { rc=0; goto cleanup; }
+  if (profile) {
+    sample=*pst; sample.idim=sample.jdim=-1;
+    sample.dmin[0]=sample.dmax[0]=pf->gr2ab[0](pf->grvals[0],1);
+    sample.dmin[1]=sample.dmax[1]=pf->gr2ab[1](pf->grvals[1],1);
+    for (k=0;k<nz;k++) {
+      sample.dmin[2]=sample.dmax[2]=file->gr2ab[2](file->grvals[2],k+1);
+      if (gaexpr(profile,&sample)) goto cleanup;
+      if (sample.type!=1) { gafree(&sample); goto invalid; }
+      plane=sample.result.pgr;
+      factor[k]=plane->umask[0] && isfinite(plane->grid[0]) ? plane->grid[0] : NAN;
+      gagfre(plane); plane=NULL;
+    }
+  }
+  if (var && var->levels>0 && !file->ppflag && !file->idxflg &&
+      (file->adios2flg || file->ncflg==3)) {
+    out->pvar=var; out->undef=file->undef;
+    rc=gagrdzint(out,&integral);
+    if (rc>=0) goto cleanup;
+  }
+  rc=1;
+  gaprogtotal(nz);
+  for (k=0;k<nz;k++) {
+    lo=fmin(edges[k],edges[k+1]); hi=fmax(edges[k],edges[k+1]);
+    if (hi<=minbottom || lo>=maxtop) continue;
+    pst->dmin[2]=pst->dmax[2]=file->gr2ab[2](file->grvals[2],k+1);
+    if (gaexpr(source,pst)) goto cleanup;
+    if (pst->type!=1) { gafree(pst); goto invalid; }
+    plane=pst->result.pgr;
+    if (!zint_match(out,plane)) goto invalid;
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) if(ga_omp_parallelize((gaint)n))
+#endif
+    for (i=0;i<n;i++) {
+      size_t j=plane->idim<0 ? 0 : i;
+      if (plane->umask[j]) gazintadd(&integral,i,k,plane->grid[j]);
+    }
+    gagfre(plane); plane=NULL;
+    gaprogstep(++done);
+  }
+  if (getenv("GA_ZINT_TRACE")) gaprnt(2,"ZINT I/O: evaluator level fallback\n");
+  rc=0;
+  goto cleanup;
+allocation:
+  gaprnt(0,"ZINT error: unable to allocate column buffers\n"); goto cleanup;
+invalid:
+  gaprnt(0,"ZINT error: expression and bounds must be scalars or matching horizontal grids\n");
+  rc=1;
+cleanup:
+  if (plane) gagfre(plane);
+  if (edges) gree(edges,"zintedges");
+  if (factor) gree(factor,"zintfactor");
+  if (bottom) gree(bottom,"zintbottom");
+  if (top) gree(top,"zinttop");
+  if (rc) { if (out) gagfre(out); pst->result.pgr=NULL; }
+  else { pst->type=1; pst->result.pgr=out; }
+  return rc;
+}
+
+gaint ffzint(struct gafunc *pfc, struct gastat *pst) {
+  gaint progress=gaprogbeg("zint",0), rc;
+  rc=zint_run(pfc,pst);
+  gaprogend(progress);
   return rc;
 }
 

@@ -1,4 +1,4 @@
-/* Added in 2026 for cross-format ZSLICE regression fixtures. GPLv2. */
+/* Added in 2026 for cross-format ZSLICE and ZINT fixtures. GPLv2. */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
   int t,z,y,x;
   char path[4096];
   FILE *raw;
-  check(argc==2,"expected fixture directory");
+  check(argc==2 || (argc==3 && !strcmp(argv[2],"zint")),"expected fixture directory [zint]");
   for (t=0;t<NT;t++) for (y=0;y<NY;y++) for (x=0;x<NX;x++) {
     indexmap[t][y][x]=(float)(1+(x/2+y+t)%NZ);
     surface[t][y][x]=(float)(900+100*t+10*y+x);
@@ -40,6 +40,12 @@ int main(int argc, char **argv) {
     indexmap[t][0][2]=1.5f; indexmap[t][0][3]=-9999;
     indexmap[t][0][4]=NAN; indexmap[t][0][5]=INFINITY;
     f[t][0][2][4]=-9999;
+  }
+  if (argc==3) for (t=0;t<NT;t++) for (z=0;z<NZ;z++) {
+    f[t][z][0][0]=-9999; g[t][z][0][0]=-9999;
+    f[t][z][0][1]=NAN; g[t][z][0][1]=NAN;
+    f[t][z][0][2]=INFINITY; g[t][z][0][2]=INFINITY;
+    if (z==1) { f[t][z][0][3]=NAN; g[t][z][0][3]=NAN; }
   }
   snprintf(path,sizeof(path),"%s/slice.dat",argv[1]);
   raw=fopen(path,"wb"); check(raw!=NULL,"open binary fixture");

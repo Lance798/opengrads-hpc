@@ -119,6 +119,13 @@ calculations, and native archives for Linux and macOS.
 
 ### Added in 1.0.10
 
+- **Height-coordinate column integrals (`zint`).** Integrate expressions with
+  inferred layer thickness, scalar or 2-D bounds, default 0 m bottom/full-column
+  top, and missing-value skipping. Direct display and define work. BP5 writer
+  blocks and HDF5 compression chunks are reduced directly, including field
+  times vertical-profile products. HDF5 profiles now broadcast correctly
+  across horizontal rows in ordinary expressions too. See [ZINT.md](ZINT.md).
+
 - **Terrain-indexed vertical slices (`zslice`).** `d zslice(u,topo)` selects
   one Z index at each horizontal grid point; `define` works too.
   `zslice(lev,topo)` returns the height of the selected atmospheric cell.
