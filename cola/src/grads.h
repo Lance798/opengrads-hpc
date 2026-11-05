@@ -1030,6 +1030,7 @@ gaint gaadios_read_grid (struct gafile *, struct gavar *, struct gagrid *,
                           gadouble *, char *);
 gaint gaadios_read_steps (struct gafile *, struct gavar *, struct gagrid *,
                           gaint, gaint, gaint, gadouble *, char *);
+gaint gadeftimeseries (char *, struct gastat *, gaint, gaint, struct gagrid *, gadouble *, char *, gadouble, gaint, gaint);
 gaint gadefseries (char *, struct gastat *, gaint, gaint, struct gagrid *, gadouble *, char *, gadouble);
 gaint gagrdvolume (struct gagrid *, gaint, gaint, gadouble *, char *);
 gaint gaadios_read_volume (struct gafile *, struct gavar *, struct gagrid *, gadouble *, char *);

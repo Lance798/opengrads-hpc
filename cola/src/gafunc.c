@@ -2659,7 +2659,7 @@ static gaint aave_defined(char *expression, struct gastat *pst, gaint sel,
 
 /* Reuse weights and distribute independent Z planes, without copying any
    defined-array values or calling the parser/allocator on worker threads. */
-static gaint aave_defined_series(struct gafunc *call, struct gastat *pst,
+static gaint aave_defined_span(struct gafunc *call, struct gastat *pst, gaint axis,
                                   gaint first, gaint last, gadouble *out, char *mask, gadouble undef) {
   struct gafile *file=reduction_defined(call->argpnt[0],pst);
   struct gastat sample=*pst;
@@ -2680,7 +2680,8 @@ static gaint aave_defined_series(struct gafunc *call, struct gastat *pst,
   if (!views) return -1;
   memset(views,0,(size_t)nz*sizeof(*views));
   for (k=0;k<nz;k++) {
-    sample.dmin[2]=sample.dmax[2]=pst->pfid->gr2ab[2](pst->pfid->grvals[2],first+k);
+    if (axis==2) sample.dmin[2]=sample.dmax[2]=pst->pfid->gr2ab[2](pst->pfid->grvals[2],first+k);
+    else { gr2t(pst->pfid->grvals[3],first+k,&sample.tmin); sample.tmax=sample.tmin; }
     i=defined_area_view(file,&sample,views+k,&one_stride);
     if (i<0) goto done;
     if (i) continue;
@@ -4153,7 +4154,7 @@ gaint gadefseries(char *expression, struct gastat *pst, gaint z1, gaint z2,
   size_t n,pos,pp;
   if (z2<=z1 || z1<1 || !reduction_call(expression,name,&call)) return -1;
   if (!strcmp(name,"aave") && shape->idim<0 && reduction_defined(call.argpnt[0],pst))
-    return aave_defined_series(&call,pst,z1,z2,out,outmask,undef);
+    return aave_defined_span(&call,pst,2,z1,z2,out,outmask,undef);
   var=ave_plain_var(call.argpnt[0],pst,NULL);
   if (!var) {
     struct gafile *defined=reduction_defined(call.argpnt[0],pst);
@@ -4252,6 +4253,101 @@ done:
   if (xw) gree(xw,"seriesxw"); if (yw) gree(yw,"seriesyw");
   if (sums) gree(sums,"seriessum"); if (counts) gree(counts,"seriescount");
   if (values) gree(values,"seriesvalues"); if (mask) gree(mask,"seriesmask");
+  return rc;
+}
+
+
+/* Area means at several times: one serial I/O producer, bounded batches,
+   and independent per-time reductions. No shared parser/file state is
+   touched by worker threads. Only a complete simple AAVE call is eligible. */
+gaint gadeftimeseries(char *expression, struct gastat *pst, gaint first, gaint last,
+                       struct gagrid *shape, gadouble *out, char *outmask,
+                       gadouble undef, gaint reuse, gaint progress) {
+  struct gafunc call;
+  struct gafile *file=pst->pfid;
+  struct gavar *var;
+  struct gastat sample=*pst;
+  struct gagrid *plane=NULL,read;
+  char name[9],*mask=NULL;
+  gadouble bounds[4],*values=NULL,*xw=NULL,*yw=NULL;
+  size_t size,n;
+  gaint i,dim,wflag=0,rc=-1,chunk,t,count,k,j;
+  if (last<=first || shape->idim>=0 || !reduction_call(expression,name,&call) ||
+      strcmp(name,"aave") || call.argnum!=5) return -1;
+  if (reduction_defined(call.argpnt[0],pst))
+    return aave_defined_span(&call,pst,3,first,last,out,outmask,undef);
+  var=ave_plain_var(call.argpnt[0],pst,NULL);
+  if (!var || file->ppflag || file->idxflg || first<1 || last>file->dnum[3]) return -1;
+  /* Serial NetCDF/HDF5 readers benefit only when enough independent times
+     amortize the producer workspace and keep several workers busy. */
+  if (!file->adios2flg && file->ncflg &&
+      (last-first+1<8 || ga_omp_get_threads()<4)) return -1;
+  for (i=0;i<4;i++) {
+    if (!dimprs(call.argpnt[i+1],pst,file,&dim,bounds+i,1,&wflag) || dim!=i/2) return -1;
+    if (!wflag) bounds[i]+=(i%2 ? 0.5 : -0.5);
+  }
+  for (i=0;i<2;i++) {
+    sample.dmin[i]=file->gr2ab[i](file->grvals[i],bounds[2*i]);
+    sample.dmax[i]=file->gr2ab[i](file->grvals[i],bounds[2*i+1]);
+  }
+  sample.idim=0; sample.jdim=1;
+  if (gaexpr("lon",&sample)) return 1;
+  if (sample.type!=1) { gafree(&sample); return -1; }
+  plane=sample.result.pgr; read=*plane; read.pvar=var;
+  if ((file->wrap && (read.dimmin[0]<1 || read.dimmax[0]>file->dnum[0])) ||
+      read.dimmin[4]<1 || read.dimmax[4]>file->dnum[4]) goto done;
+  for (i=0;i<2;i++) {
+    if (read.dimmin[i]<1) read.dimmin[i]=1;
+    if (read.dimmax[i]>file->dnum[i]) read.dimmax[i]=file->dnum[i];
+    if (read.dimmin[i]>read.dimmax[i]) goto done;
+  }
+  read.isiz=read.dimmax[0]-read.dimmin[0]+1;
+  read.jsiz=read.dimmax[1]-read.dimmin[1]+1;
+  size=(size_t)read.isiz*read.jsiz;
+  chunk=(gaint)(64.0*1024*1024/((double)size*(sizeof(*values)+1)));
+  if (chunk>256) chunk=256;
+  /* Serial readers need only enough planes to keep workers occupied. */
+  if (!file->adios2flg) {
+    gaint target=ga_omp_get_threads()==1 ? 1 : 4*ga_omp_get_threads();
+    if (chunk>target) chunk=target;
+  }
+  if (chunk>last-first+1-reuse) chunk=last-first+1-reuse;
+  if (chunk<1) goto done;
+  n=(size_t)chunk*size;
+  values=galloc(n*sizeof(*values),"areatimes"); mask=galloc(n,"areatimemasks");
+  xw=galloc((size_t)read.isiz*sizeof(*xw),"areatimexw");
+  yw=galloc((size_t)read.jsiz*sizeof(*yw),"areatimeyw");
+  if (!values || !mask || !xw || !yw) goto done;
+  aave_weights(&read,sample.dmin[0],sample.dmax[0],sample.dmin[1],sample.dmax[1],1,xw,yw);
+  if (reuse) { outmask[0]=shape->umask[0]; out[0]=outmask[0] ? shape->grid[0] : undef; }
+  for (t=first+reuse;t<=last;t+=count) {
+    count=last-t+1<chunk ? last-t+1 : chunk;
+    if (gaqsig()) { rc=1; goto done; }
+    rc=gagrdsteps(&read,t,count,1,values,mask);
+    if (rc) goto done;
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(j) \
+    if(count>1 && ga_omp_parallelize((double)size*count>INT_MAX ? INT_MAX : (gaint)(size*count)))
+#endif
+    for (k=0;k<count;k++) {
+      struct gagrid view=read;
+      gadouble sum=0,weight=0;
+      view.grid=values+(size_t)k*size; view.umask=mask+(size_t)k*size;
+      for (j=0;j<read.jsiz;j++) {
+        gadouble rowsum,rowweight;
+        aave_row(&view,(size_t)j*read.isiz,xw,yw[j],1,&rowsum,&rowweight);
+        sum+=rowsum; weight+=rowweight;
+      }
+      outmask[t-first+k]=weight>0;
+      out[t-first+k]=weight>0 ? sum/weight : undef;
+    }
+    gaprogstep(progress+t-first+count);
+  }
+  rc=gaqsig() ? 1 : 0;
+done:
+  if (plane) gagfre(plane);
+  if (values) gree(values,"areatimes"); if (mask) gree(mask,"areatimemasks");
+  if (xw) gree(xw,"areatimexw"); if (yw) gree(yw,"areatimeyw");
   return rc;
 }
 

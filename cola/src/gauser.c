@@ -3275,6 +3275,24 @@ char name[20];
     res  = pfiv->rbuf;
     resu = pfiv->ubuf;
     for (ie=iemin; ie<=iemax; ie++) {
+      if (izmin==izmax && itmax>itmin) {
+        conv=pfi->gr2ab[2];
+        pst->dmin[2]=pst->dmax[2]=conv(pfi->grvals[2],izmin);
+        gr2t(pfi->grvals[3],(gadouble)itmin,&pst->tmin); pst->tmax=pst->tmin;
+        conv=pfi->gr2ab[4];
+        pst->dmin[4]=pst->dmax[4]=conv(pfi->grvals[4],ie);
+        rc=gadeftimeseries(cmd,pst,itmin,itmax,pgr1,res,resu,pcm->undef,ie==iemin,ndone);
+        if (rc>0) { gaprnt(0,"DEFINE error: Batch evaluation failed\n"); goto retrn; }
+        if (!rc) {
+          if (ie==iemin) {
+            if (pgr1->idim>-1) { gree(pgr1->grid,"f86a"); gree(pgr1->umask,"f87a"); }
+            pgr1->grid=NULL; pgr1->umask=NULL; pst->result.pgr=NULL;
+          }
+          res+=(size_t)gsiz*(itmax-itmin+1); resu+=(size_t)gsiz*(itmax-itmin+1);
+          ndone+=itmax-itmin+1; gaprogstep(ndone);
+          continue;
+        }
+      }
       for (it=itmin; it<=itmax; it++) {
         if (izmax>izmin) {
           conv=pfi->gr2ab[2];
@@ -3283,7 +3301,7 @@ char name[20];
           conv=pfi->gr2ab[4];
           pst->dmin[4]=pst->dmax[4]=conv(pfi->grvals[4],ie);
           rc=gadefseries(cmd,pst,izmin,izmax,pgr1,res,resu,pcm->undef);
-          if (rc>0) goto retrn;
+          if (rc>0) { gaprnt(0,"DEFINE error: Batch evaluation failed\n"); goto retrn; }
           if (!rc) {
             if (ie==iemin && it==itmin) {
               if (pgr1->idim>-1) {
@@ -3415,11 +3433,15 @@ etrn:
 
 retrn:
   if (pst!=NULL) {
+    /* The first result can still be owned by both names when a batch
+       fails before DEFINE has copied it. Release that object once. */
+    if (pst->type==1 && pst->result.pgr==pgr1) pst->result.pgr=NULL;
     gafree(pst);
     gree(pst,"f98");
   }
   if (pgr1!=NULL) {
     if (pgr1->grid!=NULL && pgr1->idim>-1) gree(pgr1->grid,"f208");
+    if (pgr1->umask!=NULL && pgr1->idim>-1) gree(pgr1->umask,"f208mask");
     gree(pgr1,"f99");
   }
   if (pdf!=NULL) gree(pdf,"f209");
@@ -3432,6 +3454,8 @@ retrn:
   pcm->dmax[2] = zmax;
   pcm->vdim[2] = vdz;
   pcm->vdim[3] = vdt;
+  pcm->dmax[4] = emax;
+  pcm->vdim[4] = vde;
   return(1);
 }
 

@@ -159,6 +159,37 @@ active batches, template reopens, missing middle times, pairwise masks,
 increments and boundary weights. Real-data time means matched the pre-change
 executable exactly at one and eight threads in the checked cases.
 
+### Area-mean time series
+
+For a scalar area mean with fixed Z and varying T,
+`define p=aave(field,x=...,x=...,y=...,y=...)` can read bounded time batches
+and reduce independent times on calculation threads. Defined arrays share
+coordinate weights and expose only private read-only views across T. File
+readers remain serial; the first scalar already evaluated by `define` is
+reused. Non-BP5 workspace is adjusted to the worker count, within 64 MiB.
+Short/lower-thread NetCDF/HDF5 requests retain their established path; native
+time batching there requires at least eight times and four calculation
+threads. Unsupported expressions (including nested `aave(zint(...))`),
+periodic requests and other layouts retain the evaluator.
+
+For 256 x 256 binary data over 32 times, a warm three-trial median at four
+threads fell from 0.0160 s to 0.0058 s (0.0183 to 0.0069 s at eight). Clipping
+the non-periodic halo also allows complete binary planes to be read instead
+of individual rows. BP5's tested short series remains limited by decoding;
+more calculation threads alone did not improve its wall time. A 32-time
+1024 x 64 HDF5 series measured 0.0776 to 0.0563 s at four threads, with smaller
+or mixed changes at other counts.
+
+Time-series verification covers partial cells, surface fields, defined-array
+broadcasts, different ensemble members, missing template times and reopening
+after an incompatible native grid. The latter also checks failed-define
+ownership and dimension restoration. The final 12-time synthetic suite
+compared over 56 million finite values at 1/2/4/8 threads with identical masks;
+maximum absolute/relative differences were `1.49e-8` and `3.24e-15` (the large
+absolute difference is in large-magnitude totals). ASan/UBSan passed for the
+changed reader, reduction and define units, including failure recovery;
+legacy global-allocation leak reporting was disabled.
+
 ## Indexed vertical slices
 
 [`zslice`](ZSLICE.md) reads a different Z index at each horizontal point.

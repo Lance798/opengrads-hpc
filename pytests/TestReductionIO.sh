@@ -36,11 +36,12 @@ import math,os,re,subprocess,sys
 from pathlib import Path
 launcher,build,directory=sys.argv[1:]; root=Path(directory)
 env=dict(os.environ,OPENGRADS_BUILD_ROOT=build,OPENGRADS_COLOR='0',GA_PROGRESS='off')
-def run(ctl,commands,threads):
+def run(ctl,commands,threads,expected_error=False):
     text='open '+str(ctl)+'\nset threads '+str(threads)+'\nset gxout print\nset prnopts %.17g 32 1\n'+commands+'\nquit\n'
     p=subprocess.run([launcher,'-bl','-d','gxdummy','-h','gxdummy'],input=text,universal_newlines=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env,timeout=90)
-    errors=[s for s in p.stdout.splitlines() if re.search(r'Error|ERROR|Invalid expression',s)]
-    assert p.returncode==0 and not errors,'\n'.join(errors)+'\n'+p.stdout[-1000:]
+    errors=[s for s in p.stdout.splitlines() if re.search(r'Error|ERROR|Invalid expression|DEFINE error',s)]
+    assert p.returncode==0 and (bool(errors) if expected_error else not errors),'\n'.join(errors)+'\n'+p.stdout[-1000:]
+    if expected_error:assert 'DEFINE error' in p.stdout,p.stdout[-1000:]
     lines=p.stdout.splitlines(); grids=[]
     for i,line in enumerate(lines):
         m=re.match(r'Printing Grid -- (\d+) Values -- Undef = (\S+)',line)
@@ -117,9 +118,16 @@ for label,dataset,dtype,template in formats:
         defined+='define dp='+expr+'\nd dp\n'
         defined+='define dr='+expr.replace('(cached,','(cached+0,')+'\nd dr\n'
     defined+=source+'set t 2\nset x 1 128\nset y 1 128\nset z 1\nd surface\nset z 4\nd surface\n'
+    times='set x 1\nset y 1\nset z 1\nset t 1 12\n'
+    for expr in ('aave(f,x=1,x=128,y=1,y=128)',
+                 'aave(f,x=0.8,x=128.2,y=1.3,y=127.7)',
+                 'aave(cached,x=1,x=128,y=1,y=128)'):
+        times+='define tp='+expr+'\nd tp\n'
+        times+='define tr='+expr.replace('(f,','(f+0,').replace('(cached,','(cached+0,')+'\nd tr\n'
+    times+='set z 4\ndefine tp=aave(surface,x=1,x=128,y=1,y=128)\nd tp\ndefine tr=aave(surface+0,x=1,x=128,y=1,y=128)\nd tr\n'
     for threads in ((1,8) if reverse else (1,2,4,8)):
-        actual=run(ctl,commands+extra+slabs+series+selectors+defined,threads)
-        assert len(actual)==(68 if extra else 64),(label,len(actual))
+        actual=run(ctl,commands+extra+slabs+series+selectors+defined+times,threads)
+        assert len(actual)==(76 if extra else 72),(label,len(actual))
         compare([actual[1]],[actual[2]],label+' native/evaluator',exact=True)
         if extra:
             compare([actual[6],actual[8]],[actual[7],actual[9]],label+' batch/evaluator',exact=True)
@@ -134,7 +142,9 @@ for label,dataset,dtype,template in formats:
         compare([actual[ds]],[actual[ds+15]],label+' defined source unchanged',exact=True)
         for idx in range(ds+1,ds+15,2):
             compare([actual[idx]],[actual[idx+1]],label+' read-only defined/evaluator')
-        compare([actual[-2]],[actual[-1]],label+' surface fixed-Z broadcast',exact=True)
+        compare([actual[ds+16]],[actual[ds+17]],label+' surface fixed-Z broadcast',exact=True)
+        for idx in range(ds+18,len(actual),2):
+            compare([actual[idx]],[actual[idx+1]],label+' AAVE time series/evaluator')
         key=(reverse,template)
         if key not in references:references[key]=actual[:start]
         else:compare(actual[:start],references[key],label+' cross-format/threads')
@@ -182,6 +192,34 @@ if (root/'slice.nc').exists():
     for threads in (1,8):
         actual=run(gap,'set z 1\nset x 1 128\nset y 1 128\nd ave(f,t=1,t=12)\nd ave(f+0,t=1,t=12)\nd ave(f+g,t=1,t=12)\nd ave((f+g)+0,t=1,t=12)\n',threads)
         compare([actual[0],actual[2]],[actual[1],actual[3]],'NetCDF template gap batch',exact=True)
+        actual=run(gap,'set z 1\nset x 1\nset y 1\nset t 1 12\ndefine tp=aave(f,x=1,x=128,y=1,y=128)\nd tp\ndefine tr=aave(f+0,x=1,x=128,y=1,y=128)\nd tr\n',threads)
+        compare([actual[0]],[actual[1]],'NetCDF template gap time series')
+    # An incompatible grid at one time must fail cleanly, then reopen.
+    # At eight threads this exercises failure before the first scalar is
+    # copied out of a native AAVE batch (an ownership/cleanup regression).
+    for time in range(12):
+        target=root/('broken%d.nc'%time)
+        if time==2:
+            import ctypes,ctypes.util
+            nc=ctypes.CDLL(ctypes.util.find_library('netcdf')); empty=ctypes.c_int()
+            assert nc.nc_create(str(target).encode(),0,ctypes.byref(empty))==0
+            dims=(ctypes.c_int*4)()
+            for d,(name,length) in enumerate((('t',1),('z',4),('y',1),('x',1))):
+                ident=ctypes.c_int()
+                assert nc.nc_def_dim(empty,name.encode(),ctypes.c_size_t(length),ctypes.byref(ident))==0
+                dims[d]=ident.value
+            var=ctypes.c_int()
+            assert nc.nc_def_var(empty,b'f',5,4,dims,ctypes.byref(var))==0
+            assert nc.nc_enddef(empty)==0
+            assert nc.nc_put_var_float(empty,var,(ctypes.c_float*4)(1,2,3,4))==0
+            assert nc.nc_close(empty)==0
+        else:target.symlink_to(root/('slice%d.nc'%time))
+    broken=root/'broken.ctl'
+    broken.write_text((root/'nc-template.ctl').read_text().replace('^slice%tm1.nc','^broken%tm1.nc'))
+    for threads in (1,8):
+        actual=run(broken,'set z 1\nset x 1\nset y 1\nset t 1 12\ndefine failed=aave(f,x=1,x=128,y=1,y=128)\nset t 1\nset x 1 16\nset y 1 16\nd f\n',threads,expected_error=True)
+        wanted=run(root/'nc-template.ctl','set z 1\nset t 1\nset x 1 16\nset y 1 16\nd f\n',1)
+        compare(actual,wanted,'DEFINE incompatible-grid batch recovery',exact=True)
 print('Non-finite legacy reduction values retain their classification:',nonfinite)
 print('Reduction I/O regression passed: samples=%d max_abs=%.17g max_rel=%.17g; masks agree; native ZINT and batched sums match evaluator exactly.'%(samples,max_abs,max_rel))
 PY
