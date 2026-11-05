@@ -87,12 +87,12 @@ int main(int argc, char **argv) {
 #ifdef ZS_NETCDF
   {
     int mode;
-    for (mode=0;mode<4;mode++) {
+    for (mode=0;mode<NT+2;mode++) {
       int file, dims[4], fvar,gvar,kvar,svar;
       int source=mode>=2 ? mode-2 : 0;
       const float fill=-9999;
       if (mode>=2) snprintf(path,sizeof(path),"%s/slice%d.nc",argv[1],source);
-      else snprintf(path,sizeof(path),"%s/slice%s.nc",argv[1],mode ? "4" : "");
+      else snprintf(path,sizeof(path),"%s/slice%s.nc",argv[1],mode ? "_compressed" : "");
       check(nc_create(path,NC_CLOBBER|(mode ? NC_NETCDF4 : 0),&file)==NC_NOERR,"create NetCDF");
       check(nc_def_dim(file,"t",mode>=2 ? 1 : NT,dims)==NC_NOERR,"NetCDF time");
       check(nc_def_dim(file,"z",NZ,dims+1)==NC_NOERR,"NetCDF z");

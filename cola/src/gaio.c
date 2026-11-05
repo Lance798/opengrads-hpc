@@ -648,20 +648,89 @@ gaint y,z,t,e;
 }
 
 
-/* Read n grids shaped like pgr, a grid gaggrd has already filled for one
-   time, at times t0, t0+incr, ... into gr and gru one after another. A
-   format that can fetch many times in one request does so; otherwise this
-   returns -1 and the caller reads the times one at a time. */
-gaint gagrdsteps (struct gagrid *pgr, gaint t0, gaint n, gaint incr,
-                  gadouble *gr, char *gru) {
+/* Read a bounded batch of fixed-Z horizontal grids. BP5 can submit its
+   steps together. Other libraries stay on the caller thread and fill the
+   same buffers directly, avoiding parser calls and per-time grid copies. */
+gaint gagrdsteps(struct gagrid *grid, gaint t0, gaint n, gaint incr,
+                  gadouble *values, char *mask) {
+  struct gafile *file=grid->pfile;
+  struct gavar *var=grid->pvar;
+  struct gagrid sub=*grid;
+  gaint k,rc,d,a,mapped,tt,ee,oflg,row;
+  size_t size=(size_t)grid->isiz*grid->jsiz,pos;
 #if USEADIOS2==1
-  if (pgr->pfile && pgr->pvar && pgr->pfile->adios2flg && pgr->pvar->levels>-900)
-    return gaadios_read_steps(pgr->pfile, pgr->pvar, pgr, t0, n, incr, gr, gru);
+  if (file && var && file->adios2flg && var->levels>-900)
+    return gaadios_read_steps(file,var,grid,t0,n,incr,values,mask);
 #endif
-  (void)pgr; (void)t0; (void)n; (void)incr; (void)gr; (void)gru;
-  return -1;
+  if (!file || !var || file->type!=1 || file->ppflag || file->idxflg || grid->toff ||
+      var->levels<=-900 || grid->idim>1 || grid->jdim>1 ||
+      t0<1 || n<1 || incr<1 || t0>file->dnum[3] || (n-1)>(file->dnum[3]-t0)/incr ||
+      grid->dimmin[0]<1 || grid->dimmax[0]>file->dnum[0] ||
+      grid->dimmin[1]<1 || grid->dimmax[1]>file->dnum[1] ||
+      grid->dimmin[4]<1 || grid->dimmax[4]>file->dnum[4]) return -1;
+  if (file->ncflg==1) {
+    if (grid->dimmin[2]<1 || grid->dimmax[2]>file->dnum[2]) return -1;
+#if USENETCDF==1
+    /* Keep the established broadcast path for unmapped axes. */
+    for (a=0;a<2;a++) if (grid->idim==a || grid->jdim==a) {
+      mapped=0;
+      for (d=0;d<var->nvardims;d++) if (var->units[d]==-100-a) mapped=1;
+      if (!mapped) return -1;
+    }
+#else
+    return -1;
+#endif
+  } else if (file->ncflg==3) {
+#if USEHDF5!=1
+    return -1;
+#endif
+  } else if (file->ncflg || grid->idim!=0 || (grid->jdim!=1 && grid->jdim!=-1)) return -1;
+  for (k=0;k<n;k++) {
+    sub.dimmin[3]=sub.dimmax[3]=t0+k*incr;
+    sub.dimmin[4]=sub.dimmax[4]=grid->dimmin[4];
+    /* Surface variables ignore the fixed height in the ordinary reader. */
+    if (!var->levels) sub.dimmin[2]=sub.dimmax[2]=1;
+    pgr=&sub; pfi=file; pvr=var;
+    pos=(size_t)k*size;
+#if USEHDF5==1
+    if (file->ncflg==3) rc=gah5read(&sub,values+pos,mask+pos,0);
+    else
+#endif
+#if USENETCDF==1
+    if (file->ncflg==1) {
+      tt=sub.dimmin[3]; ee=sub.dimmin[4];
+      if (file->tmplat) {
+        tt=gaopfn(tt,ee,&ee,&oflg,file);
+        if (tt==-99999) return 1;
+        if (tt==-88888) {
+          size_t q;
+          for (q=0;q<size;q++) { values[pos+q]=file->undef; mask[pos+q]=0; }
+          continue;
+        }
+        sub.dimmin[3]=sub.dimmax[3]=tt;
+        sub.dimmin[4]=sub.dimmax[4]=ee;
+      }
+      rc=gancsetup();
+      if (!rc) rc=gancgrid(values+pos,mask+pos,sub.idim,sub.jdim);
+    } else
+#endif
+    {
+      if (!file->tmplat && !file->seqflg && !file->yrflg &&
+          sub.dimmin[0]==1 && sub.dimmax[0]==file->dnum[0]) {
+        rc=garrow(1,sub.dimmin[1],sub.dimmin[2],sub.dimmin[3],sub.dimmin[4],
+                    (gaint)size,values+pos,mask+pos,0);
+      } else {
+        rc=0;
+        for (row=0;row<sub.jsiz && !rc;row++)
+          rc=garrow(sub.dimmin[0],sub.dimmin[1]+row,sub.dimmin[2],sub.dimmin[3],sub.dimmin[4],
+                     sub.isiz,values+pos+(size_t)row*sub.isiz,mask+pos+(size_t)row*sub.isiz,0);
+      }
+    }
+    if (rc) return rc;
+    if (gaqsig()) return 1;
+  }
+  return 0;
 }
-
 
 /* A bounded spatial slab, in GrADS Z,Y,X order. No parser or file API is
    called by worker threads. Callers cap workspace before requesting it.
