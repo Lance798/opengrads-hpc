@@ -3276,6 +3276,26 @@ char name[20];
     resu = pfiv->ubuf;
     for (ie=iemin; ie<=iemax; ie++) {
       for (it=itmin; it<=itmax; it++) {
+        if (izmax>izmin) {
+          conv=pfi->gr2ab[2];
+          pst->dmin[2]=pst->dmax[2]=conv(pfi->grvals[2],izmin);
+          gr2t(pfi->grvals[3],(gadouble)it,&pst->tmin); pst->tmax=pst->tmin;
+          conv=pfi->gr2ab[4];
+          pst->dmin[4]=pst->dmax[4]=conv(pfi->grvals[4],ie);
+          rc=gadefseries(cmd,pst,izmin,izmax,pgr1,res,resu,pcm->undef);
+          if (rc>0) goto retrn;
+          if (!rc) {
+            if (ie==iemin && it==itmin) {
+              if (pgr1->idim>-1) {
+                gree(pgr1->grid,"f86a"); gree(pgr1->umask,"f87a");
+              }
+              pgr1->grid=NULL; pgr1->umask=NULL; pst->result.pgr=NULL;
+            }
+            res+=(size_t)gsiz*(izmax-izmin+1); resu+=(size_t)gsiz*(izmax-izmin+1);
+            ndone+=izmax-izmin+1; gaprogstep(ndone);
+            continue;
+          }
+        }
 	for (iz=izmin; iz<=izmax; iz++) {
 
 	  /* fix dmin and dmax values for Z, T, E dimensions */

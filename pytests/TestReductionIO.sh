@@ -97,21 +97,30 @@ for label,dataset,dtype,template in formats:
     for op in ('ave','mean','sum','sumg'):
         for limits in ('z=1,z=4','z=1.25,z=3.75,-b'):
             slabs+='d '+op+'(f,'+limits+')\nd '+op+'(f+0,'+limits+')\n'
+    series='set x 1\nset y 1\nset z 1 4\nset t 1 2\n'
+    for expr in ('aave(f,x=1,x=128,y=1,y=128)',
+                 'aave(f,x=0.8,x=128.2,y=1.3,y=127.7)',
+                 'ave(f,x=1,x=256)','ave(f,y=1,y=256)'):
+        series+='define prof='+expr+'\nd prof\n'
+        series+='define ref='+expr.replace('(f,','(f+0,')+'\nd ref\n'
     for threads in ((1,8) if reverse else (1,2,4,8)):
-        actual=run(ctl,commands+extra+slabs,threads)
-        assert len(actual)==(26 if extra else 22),(label,len(actual))
+        actual=run(ctl,commands+extra+slabs+series,threads)
+        assert len(actual)==(34 if extra else 30),(label,len(actual))
         compare([actual[1]],[actual[2]],label+' native/evaluator',exact=True)
         if extra:
             compare([actual[6],actual[8]],[actual[7],actual[9]],label+' batch/evaluator',exact=True)
         start=10 if extra else 6
-        for idx in range(start,len(actual),2):
+        for idx in range(start,start+16,2):
             compare([actual[idx]],[actual[idx+1]],label+' vertical slab/evaluator',exact=True)
+        for idx in range(start+16,len(actual),2):
+            compare([actual[idx]],[actual[idx+1]],label+' DEFINE profile/evaluator')
         key=(reverse,template)
         if key not in references:references[key]=actual[:start]
         else:compare(actual[:start],references[key],label+' cross-format/threads')
         skey=(label,reverse)
         if skey not in slabrefs:slabrefs[skey]=actual[start:]
-        else:compare(actual[start:],slabrefs[skey],label+' slab threads',exact=True)
+        else:compare(actual[start:start+16],slabrefs[skey][:16],label+' slab threads',exact=True)
+        if threads!=1:compare(actual[start+16:],slabrefs[skey][16:],label+' profile threads')
     print('Reduction I/O passed:',label,'reversed' if reverse else 'normal')
 
 if (root/'slice.h5').exists():
