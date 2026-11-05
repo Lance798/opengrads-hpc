@@ -130,7 +130,7 @@ else:print('Original P3 comparison skipped: set OPENGRADS_P3_SOURCE and FC to en
 
 config=run('q config')
 formats=[('dat','slice.dat','')]
-if (root/'slice.nc').exists() and 'netcdf' in config:formats += [('nc4','slice4.nc','netcdf')]
+if (root/'slice.nc').exists() and 'netcdf' in config:formats += [('nc4','slice_compressed.nc','netcdf')]
 if (root/'slice.h5').exists() and 'hdf5' in config:formats += [('h5','slice.h5','hdf5_grid'),('h5-template','slice%tm1.h5','hdf5_grid')]
 if (root/'slice.bp').exists() and 'adios2-bp5' in config:
     formats += [('bp','slice.bp','bp5')]

@@ -139,6 +139,26 @@ this small calculation. All eight reduction selectors and fractional bounds
 matched the pre-change executable exactly at one and eight threads on BP5,
 HDF5, NetCDF and binary data.
 
+### Bounded time batches
+
+Long time means of bare NetCDF/HDF5 fields, including equally shaped `a+b`,
+can fill a bounded batch directly from the existing bulk readers. BP5 keeps
+its native step batching. All file-library calls run on the main thread;
+workers fold each point's times in the original order. For two templated
+fields, reads are interleaved within each time to reuse the open file.
+The values/masks budget is 64 MiB across both fields. Time increments,
+fractional `-b` weights and missing template times retain their meaning.
+
+Short non-BP5 means (fewer than eight remaining times) and binary time means
+retain the established path because batch-buffer overhead erased the gains.
+A 256 x 256, 32-time NetCDF mean measured 0.0176/0.0161 s before and
+0.0174/0.0138 s after at one/eight threads. HDF5 remained primarily limited
+by decompression, with mixed small changes across thread counts; batching is
+not a promise of faster I/O. The regression fixture has 12 times so it checks
+active batches, template reopens, missing middle times, pairwise masks,
+increments and boundary weights. Real-data time means matched the pre-change
+executable exactly at one and eight threads in the checked cases.
+
 ## Indexed vertical slices
 
 [`zslice`](ZSLICE.md) reads a different Z index at each horizontal point.

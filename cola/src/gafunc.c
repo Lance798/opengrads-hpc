@@ -3209,7 +3209,7 @@ static struct gavar *ave_plain_var (char *expr, struct gastat *pst,
   return pvar;
 }
 
-/* Recognize only a sum of two unmodified, equally shaped BP5 fields.
+/* Recognize only a sum of two unmodified, equally shaped file fields.
    Keep the addition inside each time's mask: ave(a+b) is not in general
    ave(a)+ave(b). Other expressions retain the ordinary evaluator. */
 static struct gavar *ave_sum_vars(char *expr, struct gastat *pst,
@@ -3219,12 +3219,12 @@ static struct gavar *ave_sum_vars(char *expr, struct gastat *pst,
   size_t n;
   gaint d;
   if (!plus || strchr(plus+1,'+') || strlen(expr)>=sizeof(terms[0]) ||
-      !pst->pfid->adios2flg || grid->pfile!=pst->pfid || grid->toff) return NULL;
+      grid->pfile!=pst->pfid || grid->toff) return NULL;
   n=plus-expr; memcpy(terms[0],expr,n); terms[0][n]=0;
   strcpy(terms[1],plus+1);
   a=ave_plain_var(terms[0],pst,NULL); b=ave_plain_var(terms[1],pst,NULL);
-  if (!a || !b || a->levels!=b->levels || a->nh5vardims!=b->nh5vardims) return NULL;
-  for (d=0;d<a->nh5vardims;d++) if (a->units[d]!=b->units[d]) return NULL;
+  if (!a || !b || a->levels!=b->levels || a->nh5vardims!=b->nh5vardims || a->nvardims!=b->nvardims) return NULL;
+  for (d=0;d<a->nh5vardims || d<a->nvardims;d++) if (a->units[d]!=b->units[d]) return NULL;
   *other=b;
   return a;
 }
@@ -3860,6 +3860,8 @@ struct gagrid *sect=NULL;
   }
   direct = (dim==3) ? ave_plain_var(pfc->argpnt[0],pst,pgr1) : NULL;
   if (dim==3 && !direct) direct=ave_sum_vars(pfc->argpnt[0],pst,pgr1,&other);
+  /* Short means and binary means are faster without extra batch buffers. */
+  if (direct && !pfi->adios2flg && (!pfi->ncflg || (d2-d)/incr+1<8)) direct=NULL;
   if (direct) {
     readgrid=*pgr1; readgrid.pvar=direct;
     readother=*pgr1; readother.pvar=other;
@@ -3900,8 +3902,18 @@ struct gagrid *sect=NULL;
       nstep = (d2-d)/incr + 1;
       if (nstep>(pfi->dnum[3]-d)/incr+1) nstep = (pfi->dnum[3]-d)/incr+1;
       if (nstep>chunk) nstep = chunk;
-      rc = gagrdsteps(&readgrid, d, nstep, incr, steps, stepsu);
-      if (!rc && other) rc=gagrdsteps(&readother,d,nstep,incr,stepsb,stepsbu);
+      if (other && !pfi->adios2flg) {
+        /* Keep template files open while reading both fields at a time. */
+        rc=0;
+        for (k=0;k<nstep && !rc;k++) {
+          size_t at=(size_t)k*siz;
+          rc=gagrdsteps(&readgrid,d+k*incr,1,incr,steps+at,stepsu+at);
+          if (!rc) rc=gagrdsteps(&readother,d+k*incr,1,incr,stepsb+at,stepsbu+at);
+        }
+      } else {
+        rc=gagrdsteps(&readgrid,d,nstep,incr,steps,stepsu);
+        if (!rc && other) rc=gagrdsteps(&readother,d,nstep,incr,stepsb,stepsbu);
+      }
       if (rc==0) {
         for (k=0; k<nstep; k++) {
           wts[k] = bndflg ? ave_tbndwt(gr1,gr2,d+k*incr) : 1.0;

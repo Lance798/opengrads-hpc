@@ -28,7 +28,7 @@ elif pkg-config --exists hdf5; then
   read -r -a hlibs <<< "$(pkg-config --libs hdf5)"
   flags+=(-DZS_HDF5 "${hflags[@]}"); libs+=("${hlibs[@]}")
 fi
-"${CC:-gcc}" -std=gnu99 -Wall -Wextra -Werror -DNX=256 -DNY=256 -DNT=6 "${flags[@]}" \
+"${CC:-gcc}" -std=gnu99 -Wall -Wextra -Werror -DNX=256 -DNY=256 -DNT=12 "${flags[@]}" \
   "$repo_root/pytests/zslice_writer.c" "${libs[@]}" -lm -o "$test_root/writer"
 "$test_root/writer" "$test_root" zint
 python3 -u - "${OPENGRADS_LAUNCHER:-$repo_root/opengrads}" "$build_root" "$test_root" <<'PY'
@@ -71,7 +71,7 @@ def compare(a,b,label,exact=False):
             max_abs=max(max_abs,err); max_rel=max(max_rel,rel); samples+=1
             assert x==y if exact else err<=1e-8+abs(y)*2e-12,(label,x,y,err)
 formats=[('dat','slice.dat','',False),('dat-template','slice%tm1.dat','',True)]
-if (root/'slice.nc').exists():formats += [('nc','slice.nc','netcdf',False),('nc4','slice4.nc','netcdf',False),('nc-template','slice%tm1.nc','netcdf',True)]
+if (root/'slice.nc').exists():formats += [('nc','slice.nc','netcdf',False),('nc4','slice_compressed.nc','netcdf',False),('nc-template','slice%tm1.nc','netcdf',True)]
 if (root/'slice.h5').exists():formats += [('h5','slice.h5','hdf5_grid',False),('h5-template','slice%tm1.h5','hdf5_grid',True)]
 if (root/'slice.bp').exists():formats += [('bp','slice.bp','bp5',False)]
 if (root/'slicezstd.bp').exists():formats += [('bpzstd','slicezstd.bp','bp5',False)]
@@ -87,10 +87,8 @@ for label,dataset,dtype,template in formats:
     ctl.write_text('dset ^'+dataset+'\n'+('dtype '+dtype+'\n' if dtype else '')+
         ('options '+('template ' if template else '')+('yrev zrev' if reverse else '')+'\n' if template or reverse else '')+
         'undef -9999\nxdef 256 linear 10 0.1\nydef 256 linear -60 0.25\nzdef 4 levels 50 150 400 1000\n'+
-        'tdef '+('2' if template else '6')+' linear 00z01jan2000 1hr\nvars 4\nf 4 '+(dims if dtype else '99')+' Float\ng 4 '+(dims if dtype else '99')+' Double\nkmap 0 '+(surface if dtype else '99')+' Index\nsurface 0 '+(surface if dtype else '99')+' Surface\nendvars\n')
-    extra=''
-    if not template:
-        extra='set x 1 256\nset y 1 256\nset z 1\nd ave(f+g,t=1,t=6)\nd ave((f+g)+0,t=1,t=6)\nd ave(f+g,t=1.2,t=5.8,-b)\nd ave((f+g)+0,t=1.2,t=5.8,-b)\n'
+        'tdef 12 linear 00z01jan2000 1hr\nvars 4\nf 4 '+(dims if dtype else '99')+' Float\ng 4 '+(dims if dtype else '99')+' Double\nkmap 0 '+(surface if dtype else '99')+' Index\nsurface 0 '+(surface if dtype else '99')+' Surface\nendvars\n')
+    extra='set x 1 256\nset y 1 256\nset z 1\nd ave(f+g,t=1,t=12)\nd ave((f+g)+0,t=1,t=12)\nd ave(f+g,t=1.2,t=11.8,-b)\nd ave((f+g)+0,t=1.2,t=11.8,-b)\n'
     # Native XYZ slabs must preserve masks, nonuniform Z weights and the
     # level-by-level addition order of the expression evaluator.
     slabs='set x 1 128\nset y 1 128\nset z 1\n'
@@ -151,7 +149,7 @@ if (root/'slice.h5').exists():
     ctl=root/'packed.ctl'
     ctl.write_text('dset ^slice.h5\ndtype hdf5_grid\nundef -9999 _FillValue\n'+
         'unpack scale_factor add_offset\nxdef 256 linear 10 0.1\nydef 256 linear -60 0.25\n'+
-        'zdef 4 levels 50 150 400 1000\ntdef 6 linear 00z01jan2000 1hr\nvars 1\npacked 4 t,z,y,x Packed integer\nendvars\n')
+        'zdef 4 levels 50 150 400 1000\ntdef 12 linear 00z01jan2000 1hr\nvars 1\npacked 4 t,z,y,x Packed integer\nendvars\n')
     wanted=[None if x==0 and y==0 else ((700+10*y+x)%5000-2500)*0.125+10 for y in range(256) for x in range(256)]
     for threads in (1,8):
         actual=run(ctl,'set t 2\nset z 1\nd packed\nd zint(packed)\nd zint(packed+0)\n',threads)
@@ -159,7 +157,7 @@ if (root/'slice.h5').exists():
         compare([actual[0]],[wanted],'HDF5 packed integer',exact=True)
         compare([actual[1]],[actual[2]],'HDF5 packed ZINT',exact=True)
     template=root/'packed-template.ctl'
-    template.write_text(ctl.read_text().replace('^slice.h5','^slice%tm1.h5').replace('dtype hdf5_grid','dtype hdf5_grid\noptions template').replace('tdef 6 ','tdef 2 ').replace('t,z,y,x','z,y,x'))
+    template.write_text(ctl.read_text().replace('^slice.h5','^slice%tm1.h5').replace('dtype hdf5_grid','dtype hdf5_grid\noptions template').replace('tdef 12 ','tdef 2 ').replace('t,z,y,x','z,y,x'))
     compare(run(template,'set t 2\nset z 1\nd packed\n',8),[wanted],'HDF5 single-element attributes',exact=True)
     invalid=root/'packed-vector.ctl'
     invalid.write_text(ctl.read_text().replace('unpack scale_factor','unpack bad_scale'))
@@ -173,10 +171,17 @@ if (root/'slice.h5').exists():
 if (root/'slice.nc').exists():
     # Failed file opens must yield missing values and permit a later reopen.
     ctl=root/'missing-template.ctl'
-    ctl.write_text((root/'nc-template.ctl').read_text().replace('tdef 2 ','tdef 3 '))
-    actual=run(ctl,'set t 3\nd f\nset t 1\nd f\nset t 3\nd f\n',1)
+    ctl.write_text((root/'nc-template.ctl').read_text().replace('tdef 12 ','tdef 13 '))
+    actual=run(ctl,'set t 13\nd f\nset t 1\nd f\nset t 13\nd f\n',1)
     assert len(actual)==3 and all(v is None for v in actual[0]+actual[2]),'NetCDF missing template'
     compare([actual[1]],run(root/'nc-template.ctl','set t 1\nd f\n',1),'NetCDF template reopen',exact=True)
+    # A missing middle template time must not poison later batches.
+    for time in (0,1,3,4,5,6,7,8,9,10,11): (root/('gap%d.nc'%time)).symlink_to(root/('slice%d.nc'%time))
+    gap=root/'gap.ctl'
+    gap.write_text((root/'nc-template.ctl').read_text().replace('^slice%tm1.nc','^gap%tm1.nc'))
+    for threads in (1,8):
+        actual=run(gap,'set z 1\nset x 1 128\nset y 1 128\nd ave(f,t=1,t=12)\nd ave(f+0,t=1,t=12)\nd ave(f+g,t=1,t=12)\nd ave((f+g)+0,t=1,t=12)\n',threads)
+        compare([actual[0],actual[2]],[actual[1],actual[3]],'NetCDF template gap batch',exact=True)
 print('Non-finite legacy reduction values retain their classification:',nonfinite)
 print('Reduction I/O regression passed: samples=%d max_abs=%.17g max_rel=%.17g; masks agree; native ZINT and batched sums match evaluator exactly.'%(samples,max_abs,max_rel))
 PY
