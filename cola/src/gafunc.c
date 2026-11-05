@@ -3141,6 +3141,81 @@ static void ave_section_at (struct gagrid *sec, gaint dim, gaint k, gaint siz,
   }
 }
 
+/* A bounded XYZ slab for a vertical reduction of a plain file variable.
+   Each output column keeps its original level-by-level addition order.
+   Reads are serial; independent columns run on the calculation threads. */
+static gaint ave_volume(struct gafunc *pfc, struct gastat *pst, struct gafile *file,
+                         struct gagrid *sum, struct gagrid *cnt, gaint first, gaint last,
+                         gaint sel, gaint bounded, gadouble wlo, gadouble whi) {
+  struct gagrid tile=*sum;
+  struct gavar *var=ave_plain_var(pfc->argpnt[0],pst,sum);
+  gadouble *values=NULL,*weights=NULL,alo,ahi,alen,value;
+  char *mask=NULL;
+  gaint nx,ny,tx,ty,x,y,i,j,k,rc=-1,nz=last-first+1,begun=0;
+  size_t plane,n,pos,dst;
+  if ((!file->adios2flg && file->ncflg!=3) || !var || sel>4 || first<1 || last>var->levels || sum->idim>1 || sum->jdim>1 ||
+      file->ppflag || file->idxflg || sum->toff ||
+      sum->dimmin[0]<1 || sum->dimmax[0]>file->dnum[0] ||
+      sum->dimmin[1]<1 || sum->dimmax[1]>file->dnum[1] ||
+      sum->dimmin[3]<1 || sum->dimmax[3]>file->dnum[3] ||
+      sum->dimmin[4]<1 || sum->dimmax[4]>file->dnum[4]) return -1;
+  nx=sum->dimmax[0]-sum->dimmin[0]+1; ny=sum->dimmax[1]-sum->dimmin[1]+1;
+  tx=file->adios2flg && nx>512 ? 512 : nx; ty=ny<256 ? ny : 256;
+  /* At most 128 MiB of values/masks, plus the backend's native buffer. */
+  while ((double)tx*ty*nz>128.0*1024*1024/(sizeof(*values)+1) && ty>1) ty=(ty+1)/2;
+  while ((double)tx*ty*nz>128.0*1024*1024/(sizeof(*values)+1) && tx>1) tx=(tx+1)/2;
+  n=(size_t)tx*ty*nz;
+  if (n>128*1024*1024/(sizeof(*values)+1)) return -1;
+  values=galloc(n*sizeof(*values),"avevolume"); mask=galloc(n,"avevolumemask");
+  weights=galloc((size_t)nz*sizeof(*weights),"avevolumeweights");
+  if (!values || !mask || !weights) goto done;
+  for (k=first;k<=last;k++) {
+    alo=file->gr2ab[2](file->grvals[2],k-0.5);
+    ahi=file->gr2ab[2](file->grvals[2],k+0.5); alen=fabs(ahi-alo);
+    if (bounded) {
+      gadouble low=whi<wlo ? whi : wlo,high=whi<wlo ? wlo : whi;
+      if (alo<low) alo=low; if (alo>high) alo=high;
+      if (ahi<low) ahi=low; if (ahi>high) ahi=high;
+    }
+    weights[k-first]=sel<=2 ? ahi-alo : sel==3 ? (alen>FUZZ_SCALE ? fabs(ahi-alo)/alen : 0) : 1;
+  }
+  for (y=0;y<ny;y+=ty) for (x=0;x<nx;x+=tx) {
+    gaint width=nx-x<tx ? nx-x : tx,height=ny-y<ty ? ny-y : ty;
+    tile.dimmin[0]=sum->dimmin[0]+x; tile.dimmax[0]=tile.dimmin[0]+width-1;
+    tile.dimmin[1]=sum->dimmin[1]+y; tile.dimmax[1]=tile.dimmin[1]+height-1;
+    tile.pvar=var; plane=(size_t)width*height;
+    rc=gagrdvolume(&tile,first,last,values,mask);
+    if (rc) { if (begun || rc>0) rc=1; goto done; }
+    begun=1;
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(i,j,k,pos,dst,value) \
+    if(ga_omp_parallelize(plane*(size_t)nz>INT_MAX ? INT_MAX : (gaint)(plane*nz)))
+#endif
+    for (n=0;n<plane;n+=256) {
+      size_t q,end=n+256<plane ? n+256 : plane,indices[256];
+      for (q=n;q<end;q++) {
+        i=x+q%width; j=y+q/width;
+        indices[q-n]=sum->idim==0 ? (size_t)j*nx+i : sum->idim==1 ? j : 0;
+      }
+      for (k=0;k<nz;k++) {
+        for (q=n;q<end;q++) {
+          dst=indices[q-n]; pos=(size_t)k*plane+q; value=values[pos];
+          ave_accumulate(sel,first+k,weights[k],&sum->grid[dst],&sum->umask[dst],
+                         &cnt->grid[dst],&cnt->umask[dst],value,mask[pos]);
+        }
+      }
+    }
+    if (gaqsig()) { rc=1; goto done; }
+  }
+  pst->dmin[2]=pst->dmax[2]=file->gr2ab[2](file->grvals[2],last);
+  rc=0;
+done:
+  if (values) gree(values,"avevolume");
+  if (mask) gree(mask,"avevolumemask");
+  if (weights) gree(weights,"avevolumeweights");
+  return rc;
+}
+
 static gaint ave_run (struct gafunc *, struct gastat *, gaint);
 
 /* ave and its kin, with their progress shown while they run */
@@ -3545,6 +3620,11 @@ struct gagrid *sect=NULL;
      else, or a format without such a reader, goes a time at a time. */
   d+=incr;
   rc = 0;
+  if (dim==2 && d<=d2) {
+    rc=ave_volume(pfc,pst,pfi,pgr1,pgr2,d,d2,sel,bndflg,wlo,whi);
+    if (rc>=0) { gaprogstep(d2-d1+1); goto average_done; }
+    rc=0;
+  }
   direct = (dim==3) ? ave_plain_var(pfc->argpnt[0],pst,pgr1) : NULL;
   if (dim==3 && !direct) direct=ave_sum_vars(pfc->argpnt[0],pst,pgr1,&other);
   if (direct) {
@@ -3731,6 +3811,7 @@ struct gagrid *sect=NULL;
     }
   }
 
+average_done:
   if (steps)  gree(steps,"avesteps");
   if (stepsu) gree(stepsu,"avestepsu");
   if (stepsb) gree(stepsb,"avestepsb");

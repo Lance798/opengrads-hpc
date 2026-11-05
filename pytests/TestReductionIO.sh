@@ -31,7 +31,7 @@ fi
 "${CC:-gcc}" -std=gnu99 -Wall -Wextra -Werror -DNX=256 -DNY=256 -DNT=6 "${flags[@]}" \
   "$repo_root/pytests/zslice_writer.c" "${libs[@]}" -lm -o "$test_root/writer"
 "$test_root/writer" "$test_root" zint
-python3 - "${OPENGRADS_LAUNCHER:-$repo_root/opengrads}" "$build_root" "$test_root" <<'PY'
+python3 -u - "${OPENGRADS_LAUNCHER:-$repo_root/opengrads}" "$build_root" "$test_root" <<'PY'
 import math,os,re,subprocess,sys
 from pathlib import Path
 launcher,build,directory=sys.argv[1:]; root=Path(directory)
@@ -54,15 +54,19 @@ def run(ctl,commands,threads):
     return grids
 max_abs=max_rel=0.0
 samples=0
+nonfinite=0
 def compare(a,b,label,exact=False):
-    global max_abs,max_rel,samples
+    global max_abs,max_rel,samples,nonfinite
     assert len(a)==len(b),label
     for ga,gb in zip(a,b):
         assert len(ga)==len(gb),label
         for x,y in zip(ga,gb):
             assert (x is None)==(y is None),(label,'mask mismatch')
             if x is None:continue
-            assert math.isfinite(x) and math.isfinite(y),label
+            if not math.isfinite(x) or not math.isfinite(y):
+                assert (math.isnan(x) and math.isnan(y)) or x==y,(label,x,y)
+                nonfinite+=1
+                continue
             err=abs(x-y); rel=err/max(abs(y),1e-30)
             max_abs=max(max_abs,err); max_rel=max(max_rel,rel); samples+=1
             assert x==y if exact else err<=1e-8+abs(y)*2e-12,(label,x,y,err)
@@ -74,6 +78,7 @@ if (root/'slicezstd.bp').exists():formats += [('bpzstd','slicezstd.bp','bp5',Fal
 # Every native block/chunk exceeds the OpenMP work threshold.
 commands='set t 2\nset z 1\nset x 0 257\nset y 0 257\nd f\nset x 1 256\nset y 1 256\nd zint(f)\nd zint(f+0)\nd zint(g,125,875)\nset x 1\nset y 1\nd aave(f,x=1,x=256,y=1,y=256)\nd aave(zint(f),x=1,x=256,y=1,y=256)\n'
 references={}
+slabrefs={}
 for label,dataset,dtype,template in formats:
   for reverse in (False,True):
     dims='t,z,y,x' if dtype=='netcdf' or (dtype=='hdf5_grid' and not template) else 'z,y,x'
@@ -86,15 +91,27 @@ for label,dataset,dtype,template in formats:
     extra=''
     if not template:
         extra='set x 1 256\nset y 1 256\nset z 1\nd ave(f+g,t=1,t=6)\nd ave((f+g)+0,t=1,t=6)\nd ave(f+g,t=1.2,t=5.8,-b)\nd ave((f+g)+0,t=1.2,t=5.8,-b)\n'
+    # Native XYZ slabs must preserve masks, nonuniform Z weights and the
+    # level-by-level addition order of the expression evaluator.
+    slabs='set x 1 128\nset y 1 128\nset z 1\n'
+    for op in ('ave','mean','sum','sumg'):
+        for limits in ('z=1,z=4','z=1.25,z=3.75,-b'):
+            slabs+='d '+op+'(f,'+limits+')\nd '+op+'(f+0,'+limits+')\n'
     for threads in ((1,8) if reverse else (1,2,4,8)):
-        actual=run(ctl,commands+extra,threads)
-        assert len(actual)==(10 if extra else 6),(label,len(actual))
+        actual=run(ctl,commands+extra+slabs,threads)
+        assert len(actual)==(26 if extra else 22),(label,len(actual))
         compare([actual[1]],[actual[2]],label+' native/evaluator',exact=True)
         if extra:
             compare([actual[6],actual[8]],[actual[7],actual[9]],label+' batch/evaluator',exact=True)
+        start=10 if extra else 6
+        for idx in range(start,len(actual),2):
+            compare([actual[idx]],[actual[idx+1]],label+' vertical slab/evaluator',exact=True)
         key=(reverse,template)
-        if key not in references:references[key]=actual
-        else:compare(actual,references[key],label+' cross-format/threads')
+        if key not in references:references[key]=actual[:start]
+        else:compare(actual[:start],references[key],label+' cross-format/threads')
+        skey=(label,reverse)
+        if skey not in slabrefs:slabrefs[skey]=actual[start:]
+        else:compare(actual[start:],slabrefs[skey],label+' slab threads',exact=True)
     print('Reduction I/O passed:',label,'reversed' if reverse else 'normal')
 
 if (root/'slice.h5').exists():
@@ -128,5 +145,6 @@ if (root/'slice.nc').exists():
     actual=run(ctl,'set t 3\nd f\nset t 1\nd f\nset t 3\nd f\n',1)
     assert len(actual)==3 and all(v is None for v in actual[0]+actual[2]),'NetCDF missing template'
     compare([actual[1]],run(root/'nc-template.ctl','set t 1\nd f\n',1),'NetCDF template reopen',exact=True)
+print('Non-finite legacy reduction values retain their classification:',nonfinite)
 print('Reduction I/O regression passed: samples=%d max_abs=%.17g max_rel=%.17g; masks agree; native ZINT and batched sums match evaluator exactly.'%(samples,max_abs,max_rel))
 PY

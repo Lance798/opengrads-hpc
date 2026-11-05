@@ -1030,6 +1030,8 @@ gaint gaadios_read_grid (struct gafile *, struct gavar *, struct gagrid *,
                           gadouble *, char *);
 gaint gaadios_read_steps (struct gafile *, struct gavar *, struct gagrid *,
                           gaint, gaint, gaint, gadouble *, char *);
+gaint gagrdvolume (struct gagrid *, gaint, gaint, gadouble *, char *);
+gaint gaadios_read_volume (struct gafile *, struct gavar *, struct gagrid *, gadouble *, char *);
 gaint gagrdsteps (struct gagrid *, gaint, gaint, gaint, gadouble *, char *);
 gaint gagrdzslice (struct gagrid *, const gaint *, gadouble *, char *);
 /* A column reduction: finite edges follow GrADS Z order; factors are per level.

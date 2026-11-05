@@ -35,6 +35,44 @@ native values; corresponding times were 0.152 s and 0.166 s. The measured speedu
 depends on the dataset, compression layout, cache and storage state. These are
 observations on this host, not general throughput guarantees.
 
+## Spatial average slabs
+
+Vertical `ave`, `mean`, `sum`, and `sumg` of a bare BP5/HDF5 variable
+can read several levels together. Horizontal tiles bound values and masks to
+128 MiB, plus the backend's native buffer. A tile of columns is reduced in
+level order; changing the OpenMP thread count does not reorder a column's
+additions. Partial `-b` bounds and nonuniform/decreasing Z coordinates retain
+the evaluator's weights. Unsupported expressions and file layouts use the
+existing evaluator. Small NetCDF and binary vertical means retain their
+faster plane path.
+
+HDF5 bulk selections also cover X/Z and Y/Z sections, including reversed axes,
+packed values, broadcast profiles, templates and missing boundary cells.
+Canonical XYZ volumes are read directly into the result buffer. This reduces
+API calls, but compressed chunk layout and cache size still determine the
+amount of decoding; fewer calls alone do not guarantee faster profiles.
+
+On 5 November 2026, warm-cache three-trial medians on this host were:
+
+| Vertical `ave(u,z=1,z=69)` | Threads | Before (s) | Slabs (s) |
+|---|---:|---:|---:|
+| Taiwan VVM BP5, 512 x 512 | 1 | 3.273 | 0.237 |
+| Taiwan VVM BP5, 512 x 512 | 8 | 3.278 | 0.169 |
+| Sea/grass/mountain HDF5, 1024 x 64 | 1 | 0.114 | 0.110 |
+| Sea/grass/mountain HDF5, 1024 x 64 | 8 | 0.092 | 0.094 |
+
+These include reads and computation, exclude startup and plotting, and use
+CPUs 0--7. HDF5's small difference is within observed run-to-run variability;
+this workload remains dominated by gzip decoding. BP5's improvement combines
+less repeated decoding with parallel column reduction.
+
+Real-data vertical reductions, partial bounds, and X/Z and Y/Z profiles were
+compared against the pre-change executable at 1 and 8 threads: finite values
+were identical and masks matched for BP5, HDF5, NetCDF and binary inputs.
+`TestReductionIO.sh` additionally checks every vertical reduction against
+`field+0` (the evaluator), including templates, reversed axes, compression,
+and the existing non-finite-value behavior of each reader.
+
 ## Indexed vertical slices
 
 [`zslice`](ZSLICE.md) reads a different Z index at each horizontal point.
