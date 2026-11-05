@@ -73,6 +73,30 @@ were identical and masks matched for BP5, HDF5, NetCDF and binary inputs.
 `field+0` (the evaluator), including templates, reversed axes, compression,
 and the existing non-finite-value behavior of each reader.
 
+### Defined Z profiles
+
+`define p=ave(field,x=...,x=...)` (or a Y average) can retain Z through one
+section evaluation when the per-level result is scalar. BP5, NetCDF and binary
+files use this path. HDF5 retains its existing evaluation because its small
+chunk cache and native Z-plane layout made this change slower in testing.
+
+For `define p=aave(field,x=...,x=...,y=...,y=...)`, BP5 and binary files can
+stream horizontal tiles containing all requested levels, sharing coordinate
+weights across Z. Only in-file cells are read; the original fractional bounds
+and missing-value weights still apply. Levels are independent OpenMP tasks,
+with a fixed row/cell addition order at every thread count. HDF5 and NetCDF
+keep their faster established plane path. General expressions, cyclic
+longitude requests, and unsupported layouts retain the evaluator.
+
+On the same Taiwan VVM BP5 data, a 69-level defined X-mean profile fell from
+6.16 s to about 0.185 s (one thread). A 512 x 512 area-mean profile fell from
+10.14 s to 0.364 s (one thread) or 0.314 s (eight). These improvements primarily
+remove repeated decompression; scaling with additional calculation threads
+is smaller. Real-data profile, fractional-bound and multiple-time comparisons
+against the pre-change executable had matching masks and maximum BP5 absolute
+difference `1.07e-14`. The synthetic regression also covers reversed axes,
+templates and independent evaluator references for each profile.
+
 ## Indexed vertical slices
 
 [`zslice`](ZSLICE.md) reads a different Z index at each horizontal point.

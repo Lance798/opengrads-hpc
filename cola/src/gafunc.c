@@ -2373,33 +2373,15 @@ err1:
 
 /* Function that actually does area average over a grid */
 
-char doaave(struct gagrid *pgr, gadouble dmin0, gadouble dmax0,
-		gadouble dmin1, gadouble dmax1, gaint sel, gadouble *result) {
-gadouble (*iconv) (gadouble *, gadouble);
-gadouble (*jconv) (gadouble *, gadouble);
-gadouble *ivals, *jvals, *gr, *xw=NULL, *yw=NULL;
-gadouble d2r,sum,w1,w2=0,y1,x1,abs,alo,ahi,alen,wt,cellwt;
-gaint i,j,n,size;
-char *gru,sumu=0;
-size_t sz;
-
-  d2r = M_PI/180.0;
-  iconv = pgr->igrab;
-  jconv = pgr->jgrab;
-  ivals = pgr->ivals;
-  jvals = pgr->jvals;
-  sum = 0.0;
-  wt = 0.0;
-  gr  = pgr->grid;
-  gru = pgr->umask;
-
-  /* Coordinate weights are independent of the data values.  Calculate
-     them once, then reduce the grid in parallel. */
-  sz = pgr->isiz*sizeof(gadouble);
-  xw = (gadouble *)galloc(sz,"aavexw");
-  sz = pgr->jsiz*sizeof(gadouble);
-  yw = (gadouble *)galloc(sz,"aaveyw");
-  if (xw!=NULL && yw!=NULL) {
+/* Shared coordinate weights for plane and streamed profile reductions. */
+static void aave_weights(struct gagrid *pgr, gadouble dmin0, gadouble dmax0,
+                          gadouble dmin1, gadouble dmax1, gaint sel,
+                          gadouble *xw, gadouble *yw) {
+  gadouble (*iconv)(gadouble *,gadouble)=pgr->igrab;
+  gadouble (*jconv)(gadouble *,gadouble)=pgr->jgrab;
+  gadouble *ivals=pgr->ivals,*jvals=pgr->jvals;
+  gadouble x1,y1,alo,ahi,alen,w1,w2=0,d2r=M_PI/180.0;
+  gaint i,j;
     for (i=0; i<pgr->isiz; i++) {
       x1 = (gadouble)(i+pgr->dimmin[0]);
       alo = iconv(ivals, x1-0.5);
@@ -2438,6 +2420,37 @@ size_t sz;
       }
       yw[j] = w1;
     }
+
+}
+
+char doaave(struct gagrid *pgr, gadouble dmin0, gadouble dmax0,
+		gadouble dmin1, gadouble dmax1, gaint sel, gadouble *result) {
+gadouble (*iconv) (gadouble *, gadouble);
+gadouble (*jconv) (gadouble *, gadouble);
+gadouble *ivals, *jvals, *gr, *xw=NULL, *yw=NULL;
+gadouble d2r,sum,w1,w2=0,y1,x1,abs,alo,ahi,alen,wt,cellwt;
+gaint i,j,n,size;
+char *gru,sumu=0;
+size_t sz;
+
+  d2r = M_PI/180.0;
+  iconv = pgr->igrab;
+  jconv = pgr->jgrab;
+  ivals = pgr->ivals;
+  jvals = pgr->jvals;
+  sum = 0.0;
+  wt = 0.0;
+  gr  = pgr->grid;
+  gru = pgr->umask;
+
+  /* Coordinate weights are independent of the data values.  Calculate
+     them once, then reduce the grid in parallel. */
+  sz = pgr->isiz*sizeof(gadouble);
+  xw = (gadouble *)galloc(sz,"aavexw");
+  sz = pgr->jsiz*sizeof(gadouble);
+  yw = (gadouble *)galloc(sz,"aaveyw");
+  if (xw!=NULL && yw!=NULL) {
+    aave_weights(pgr,dmin0,dmax0,dmin1,dmax1,sel,xw,yw);
 
     size = pgr->isiz*pgr->jsiz;
 #if USEOPENMP == 1
@@ -3871,6 +3884,137 @@ err3:
   snprintf(pout,1255,"Error from %s: Invalid time increment argument\n",fnam);
   gaprnt(0,pout);
   return (1);
+}
+
+
+/* Recognize only a complete, simple reduction call. Everything else keeps
+   the evaluator, including expressions outside the call and nested calls. */
+static gaint reduction_call(char *expression, char *name, struct gafunc *call) {
+  char *p=strchr(expression,'('),*q,*out=call->buff;
+  size_t n;
+  if (!p || (n=(size_t)(p-expression))>8 || !n || strlen(p+1)>=sizeof(call->buff)) return 0;
+  memcpy(name,expression,n); name[n]=0;
+  call->argnum=1; call->argpnt[0]=out;
+  for (q=p+1;*q && *q!=')';q++) {
+    if (*q=='(') return 0;
+    if (*q==',') {
+      if (call->argnum>=20) return 0;
+      *out++=0; call->argpnt[call->argnum++]=out;
+    } else *out++=*q;
+  }
+  if (*q!=')' || q[1]) return 0;
+  *out=0; return 1;
+}
+
+/* Fill one time/member of a DEFINE across Z. The destination belongs to
+   DEFINE and is never exposed as a mutable view to the expression parser.
+   Return -1 for the established level-at-a-time path, 0 on success. */
+gaint gadefseries(char *expression, struct gastat *pst, gaint z1, gaint z2,
+                   struct gagrid *shape, gadouble *out, char *outmask, gadouble undef) {
+  struct gafunc call;
+  struct gastat sample=*pst;
+  struct gafile *file=pst->pfid;
+  struct gavar *var;
+  struct gagrid *plane=NULL,tile;
+  char name[9],*mask=NULL;
+  gadouble bounds[4],*values=NULL,*xw=NULL,*yw=NULL,*sums=NULL,*counts=NULL,gr;
+  gaint dim,wflag=0,rc=-1,k,x,y,i,j,nz=z2-z1+1,tx,ty,nx,ny,lx,ly,ox,oy;
+  size_t n,pos,pp;
+  if (z2<=z1 || z1<1 || !reduction_call(expression,name,&call) ||
+      !(var=ave_plain_var(call.argpnt[0],pst,NULL)) || z2>var->levels) return -1;
+  if (file->ncflg!=3 && !strcmp(name,"ave") && shape->idim<0 && call.argnum>=3 && call.argnum<=4) {
+    if (!dimprs(call.argpnt[1],pst,file,&dim,&gr,1,&wflag) || dim>1) return -1;
+    sample.idim=2; sample.jdim=-1;
+    sample.dmin[2]=file->gr2ab[2](file->grvals[2],z1);
+    sample.dmax[2]=file->gr2ab[2](file->grvals[2],z2);
+    rc=gaexpr(expression,&sample);
+    if (rc) return rc;
+    if (sample.type!=1) { gafree(&sample); return 1; }
+    plane=sample.result.pgr;
+    if (plane->idim!=2 || plane->jdim>=0 || plane->isiz!=nz || plane->dimmin[2]!=z1) {
+      gafree(&sample); return 1;
+    }
+    for (k=0;k<nz;k++) { outmask[k]=plane->umask[k]; out[k]=outmask[k] ? plane->grid[k] : undef; }
+    gafree(&sample); return 0;
+  }
+  if ((!file->adios2flg && file->ncflg) || strcmp(name,"aave") || call.argnum!=5 ||
+      shape->idim>=0 || file->ppflag || file->idxflg) return -1;
+  for (i=0;i<4;i++) {
+    if (!dimprs(call.argpnt[i+1],pst,file,&dim,bounds+i,1,&wflag) || dim!=i/2) return -1;
+    if (!wflag) bounds[i]+=(i%2 ? 0.5 : -0.5);
+  }
+  for (i=0;i<2;i++) {
+    sample.dmin[i]=file->gr2ab[i](file->grvals[i],bounds[2*i]);
+    sample.dmax[i]=file->gr2ab[i](file->grvals[i],bounds[2*i+1]);
+  }
+  sample.idim=0; sample.jdim=1;
+  if (gaexpr("lon",&sample)) return 1;
+  if (sample.type!=1) { gafree(&sample); return -1; }
+  plane=sample.result.pgr; tile=*plane; tile.pvar=var;
+  nx=plane->isiz; ny=plane->jsiz;
+  if ((file->wrap && (plane->dimmin[0]<1 || plane->dimmax[0]>file->dnum[0])) ||
+      plane->dimmin[3]<1 || plane->dimmax[3]>file->dnum[3] ||
+      plane->dimmin[4]<1 || plane->dimmax[4]>file->dnum[4]) goto done;
+  xw=galloc((size_t)nx*sizeof(*xw),"seriesxw"); yw=galloc((size_t)ny*sizeof(*yw),"seriesyw");
+  sums=galloc((size_t)nz*sizeof(*sums),"seriessum"); counts=galloc((size_t)nz*sizeof(*counts),"seriescount");
+  if (!xw || !yw || !sums || !counts) goto done;
+  aave_weights(plane,sample.dmin[0],sample.dmax[0],sample.dmin[1],sample.dmax[1],1,xw,yw);
+  for (k=0;k<nz;k++) { sums[k]=counts[k]=0; }
+  lx=plane->dimmin[0]<1 ? 1 : plane->dimmin[0];
+  ly=plane->dimmin[1]<1 ? 1 : plane->dimmin[1];
+  nx=plane->dimmax[0]>file->dnum[0] ? file->dnum[0] : plane->dimmax[0];
+  ny=plane->dimmax[1]>file->dnum[1] ? file->dnum[1] : plane->dimmax[1];
+  tx=nx-lx+1; if (file->adios2flg && tx>512) tx=512;
+  ty=ny-ly+1; if (ty>256) ty=256;
+  if (tx<1 || ty<1) { rc=-1; goto done; }
+  while ((double)tx*ty*nz>128.0*1024*1024/(sizeof(*values)+1) && ty>1) ty=(ty+1)/2;
+  while ((double)tx*ty*nz>128.0*1024*1024/(sizeof(*values)+1) && tx>1) tx=(tx+1)/2;
+  n=(size_t)tx*ty*nz;
+  if (n>128*1024*1024/(sizeof(*values)+1)) goto done;
+  values=galloc(n*sizeof(*values),"seriesvalues"); mask=galloc(n,"seriesmask");
+  if (!values || !mask) goto done;
+  for (y=ly;y<=ny;y+=ty) for (x=lx;x<=nx;x+=tx) {
+    gaint width=nx-x+1<tx ? nx-x+1 : tx,height=ny-y+1<ty ? ny-y+1 : ty;
+    tile.dimmin[0]=x; tile.dimmax[0]=x+width-1;
+    tile.dimmin[1]=y; tile.dimmax[1]=y+height-1;
+    pp=(size_t)width*height;
+    rc=gagrdvolume(&tile,z1,z2,values,mask);
+    if (rc) { if (x!=lx || y!=ly || rc>0) rc=1; goto done; }
+    ox=x-plane->dimmin[0]; oy=y-plane->dimmin[1];
+    /* Independent levels own their sums, with a fixed row/cell order.
+       Thread count therefore does not change this reduction's grouping. */
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(j,i,pos) \
+    if(nz>1 && ga_omp_parallelize(pp*(size_t)nz>INT_MAX ? INT_MAX : (gaint)(pp*nz)))
+#endif
+    for (k=0;k<nz;k++) {
+      gadouble sum=0,weight=0;
+      for (j=0;j<height;j++) {
+        gadouble rowsum=0,rowweight=0;
+#if USEOPENMP == 1
+#pragma omp simd reduction(+:rowsum,rowweight)
+#endif
+        for (i=0;i<width;i++) {
+          pos=(size_t)k*pp+(size_t)j*width+i;
+          if (mask[pos]) {
+            gadouble w=xw[ox+i]*yw[oy+j];
+            rowsum+=values[pos]*w; rowweight+=w;
+          }
+        }
+        sum+=rowsum; weight+=rowweight;
+      }
+      sums[k]+=sum; counts[k]+=weight;
+    }
+    if (gaqsig()) { rc=1; goto done; }
+  }
+  for (k=0;k<nz;k++) { outmask[k]=counts[k]>0; out[k]=outmask[k] ? sums[k]/counts[k] : undef; }
+  rc=0;
+done:
+  if (plane) gagfre(plane);
+  if (xw) gree(xw,"seriesxw"); if (yw) gree(yw,"seriesyw");
+  if (sums) gree(sums,"seriessum"); if (counts) gree(counts,"seriescount");
+  if (values) gree(values,"seriesvalues"); if (mask) gree(mask,"seriesmask");
+  return rc;
 }
 
 
