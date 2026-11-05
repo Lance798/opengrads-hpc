@@ -1032,7 +1032,8 @@ gaint gaadios_read_steps (struct gafile *, struct gavar *, struct gagrid *,
                           gaint, gaint, gaint, gadouble *, char *);
 gaint gagrdsteps (struct gagrid *, gaint, gaint, gaint, gadouble *, char *);
 gaint gagrdzslice (struct gagrid *, const gaint *, gadouble *, char *);
-/* A column reduction: edges follow GrADS Z order; factors are per level.
+/* A column reduction: finite edges follow GrADS Z order; factors are per level.
+   Unmasked bottom/top bounds are finite and ordered.
    Bounds and the result follow the horizontal grid's storage order. */
 struct gazint {
   gaint nz;
