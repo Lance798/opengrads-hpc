@@ -13,6 +13,18 @@ product such as `qv*rhobar`. General expressions use the evaluator once per
 intersecting Z level. All paths use the same midpoint-derived thicknesses and
 skip missing values without changing other cells' weights.
 
+The native readers distribute horizontal tiles to calculation threads after
+each read completes. Each tile retains ownership of its columns through the
+levels, so the vertical addition order is unchanged. Bounds, horizontal
+offsets and missing-value thresholds are reused instead of recalculated for
+every native value. Finite layer/bound intersections use explicit comparisons;
+this does not enable fast-math. Small chunks remain serial.
+
+Area-average halos at non-periodic file boundaries no longer force native
+BP5/HDF5 integrals back to level-by-level reads. Only the intersection with
+the file is requested; the existing output bounds, padding and area weights
+remain in effect.
+
 On Taiwan VVM's compressed BP5 output, 4096 columns at T=73 matched independent
 native-data layer sums. Three process invocations of `zint(qv*rhobar)` and
 `zint((qv*rhobar)+0)` had median wall times of 0.187 s and 1.425 s including
@@ -115,6 +127,28 @@ saves. The current crossover is 32,768 cells. File reads, expression parsing,
 coordinate conversion setup, and graphics remain serial because the legacy
 core keeps mutable global state in those paths.
 
+HDF5 horizontal maps and lines use a single hyperslab selection, including
+templated files, reversed axes, profile broadcasting, native missing attributes
+and scale/offset unpacking. Requests crossing a non-periodic boundary read
+only valid cells and pad the rest as missing. The temporary selection is
+limited to 256 MiB; unsupported shapes retain the row reader. NetCDF already
+has a bulk reader; fixed-T/E horizontal requests in templated files can use it
+too. Ordinary binary stream files can read a full-width, contiguous horizontal
+slab at once, retaining their existing byte-swap, type conversion and missing
+tests. Reversed-Y, sequential, templated and other special binary layouts keep
+their established reader.
+
+Area reductions use row-wise SIMD sums, avoiding an integer division at each
+cell. This calculation improvement applies to BP5, HDF5, NetCDF, binary and
+defined grids alike. Addition grouping can change the last floating-point
+bits, as with other parallel reductions.
+
+HDF5 numeric attributes are opened on the dataset itself and accept scalar
+or single-element dataspaces. This also corrects the older relative-path and
+scalar-attribute failures that could leave `_FillValue`, `scale_factor` and
+`add_offset` unused. Multi-element attributes are rejected before reading into
+a scalar buffer; the existing warning/default behavior applies.
+
 ## Time averages of BP5 data
 
 `ave`, `mean`, `sum`, `sumg`, `min`, `max`, `minloc`, and `maxloc` over time
@@ -126,8 +160,17 @@ variable), the steps are instead read many at a time: up to 256 steps, or
 and they are folded into the result on the calculation threads. Each grid
 point still takes its steps in order through the same accumulation code, so
 the result matches the step-by-step path; the BP5 regression compares the two
-for exact equality at one and at four threads. Any other expression, file
-format, or a step outside the file goes step by step as before.
+for exact equality at one and at four threads. Steps outside the file and
+unsupported expressions/formats go step by step as before.
+
+A sum of two equally shaped, unmodified fields of the default BP5 file also
+uses this path, for example
+`ave(precip_liq_surf+precip_ice_surf,t=2,t=145)`. The 64 MiB calculation-buffer
+budget is shared between the two inputs. Their masks are intersected and the
+addition is evaluated separately at each time before accumulation. It is not
+rewritten as `ave(a)+ave(b)`, which would change the result when the two
+fields have different missing samples. General expressions, defined grids
+and other formats continue to use their existing evaluator paths.
 
 BP5 reads of a vertical section (x-z or y-z) and of a profile are also one
 read per step now, rather than one per level.
@@ -209,7 +252,96 @@ OPENGRADS_BUILD_ROOT=/path/to/build ./pytests/TestOpenMP.sh
 The test exercises a 256x256 grid, checks the four-thread default and runtime
 controls, and compares common calculation output at one and four threads.
 
+For reader and reduction changes, also run:
+
+```bash
+OPENGRADS_BUILD_ROOT="$PWD/build" \
+OPENGRADS_ADIOS2_ROOT=/path/to/adios2 ./pytests/TestReductionIO.sh
+```
+
+This creates 256x256 grids with six times and native blocks/chunks large
+enough to exercise column parallelism. It compares masks and double-precision
+values at 1, 2, 4 and 8 threads across binary, NetCDF, compressed NetCDF4,
+HDF5, BP5 and compressed BP5 where their fixture dependencies are available.
+Cases include area-average halos, reversed axes, template file changes,
+time-varying missing masks, partial-height integrals, boundary time weights,
+packed HDF5 integers, profile broadcasting and missing NetCDF templates.
+`OPENGRADS_TEST_HDF5_ROOT` and `OPENGRADS_TEST_NETCDF_ROOT` select nonstandard
+fixture dependencies. Native ZINT and two-field time averages must match
+their evaluator fallbacks exactly; cross-format area reductions allow
+`1e-8 + 2e-12*abs(reference)` for changed addition grouping.
+
 ## Reproducible large-case benchmark
+
+### November 2026 reduction checks
+
+The current changes were checked against a clean rebuild of commit `0b076ad`,
+using GCC 14.3 (`-O2 -fopenmp`), serial ADIOS2 2.11 and CPU HDF5 1.14.6.
+The following are three-run medians on a shared Derecho host, bound to CPUs
+0-7, with `OMP_PROC_BIND=close` and `OMP_PLACES=cores`. Timings include reads
+and calculation, but exclude startup, dataset opening, correctness exports
+and drawing. File caches were warm; these are not cold-storage throughput
+or dedicated-node scaling guarantees.
+
+| Workload | Grid / times | Threads | Before (s) | After (s) |
+|---|---|---:|---:|---:|
+| BP5 precipitation `ave(a+b)*86400` | 1024x1024, T=2:145 | 4 | 1.402 | 0.837 |
+| BP5 CWV time mean | 512x512, 69 levels, T=73:76 | 8 | 1.732 | 0.282 |
+| BP5 `zint(qv*rhobar)` | 1024x1024, 69 levels, T=73 | 8 | 1.728 | 0.276 |
+| BP5 precipitation `aave(a+b)` | 1024x1024, T=73 | 8 | 0.395 | 0.016 |
+| BP5 `aave(zint(qv*rhobar))` | 1024x1024, 69 levels, T=73 | 8 | 1.734 | 0.275 |
+| HDF5 CWV time mean | 1024x64, 99 levels, T=6:9 | 8 | 1.480 | 1.147 |
+| HDF5 wind read + area mean | U/V, 1024x64, 4 levels, T=6:7 | 4 | 0.0338 | 0.0320 |
+
+BP5 is Taiwan VVM `taiwanvvm_1024_lc20220623_8192`; HDF5 is the compressed,
+templated `sea_grass_mountain` output. The older BP5 nested-area timing uses
+the numerically equivalent workaround of first defining the column map and
+then averaging it, including both steps. The new timing uses the direct
+nested expression. Wind timings similarly include loading the small U/V
+Z/T cubes and then reducing them; they do not represent the old pathological
+direct BP5 boundary request. BP5 wind reading remains about 3.1 s in both
+versions: repeated vertical-plane reads still dominate that workflow.
+
+At one thread the BP5 full-map integral fell from 1.737 to 0.611 s; at eight
+threads it takes 0.276 s. Thus both the serial kernel and its parallelism
+contribute to the improvement. For this precipitation case four threads
+were faster than eight (0.837 versus 0.859 s). HDF5 gains are smaller because
+chunk reads and decompression dominate. Its original chunk shape is
+`(1,64,512)`; matching memory and file dataspace ranks avoids a regression
+when reading complete horizontal planes.
+
+Synthetic 256x256, six-time binary fixtures at four threads reduced
+`ave(f+g)` from 0.00534 to 0.00202 s. A NetCDF template area average fell
+from 0.00258 to 0.00115 s; a regular NetCDF CWV time mean fell from 0.01709
+to 0.01418 s. These medians use ten repetitions per trial and three trials.
+Ordinary NetCDF already has bulk reads; small NetCDF time averages and area
+reductions did not consistently improve. These results do not substitute
+for measurements on a user's own NetCDF/binary layout.
+
+A mixed BP5 process retaining the precipitation/CWV maps and both small U/V
+cubes peaked at 667.3 MiB RSS before and 672.9 MiB after (eight threads,
+one process invocation each). The time-batch budget does not require
+materializing the complete XYZ/T source cube; total process memory also
+includes defined grids, reader metadata, native buffers and libraries.
+
+Double-precision NetCDF exports were compared cell by cell before and after
+at 1, 2, 4 and 8 threads, including full 1024x1024 precipitation/CWV maps,
+partial columns, land masks, nested column means and Z/T U/V means. All
+precipitation and CWV grid values were identical, and all missing masks
+agreed. The largest real-data area-reduction absolute difference was
+`9.50e-12` (maximum relative difference across the checks `4.26e-13`).
+Independent ADIOS2/HDF5 reads also matched 4096 full and partial columns
+per dataset exactly. Packed HDF5 inputs are checked against independent
+unpacked values, because the previous scalar-attribute behavior was wrong.
+
+`TestReductionIO.sh` compared 30,801,238 synthetic values; maximum absolute
+and relative differences were `5.59e-9` and `1.55e-15` respectively, with
+matching masks. The larger absolute difference occurs in large-magnitude
+reductions. The changed calculation/readers passed ASan/UBSan checks (legacy
+global-allocation leak reporting disabled). This host's verification covers
+HDF5, NetCDF and stream binary data; HDF4 was not enabled.
+
+### Mixed synthetic workload
 
 Run the supplied benchmark after building `grads` and `libgxdummy.la`:
 

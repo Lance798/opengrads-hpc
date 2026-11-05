@@ -18,6 +18,8 @@
 #endif /* HAVE_CONFIG_H */
 
 #include "grads.h"
+#include "gaomp.h"
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -86,6 +88,103 @@ static gaint debug=0;
 
 /* Size of cache */
 #define SCNUM 50000
+
+#if USEHDF5==1
+/* Read a horizontal section in one selection, including only the part
+   inside the file. The legacy row path remains available for other shapes
+   and periodic longitude requests. HDF5 calls stay on the caller thread. */
+static gaint gah5grid(struct gagrid *grid, gadouble *gr, char *mask) {
+  hsize_t start[16],count[16],shape[16];
+  size_t stride[16],n=1,index,pos;
+  hid_t dsid,vid,memory=-1,type=-1;
+  H5T_class_t cls;
+  gadouble *buffer=NULL,value,tolerance;
+  gaint rank,d,xd=-1,yd=-1,x,y,i,j,lo[2],hi[2];
+  gaint t=grid->dimmin[3],e=grid->dimmin[4],ee=e,oflg=0,rc=1;
+  if (grid->idim>1 || grid->jdim>1 || grid->toff || pfi->ppflag ||
+      (pfi->wrap && (grid->dimmin[0]<1 || grid->dimmax[0]>pfi->dnum[0]))) return -1;
+  for (d=0;d<2;d++) {
+    lo[d]=grid->dimmin[d]<1 ? 1 : grid->dimmin[d];
+    hi[d]=grid->dimmax[d]>pfi->dnum[d] ? pfi->dnum[d] : grid->dimmax[d];
+    if (lo[d]>hi[d]) {
+      for (pos=0;pos<(size_t)grid->isiz*grid->jsiz;pos++) { gr[pos]=pfi->undef; mask[pos]=0; }
+      return 0;
+    }
+  }
+  if (pfi->tmplat) {
+    t=gaopfn(t,e,&ee,&oflg,pfi);
+    if (t==-99999) return 1;
+    if (t==-88888) {
+      for (pos=0;pos<(size_t)grid->isiz*grid->jsiz;pos++) { gr[pos]=pfi->undef; mask[pos]=0; }
+      return 0;
+    }
+  }
+  if (oflg || pvr->h5varflg<0) {
+    char *name=pvr->longnm[0] ? pvr->longnm : pvr->abbrv;
+    if (h5openvar(pfi->h5id,name,&dsid,&vid)) return 1;
+    pvr->dataspace=dsid; pvr->h5varflg=vid;
+    if (pvr->h5vid==-999 && h5setup()) return 1;
+    pvr->h5vid=vid;
+  }
+  rank=H5Sget_simple_extent_ndims(pvr->dataspace);
+  if (rank<1 || rank>16) return -1;
+  if (H5Sget_simple_extent_dims(pvr->dataspace,shape,NULL)<0) goto cleanup;
+  for (d=0;d<rank;d++) {
+    gaint unit=(gaint)pvr->units[d];
+    count[d]=1;
+    if (unit==-100) { xd=d; start[d]=lo[0]-1; count[d]=hi[0]-lo[0]+1; }
+    else if (unit==-101) {
+      yd=d; start[d]=pfi->yrflg ? pfi->dnum[1]-hi[1] : lo[1]-1;
+      count[d]=hi[1]-lo[1]+1;
+    }
+    else if (unit==-102) start[d]=pfi->zrflg ? pvr->levels-grid->dimmin[2] : grid->dimmin[2]-1;
+    else start[d]=unit==-103 ? t-1 : unit==-104 ? ee-1 : unit;
+    if (!shape[d] || start[d]>=shape[d] || count[d]>shape[d]-start[d]) return -1;
+  }
+  for (d=rank-1;d>=0;d--) {
+    stride[d]=n;
+    if (count[d]>SIZE_MAX/n) return -1;
+    n*=count[d];
+  }
+  if (n>256*1024*1024/sizeof(*buffer)) return -1;
+  type=H5Dget_type(pvr->h5varflg);
+  if (type<0) goto cleanup;
+  cls=H5Tget_class(type);
+  if ((cls!=H5T_FLOAT && cls!=H5T_INTEGER) ||
+      (cls==H5T_FLOAT && H5Tget_size(type)!=4 && H5Tget_size(type)!=8)) { rc=-1; goto cleanup; }
+  buffer=galloc(n*sizeof(*buffer),"h5gridvalues");
+  if (!buffer) { rc=-1; goto cleanup; }
+  memory=H5Screate_simple(rank,count,NULL);
+  if (memory<0 || H5Sselect_hyperslab(pvr->dataspace,H5S_SELECT_SET,start,NULL,count,NULL)<0 ||
+      H5Dread(pvr->h5varflg,H5T_NATIVE_DOUBLE,memory,pvr->dataspace,H5P_DEFAULT,buffer)<0) goto cleanup;
+  tolerance=dequal(pvr->undef,0.0,1e-8)==0 ? 1e-5 : fabs(pvr->undef/EPSILON);
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(i,j,x,y,index,value) \
+    if(ga_omp_parallelize(grid->isiz*grid->jsiz))
+#endif
+  for (pos=0;pos<(size_t)grid->isiz*grid->jsiz;pos++) {
+    i=pos%grid->isiz; j=pos/grid->isiz;
+    x=grid->dimmin[0]+(grid->idim==0 ? i : 0);
+    y=grid->dimmin[1]+(grid->idim==1 ? i : grid->jdim==1 ? j : 0);
+    mask[pos]=0; gr[pos]=pfi->undef;
+    if (x<lo[0] || x>hi[0] || y<lo[1] || y>hi[1]) continue;
+    index=0;
+    if (xd>=0) index+=((size_t)(x-1)-start[xd])*stride[xd];
+    if (yd>=0) index+=((size_t)(pfi->yrflg ? pfi->dnum[1]-y : y-1)-start[yd])*stride[yd];
+    value=buffer[index];
+    if (!isfinite(value) || (value>=pvr->undef-tolerance && value<=pvr->undef+tolerance)) continue;
+    gr[pos]=pfi->packflg ? value*pvr->scale+pvr->add : value;
+    mask[pos]=1;
+  }
+  grid->undef=pfi->undef; rc=0;
+cleanup:
+  if (memory>=0) H5Sclose(memory);
+  if (type>=0) H5Tclose(type);
+  if (buffer) gree(buffer,"h5gridvalues");
+  if (rc>0) gaprnt(0,"HDF5 I/O Error: horizontal section read failed\n");
+  return rc;
+}
+#endif
 
 
 /* Routine resets flag to allow warning in regards to interpolation */
@@ -241,6 +340,55 @@ gaint gaggrd (struct gagrid *pgrid) {
     if (rc>=0) return(rc);
   }
 #endif
+#if USEHDF5==1
+  if (pfi->ncflg==3) {
+    rc=gah5grid(pgr,gr,gru);
+    if (rc>=0) return rc;
+  }
+#endif
+
+  /* A templated NetCDF horizontal section has fixed T/E. Resolve the file
+     once and pass its relative indices to the existing bulk reader. */
+#if USENETCDF == 1
+  if (pfi->ncflg==1 && pfi->tmplat && !pfi->ppflag && !pgr->toff && id<=1 && jd<=1) {
+    struct gagrid sub=*pgr;
+    struct gagrid *saved=pgr;
+    gaint tt,ee,oflg,mapped=1,k,found;
+    /* Profiles and other broadcast fields keep the row reader. */
+    for (i=0;i<2;i++) if (id==i || jd==i) {
+      found=0;
+      for (k=0;k<pvr->nvardims;k++) if (pvr->units[k]==-100-i) found=1;
+      if (!found) mapped=0;
+    }
+    if (mapped) {
+      tt=gaopfn(pgr->dimmin[3],pgr->dimmin[4],&ee,&oflg,pfi);
+      if (tt==-99999) return 1;
+      if (tt==-88888) {
+        for (i=0;i<size;i++) { gr[i]=pgr->undef; gru[i]=0; }
+        return 0;
+      }
+      rc=gancsetup();
+      if (rc) return rc;
+      sub.dimmin[3]=sub.dimmax[3]=tt;
+      sub.dimmin[4]=sub.dimmax[4]=ee;
+      pgr=&sub;
+      rc=gancgrid(gr,gru,id,jd);
+      pgr=saved; pgr->undef=sub.undef;
+      if (rc<0) goto nodat;
+      return rc;
+    }
+  }
+#endif
+
+  /* Full-width rows in ordinary stream binary files are contiguous. Read
+     the whole horizontal slab with the same byte-swap and missing tests
+     as a row; unusual layouts keep the established row reader. */
+  if (!pfi->adios2flg && !pfi->ncflg && !pfi->idxflg && !pfi->ppflag &&
+      !pfi->tmplat && !pfi->seqflg && !pfi->yrflg && !pgr->toff &&
+      id==0 && jd==1 && pgr->dimmin[0]==1 && pgr->dimmax[0]==dx[0] &&
+      pgr->dimmin[1]>=1 && pgr->dimmax[1]<=dx[1]) {
+    return garrow(1,d[1],d[2],d[3],d[4],size,gr,gru,pgr->toff);
+  }
 
   /* JMA still need to optimize handling of OPeNDAP pre-projected grids */
   if ((pgr->toff != 1) &&          /* if t value is not an offset */
@@ -647,10 +795,15 @@ gaint gazintlevel(struct gazint *z, gaint k) {
 }
 
 void gazintadd(struct gazint *z, size_t pos, gaint k, gadouble value) {
-  gadouble low,high,weight;
+  gadouble low,high,weight,a,b;
   if (!z->mask[pos] || !isfinite(value) || !isfinite(z->factor[k])) return;
-  low=fmax(fmin(z->edges[k],z->edges[k+1]),z->bottom[pos]);
-  high=fmin(fmax(z->edges[k],z->edges[k+1]),z->top[pos]);
+  /* Edges and unmasked bounds have already been checked for finiteness.
+     Explicit comparisons avoid four libm calls for every layer/cell,
+     without relaxing floating-point or changing the multiplication order. */
+  a=z->edges[k]; b=z->edges[k+1];
+  low=a<b ? a : b; high=a>b ? a : b;
+  if (low<z->bottom[pos]) low=z->bottom[pos];
+  if (high>z->top[pos]) high=z->top[pos];
   weight=high-low;
   value*=z->factor[k];
   if (weight>0 && isfinite(value)) z->sum[pos]+=value*weight;
@@ -666,6 +819,7 @@ static gaint gah5zint(struct gagrid *grid, struct gazint *integral) {
   gadouble *buffer=NULL,tolerance,value;
   gaint rank,d,xd=-1,yd=-1,zd=-1,t=grid->dimmin[3],e=grid->dimmin[4],ee=e,oflg=0;
   gaint rc=1,k,i,j,x,y,lo[2],hi[2],imin,imax,jmin,jmax,a,dim,finished=0;
+  gaint ib,ie,p,ncolumns,nx;
   size_t nativez;
   if (pfi->tmplat) {
     t=gaopfn(t,e,&ee,&oflg,pfi);
@@ -685,10 +839,15 @@ static gaint gah5zint(struct gagrid *grid, struct gazint *integral) {
   for (d=0;d<rank;d++) {
     gaint unit=(gaint)pvr->units[d];
     count[d]=1;
-    if (unit==-100) { xd=d; begin[d]=grid->dimmin[0]-1; finish[d]=grid->dimmax[0]; }
+    if (unit==-100) {
+      xd=d; begin[d]=grid->dimmin[0]<1 ? 0 : grid->dimmin[0]-1;
+      finish[d]=grid->dimmax[0]>pfi->dnum[0] ? pfi->dnum[0] : grid->dimmax[0];
+    }
     else if (unit==-101) {
-      yd=d; begin[d]=pfi->yrflg ? pfi->dnum[1]-grid->dimmax[1] : grid->dimmin[1]-1;
-      finish[d]=pfi->yrflg ? pfi->dnum[1]-grid->dimmin[1]+1 : grid->dimmax[1];
+      gaint low=grid->dimmin[1]<1 ? 1 : grid->dimmin[1];
+      gaint high=grid->dimmax[1]>pfi->dnum[1] ? pfi->dnum[1] : grid->dimmax[1];
+      yd=d; begin[d]=pfi->yrflg ? pfi->dnum[1]-high : low-1;
+      finish[d]=pfi->yrflg ? pfi->dnum[1]-low+1 : high;
     }
     else if (unit==-102) { zd=d; begin[d]=0; finish[d]=integral->nz; }
     else { begin[d]=unit==-103 ? t-1 : unit==-104 ? ee-1 : unit; finish[d]=begin[d]+1; }
@@ -760,19 +919,33 @@ static gaint gah5zint(struct gagrid *grid, struct gazint *integral) {
       if (a) { jmin=lo[dim]-grid->dimmin[dim]; jmax=hi[dim]-grid->dimmin[dim]; }
       else { imin=lo[dim]-grid->dimmin[dim]; imax=hi[dim]-grid->dimmin[dim]; }
     }
-    for (k=0;k<integral->nz;k++) {
-      nativez=(size_t)(pfi->zrflg ? integral->nz-1-k : k);
-      if (nativez<start[zd] || nativez-start[zd]>=count[zd] || !gazintlevel(integral,k)) continue;
-      for (j=jmin;j<=jmax;j++) for (i=imin;i<=imax;i++) {
+    nx=imax-imin+1; ncolumns=nx*(jmax-jmin+1);
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(ie,p,k,nativez,i,j,x,y,offset,value) \
+    if(ncolumns>=1024 && ga_omp_parallelize(nvalues>INT_MAX ? INT_MAX : (gaint)nvalues))
+#endif
+    for (ib=0;ib<ncolumns;ib+=256) {
+      size_t offsets[256],positions[256],zoffset;
+      ie=ib+256<ncolumns ? ib+256 : ncolumns;
+      for (p=ib;p<ie;p++) {
+        j=jmin+p/nx; i=imin+p%nx;
         x=grid->dimmin[0]+(grid->idim==0 ? i : 0);
         y=grid->dimmin[1]+(grid->idim==1 ? i : grid->jdim==1 ? j : 0);
-        offset=(nativez-start[zd])*strides[zd];
-        if (xd>=0) offset+=((size_t)(x-1)-start[xd])*strides[xd];
-        if (yd>=0) offset+=((size_t)(pfi->yrflg ? pfi->dnum[1]-y : y-1)-start[yd])*strides[yd];
-        value=buffer[offset];
-        if (!isfinite(value) || (value>=pvr->undef-tolerance && value<=pvr->undef+tolerance)) continue;
-        if (pfi->packflg) value=value*pvr->scale+pvr->add;
-        gazintadd(integral,(size_t)j*grid->isiz+i,k,value);
+        offsets[p-ib]=0; positions[p-ib]=(size_t)j*grid->isiz+i;
+        if (xd>=0) offsets[p-ib]+=((size_t)(x-1)-start[xd])*strides[xd];
+        if (yd>=0) offsets[p-ib]+=((size_t)(pfi->yrflg ? pfi->dnum[1]-y : y-1)-start[yd])*strides[yd];
+      }
+      for (k=0;k<integral->nz;k++) {
+        nativez=(size_t)(pfi->zrflg ? integral->nz-1-k : k);
+        if (nativez<start[zd] || nativez-start[zd]>=count[zd] || !gazintlevel(integral,k)) continue;
+        zoffset=(nativez-start[zd])*strides[zd];
+        for (p=ib;p<ie;p++) {
+          offset=zoffset+offsets[p-ib];
+          value=buffer[offset];
+          if (!isfinite(value) || (value>=pvr->undef-tolerance && value<=pvr->undef+tolerance)) continue;
+          if (pfi->packflg) value=value*pvr->scale+pvr->add;
+          gazintadd(integral,positions[p-ib],k,value);
+        }
       }
     }
     reads++; total+=nvalues;
@@ -802,10 +975,11 @@ gaint gagrdzint(struct gagrid *grid, struct gazint *integral) {
   struct gafile *file=grid->pfile;
   if (!file || !grid->pvar || file->type!=1 || file->ppflag || grid->toff ||
       grid->idim>1 || grid->jdim>1 ||
-      grid->dimmin[0]<1 || grid->dimmax[0]>file->dnum[0] ||
-      grid->dimmin[1]<1 || grid->dimmax[1]>file->dnum[1] ||
+      (file->wrap && (grid->dimmin[0]<1 || grid->dimmax[0]>file->dnum[0])) ||
       grid->dimmin[3]<1 || grid->dimmax[3]>file->dnum[3] ||
       grid->dimmin[4]<1 || grid->dimmax[4]>file->dnum[4]) return -1;
+  if (grid->dimmax[0]<1 || grid->dimmin[0]>file->dnum[0] ||
+      grid->dimmax[1]<1 || grid->dimmin[1]>file->dnum[1]) return 0;
 #if USEADIOS2==1
   if (file->adios2flg) return gaadios_read_zint(file,grid->pvar,grid,integral);
 #endif
@@ -4299,135 +4473,42 @@ return (0);
 
 gaint h5attr(gah5id varid, char *vname, char *aname, gadouble *value) {
 #if USEHDF5 == 1
-hid_t vid,aid,atype,aspace,rc;    
-H5T_class_t aclass;
-H5T_sign_t asign;
-size_t asize;
-gaint rank;
-char cval;
-unsigned char ucval;
-short sval;
-unsigned short usval;
-gaint ival;
-gauint uival;
-long lval;
-unsigned long ulval;
-float fval;
-gadouble dval;
+  hid_t vid=(hid_t)varid,aid=-1,atype=-1,aspace=-1;
+  H5T_class_t aclass;
+  size_t asize;
+  gaint rc=1;
+  (void)vname;
 
-  vid=(hid_t)varid;
-
-  /* get the attribute id */
-  if ((aid = H5Aopen_by_name(vid, vname, aname, H5P_DEFAULT, H5P_DEFAULT))<0) {
+  /* Callers pass the open dataset, not its parent file. CF attributes
+     commonly use a scalar dataspace; length-one arrays work as well.
+     Check the element count before reading into one double. */
+  if (H5Aexists(vid,aname)<=0) {
     snprintf(pout,1255,"HDF5 attribute named \"%s\" does not exist\n",aname);
     gaprnt(2,pout);
-    return(1);
-  } 
-  /* get the attribute rank, make sure it is 1 */
-  if ((aspace = H5Aget_space(aid))<0) { gaprnt(2,"H5Aget_space failed\n"); return (1); }
-  if ((rank   = H5Sget_simple_extent_ndims(aspace))!=1) { gaprnt(2,"rank != 1\n"); return (1); }
-  /* get the attribute type, class, and size */
-  if ((atype  = H5Aget_type(aid))<0) { gaprnt(2,"H5Aget_type failed\n"); return (1); } 
-  if ((aclass = H5Tget_class(atype))<0) { gaprnt(2,"H5Tget_class failed\n"); return (1); } 
-  if ((asize  = H5Tget_size(atype))==0) { gaprnt(2,"H5Tget_size failed\n"); return (1); } 
-  
-  if (aclass == H5T_FLOAT) {
-    if (asize == 4) {
-      if ((rc = H5Aread(aid,H5T_NATIVE_FLOAT,(void*)&fval))<0) {
-	gaprnt(2,"H5Aread failed\n"); return (1);
-      }
-      *value = (gadouble)fval;
-    }
-    else if (asize == 8) {
-      if ((rc = H5Aread(aid,H5T_NATIVE_DOUBLE,(void*)&dval))<0) {
-	gaprnt(2,"H5Aread failed\n"); return (1);
-      }
-      *value = dval;
-    } 
-    else {
-      gaprnt(2,"H5T_FLOAT attribute size is not 4 or 8\n");
-      return (1);
-    }
+    return 1;
   }
-  else if (aclass == H5T_INTEGER) {
-    /* signed or unsigned? */
-    if ((asign = H5Tget_sign(atype))<0) { gaprnt(2,"H5Tget_sign failed\n"); return (1); } 
-    /* byte */
-    if (asize == 1) {
-      if (asign==H5T_SGN_NONE) {  
-	if ((rc = H5Aread(aid,H5T_NATIVE_UCHAR,(void*)&ucval))<0) {
-	  gaprnt(2,"H5Aread failed for type UCHAR\n"); return (1);
-	}
-	*value = (gadouble)ucval;
-      }
-      else {
-	if ((rc = H5Aread(aid,H5T_NATIVE_CHAR,(void*)&cval))<0) {
-	  gaprnt(2,"H5Aread failed for type CHAR\n"); return (1);
-	}
-	*value = (gadouble)cval;
-      }
-    }
-    /* short */
-    else if (asize == 2) {
-      if (asign==H5T_SGN_NONE) {  
-	if ((rc = H5Aread(aid,H5T_NATIVE_USHORT,(void*)&usval))<0) {
-	  gaprnt(2,"H5Aread failed for type USHORT\n"); return (1);
-	}
-	*value = (gadouble)usval;
-      }
-      else {
-	if ((rc = H5Aread(aid,H5T_NATIVE_SHORT,(void*)&sval))<0) {
-	  gaprnt(2,"H5Aread failed for type SHORT\n"); return (1);
-	}
-	*value = (gadouble)sval;
-      }
-    }
-    /* int */
-    else if (asize == 4) {
-      if (asign==H5T_SGN_NONE) {  
-	if ((rc = H5Aread(aid,H5T_NATIVE_UINT,(void*)&uival))<0) {
-	  gaprnt(2,"H5Aread failed for type UINT\n"); return (1);
-	}
-	*value = (gadouble)uival;
-      }
-      else {
-	if ((rc = H5Aread(aid,H5T_NATIVE_INT,(void*)&ival))<0) {
-	  gaprnt(2,"H5Aread failed for type INT\n"); return (1);
-	}
-	*value = (gadouble)ival;
-      }
-    }
-    /* long */
-    else if (asize == 8) {
-      if (asign==H5T_SGN_NONE) {  
-	if ((rc = H5Aread(aid,H5T_NATIVE_ULONG,(void*)&ulval))<0) {
-	  gaprnt(2,"H5Aread failed for type ULONG\n"); return (1);
-	}
-	*value = (gadouble)ulval;
-      }
-      else {
-	if ((rc = H5Aread(aid,H5T_NATIVE_LONG,(void*)&lval))<0) {
-	  gaprnt(2,"H5Aread failed for type LONG\n"); return (1);
-	}
-	*value = (gadouble)lval;
-      }
-    }
-    else {
-      gaprnt(2,"H5T_INTEGER attribute size is not 1, 2, 4, or 8\n");
-      return (1);
-    }
-  }
-  else {
-    gaprnt(2,"HDF5 attribute is not a numeric data type \n");
-    return(1);
-  }
-  
-  H5Aclose(aid);
-  H5Tclose(atype);
-  return (0);
-
+  aid=H5Aopen(vid,aname,H5P_DEFAULT);
+  if (aid<0) goto cleanup;
+  aspace=H5Aget_space(aid);
+  if (aspace<0 || H5Sget_simple_extent_npoints(aspace)!=1) goto cleanup;
+  atype=H5Aget_type(aid);
+  if (atype<0) goto cleanup;
+  aclass=H5Tget_class(atype); asize=H5Tget_size(atype);
+  if (aclass==H5T_FLOAT) {
+    if (asize!=4 && asize!=8) goto cleanup;
+  } else if (aclass==H5T_INTEGER) {
+    if (asize!=1 && asize!=2 && asize!=4 && asize!=8) goto cleanup;
+  } else goto cleanup;
+  if (H5Aread(aid,H5T_NATIVE_DOUBLE,value)<0) goto cleanup;
+  rc=0;
+cleanup:
+  if (atype>=0) H5Tclose(atype);
+  if (aspace>=0) H5Sclose(aspace);
+  if (aid>=0) H5Aclose(aid);
+  return rc;
+#else
+  return 0;
 #endif
-  return(0);
 }
 
 
