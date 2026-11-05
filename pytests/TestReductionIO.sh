@@ -103,6 +103,9 @@ for label,dataset,dtype,template in formats:
                  'ave(f,x=1,x=256)','ave(f,y=1,y=256)'):
         series+='define prof='+expr+'\nd prof\n'
         series+='define ref='+expr.replace('(f,','(f+0,')+'\nd ref\n'
+    selectors='set t 1\nset z 1\nset x 1\nset y 2 256\n'
+    for op in ('ave','mean','sum','sumg','min','max','minloc','maxloc'):
+        selectors+='d '+op+'(f,x=1,x=256)\nd '+op+'(f+0,x=1,x=256)\n'
     # Read-only views must respect cropped offsets, row strides, masks and
     # simultaneous Z/T variation, and must not change the defined source.
     defined='set x 9 264\nset y 9 264\nset z 1 4\nset t 1 2\ndefine cached=f+0\n'
@@ -117,8 +120,8 @@ for label,dataset,dtype,template in formats:
         defined+='define dr='+expr.replace('(cached,','(cached+0,')+'\nd dr\n'
     defined+=source
     for threads in ((1,8) if reverse else (1,2,4,8)):
-        actual=run(ctl,commands+extra+slabs+series+defined,threads)
-        assert len(actual)==(50 if extra else 46),(label,len(actual))
+        actual=run(ctl,commands+extra+slabs+series+selectors+defined,threads)
+        assert len(actual)==(66 if extra else 62),(label,len(actual))
         compare([actual[1]],[actual[2]],label+' native/evaluator',exact=True)
         if extra:
             compare([actual[6],actual[8]],[actual[7],actual[9]],label+' batch/evaluator',exact=True)
@@ -127,7 +130,9 @@ for label,dataset,dtype,template in formats:
             compare([actual[idx]],[actual[idx+1]],label+' vertical slab/evaluator',exact=True)
         for idx in range(start+16,start+24,2):
             compare([actual[idx]],[actual[idx+1]],label+' DEFINE profile/evaluator')
-        ds=start+24
+        for idx in range(start+24,start+40,2):
+            compare([actual[idx]],[actual[idx+1]],label+' section selector/evaluator',exact=True)
+        ds=start+40
         compare([actual[ds]],[actual[-1]],label+' defined source unchanged',exact=True)
         for idx in range(ds+1,ds+15,2):
             compare([actual[idx]],[actual[idx+1]],label+' read-only defined/evaluator')

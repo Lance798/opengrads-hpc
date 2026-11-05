@@ -3309,6 +3309,54 @@ static struct gagrid *ave_section_grid(struct gagrid *sec, gaint dim, gaint at) 
   return grid;
 }
 
+/* Spatial weights follow the evaluator's cell edges and clipping order. */
+static gadouble ave_spatial_weight(struct gafile *file, gaint dim, gaint d,
+                                    gaint sel, gaint bounded, gadouble wlo, gadouble whi) {
+  gadouble alo=file->gr2ab[dim](file->grvals[dim],d-0.5);
+  gadouble ahi=file->gr2ab[dim](file->grvals[dim],d+0.5),alen=fabs(ahi-alo);
+  if (bounded) {
+    gadouble low=whi<wlo ? whi : wlo,high=whi<wlo ? wlo : whi;
+    if (alo<low) alo=low; if (alo>high) alo=high;
+    if (ahi<low) ahi=low; if (ahi>high) ahi=high;
+  }
+  if (dim==1) {
+    if (alo>90) alo=90; if (ahi>90) ahi=90;
+    if (alo< -90) alo= -90; if (ahi< -90) ahi= -90;
+    if (sel==1) return fabs(sin(ahi*(M_PI/180))-sin(alo*(M_PI/180)));
+    if (sel==2) return fabs(ahi-alo);
+  } else if (sel<=2) return ahi-alo;
+  if (sel==3) return alen>FUZZ_SCALE ? fabs(ahi-alo)/alen : 0;
+  return 1;
+}
+
+/* One region for the whole resident section. Every result point retains
+   the evaluator's position-by-position addition and min/max tie order. */
+static gaint ave_fold_section(struct gagrid *sec, struct gagrid *sum, struct gagrid *cnt,
+                               struct gafile *file, gaint dim, gaint first, gaint last,
+                               gaint sel, gaint bounded, gadouble wlo, gadouble whi) {
+  gadouble *weights;
+  gaint i,k,n=last-first+1,size=sum->isiz*sum->jsiz;
+  size_t pos;
+  if (n<1) return 0;
+  weights=galloc((size_t)n*sizeof(*weights),"avesectionweights");
+  if (!weights) return -1;
+  for (k=0;k<n;k++) weights[k]=ave_spatial_weight(file,dim,first+k,sel,bounded,wlo,whi);
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(k,pos) \
+    if(ga_omp_parallelize((double)size*n>INT_MAX ? INT_MAX : size*n))
+#endif
+  for (i=0;i<size;i++) {
+    for (k=0;k<n;k++) {
+      size_t at=(size_t)(first+k-sec->dimmin[dim]);
+      pos=sec->jdim<0 ? at : sec->idim==dim ? (size_t)i*sec->isiz+at : at*sec->isiz+i;
+      ave_accumulate(sel,first+k,weights[k],&sum->grid[i],&sum->umask[i],
+                     &cnt->grid[i],&cnt->umask[i],sec->grid[pos],sec->umask[pos]);
+    }
+  }
+  gree(weights,"avesectionweights");
+  return gaqsig() ? 1 : 0;
+}
+
 /* A bounded XYZ slab for a vertical reduction of a plain file variable.
    Each output column keeps its original level-by-level addition order.
    Reads are serial; independent columns run on the calculation threads. */
@@ -3797,6 +3845,14 @@ struct gagrid *sect=NULL;
      else, or a format without such a reader, goes a time at a time. */
   d+=incr;
   rc = 0;
+  if (sect && d<=d2) {
+    rc=ave_fold_section(sect,pgr1,pgr2,pfi,dim,d,d2,sel,bndflg,wlo,whi);
+    if (rc>=0) {
+      pst->dmin[dim]=pst->dmax[dim]=pfi->gr2ab[dim](pfi->grvals[dim],d2);
+      gaprogstep(d2-d1+1); goto average_done;
+    }
+    rc=0;
+  }
   if (dim==2 && d<=d2 && !sect) {
     rc=ave_volume(pfc,pst,pfi,pgr1,pgr2,d,d2,sel,bndflg,wlo,whi);
     if (rc>=0) { gaprogstep(d2-d1+1); goto average_done; }
