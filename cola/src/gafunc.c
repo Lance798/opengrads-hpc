@@ -1880,6 +1880,24 @@ gaint rc;
    return (rc);
 }
 
+/* Bare defined variables can be reduced through a private read-only view.
+   The view is never returned to the evaluator, whose operators mutate grids. */
+static struct gafile *reduction_defined(char *expression, struct gastat *pst) {
+  char name[17],*p=expression;
+  gaint n=0;
+  while (*p==' ') p++;
+  while ((*p>='a' && *p<='z') || (*p>='0' && *p<='9') || *p=='_') {
+    if (n==16) return NULL;
+    name[n++]=*p++;
+  }
+  name[n]=0; while (*p==' ') p++;
+  return n && !*p ? getdfn(name,pst) : NULL;
+}
+
+static char doaave_stride(struct gagrid *, gadouble, gadouble, gadouble, gadouble,
+                           gaint, size_t, gadouble *);
+static gaint aave_defined(char *,struct gastat *,gaint,gadouble *,char *);
+
 gaint aave (struct gafunc *pfc, struct gastat *pst, int sel) {
 gadouble (*iconv) (gadouble *, gadouble);
 gadouble (*jconv) (gadouble *, gadouble);
@@ -1950,8 +1968,10 @@ char *ch,*fnam,resu;
   pst->idim = 0;
   pst->jdim = 1;
 
-  /* Get the grid */
+  /* Defined arrays stay read-only and do not need an intermediate XY copy. */
+  if (!aave_defined(pfc->argpnt[0],pst,sel,&res,&resu)) goto area_result;
 
+  /* Get the grid */
   rc = gaexpr(pfc->argpnt[0],pst);
   if (rc) return (rc);
   if (pst->type!=1) {
@@ -1963,6 +1983,7 @@ char *ch,*fnam,resu;
   /* Average over the grid  */
   resu = doaave(pgr,pst->dmin[0],pst->dmax[0],pst->dmin[1],pst->dmax[1],sel,&res);
   gafree (pst);
+area_result:
   pgr = gagrvl(res);
   pgr->umin = resu;
   pst->type = 1;
@@ -2423,8 +2444,32 @@ static void aave_weights(struct gagrid *pgr, gadouble dmin0, gadouble dmax0,
 
 }
 
-char doaave(struct gagrid *pgr, gadouble dmin0, gadouble dmax0,
-		gadouble dmin1, gadouble dmax1, gaint sel, gadouble *result) {
+static void aave_row(struct gagrid *grid, size_t base, const gadouble *xw,
+                       gadouble yw, gaint sel, gadouble *sum, gadouble *weight) {
+  gadouble rowsum=0,rowwt=0,cellwt;
+  gaint i;
+#if USEOPENMP == 1
+#pragma omp simd reduction(+:rowsum,rowwt) private(cellwt)
+#endif
+  for (i=0;i<grid->isiz;i++) {
+    if (grid->umask[base+i]) {
+      cellwt=xw[i]*yw;
+      if (sel==4) rowsum+=grid->grid[base+i];
+      else rowsum+=grid->grid[base+i]*cellwt;
+      rowwt+=cellwt;
+    }
+  }
+  *sum=rowsum; *weight=rowwt;
+}
+
+char doaave(struct gagrid *grid, gadouble x1, gadouble x2, gadouble y1,
+              gadouble y2, gaint sel, gadouble *result) {
+  return doaave_stride(grid,x1,x2,y1,y2,sel,(size_t)grid->isiz,result);
+}
+
+static char doaave_stride(struct gagrid *pgr, gadouble dmin0, gadouble dmax0,
+                          gadouble dmin1, gadouble dmax1, gaint sel,
+                          size_t stride, gadouble *result) {
 gadouble (*iconv) (gadouble *, gadouble);
 gadouble (*jconv) (gadouble *, gadouble);
 gadouble *ivals, *jvals, *gr, *xw=NULL, *yw=NULL;
@@ -2458,18 +2503,7 @@ size_t sz;
 #endif
     for (j=0; j<pgr->jsiz; j++) {
       gadouble rowsum=0,rowwt=0;
-      size_t base=(size_t)j*pgr->isiz;
-#if USEOPENMP == 1
-#pragma omp simd reduction(+:rowsum,rowwt) private(cellwt)
-#endif
-      for (i=0; i<pgr->isiz; i++) {
-        if (gru[base+i] != 0) {
-          cellwt = xw[i]*yw[j];
-          if (sel==4) rowsum += gr[base+i];
-          else rowsum += gr[base+i]*cellwt;
-          rowwt += cellwt;
-        }
-      }
+      aave_row(pgr,(size_t)j*stride,xw,yw[j],sel,&rowsum,&rowwt);
       sum+=rowsum; wt+=rowwt;
     }
     gree(xw,"aavexw");
@@ -2489,6 +2523,7 @@ size_t sz;
   if (yw!=NULL) gree(yw,"aaveyw");
 
   for (j=0; j<pgr->jsiz; j++) {
+    gr=pgr->grid+(size_t)j*stride; gru=pgr->umask+(size_t)j*stride;
     y1 = (gadouble)(j+pgr->dimmin[1]);
     abs = jconv(jvals, y1);
     alo = jconv(jvals, y1-0.5);
@@ -2567,6 +2602,115 @@ size_t sz;
   }
   *result = sum;
   return (sumu);
+}
+
+
+/* Return 1 for an entirely missing view, -1 for a layout needing the
+   evaluator, or 0 with a clipped XY view and the source's row stride. */
+static gaint defined_area_view(struct gafile *file, struct gastat *pst,
+                                struct gagrid *view, size_t *stride) {
+  gaint d,lo[2],hi[2];
+  gadouble v,a,b,nearest;
+  size_t offset=0,multiplier=1,index[5];
+  if (!file || file->type!=4 || file->climo || file->dnum[0]<2 || file->dnum[1]<2) return -1;
+  for (d=0;d<2;d++) {
+    a=floor(file->ab2gr[d](file->abvals[d],pst->dmin[d])+0.0001);
+    b=ceil(file->ab2gr[d](file->abvals[d],pst->dmax[d])-0.0001);
+    if (!isfinite(a) || !isfinite(b) || b<=a) return -1;
+    if (a<file->dimoff[d]+1) a=file->dimoff[d]+1;
+    if (b>file->dimoff[d]+file->dnum[d]) b=file->dimoff[d]+file->dnum[d];
+    if (a>b) return 1;
+    lo[d]=(gaint)a; hi[d]=(gaint)b;
+    index[d]=(size_t)(lo[d]-file->dimoff[d]-1);
+  }
+  for (d=2;d<5;d++) {
+    index[d]=0;
+    if (file->dnum[d]==1) continue;
+    v=d==3 ? t2gr(file->abvals[3],&pst->tmin) : file->ab2gr[d](file->abvals[d],pst->dmin[d]);
+    nearest=round(v);
+    if (!isfinite(v) || dequal(v,nearest,1e-8)) return -1;
+    if (nearest<file->dimoff[d]+1 || nearest>file->dimoff[d]+file->dnum[d]) return 1;
+    index[d]=(size_t)(nearest-file->dimoff[d]-1);
+  }
+  for (d=0;d<5;d++) { offset+=index[d]*multiplier; multiplier*=file->dnum[d]; }
+  memset(view,0,sizeof(*view));
+  view->pfile=file; view->undef=file->undef;
+  view->idim=0; view->jdim=1;
+  view->isiz=hi[0]-lo[0]+1; view->jsiz=hi[1]-lo[1]+1;
+  view->dimmin[0]=lo[0]; view->dimmax[0]=hi[0];
+  view->dimmin[1]=lo[1]; view->dimmax[1]=hi[1];
+  view->igrab=file->gr2ab[0]; view->ivals=file->grvals[0];
+  view->jgrab=file->gr2ab[1]; view->jvals=file->grvals[1];
+  view->grid=file->rbuf+offset; view->umask=file->ubuf+offset;
+  *stride=(size_t)file->dnum[0]; return 0;
+}
+
+static gaint aave_defined(char *expression, struct gastat *pst, gaint sel,
+                           gadouble *result, char *mask) {
+  struct gafile *file=reduction_defined(expression,pst);
+  struct gagrid view;
+  size_t stride;
+  gaint rc=defined_area_view(file,pst,&view,&stride);
+  if (rc<0) return -1;
+  if (rc) { *result=file->undef; *mask=0; return 0; }
+  *mask=doaave_stride(&view,pst->dmin[0],pst->dmax[0],pst->dmin[1],pst->dmax[1],sel,stride,result);
+  return 0;
+}
+
+/* Reuse weights and distribute independent Z planes, without copying any
+   defined-array values or calling the parser/allocator on worker threads. */
+static gaint aave_defined_series(struct gafunc *call, struct gastat *pst,
+                                  gaint first, gaint last, gadouble *out, char *mask, gadouble undef) {
+  struct gafile *file=reduction_defined(call->argpnt[0],pst);
+  struct gastat sample=*pst;
+  struct gagrid *views=NULL;
+  gadouble *xw=NULL,*yw=NULL,bounds[4],value,sum,weight;
+  gaint nz=last-first+1,k,j,i,dim,wflag=0,rc=-1,model=-1;
+  size_t stride=0,one_stride;
+  if (!file || call->argnum!=5) return -1;
+  for (i=0;i<4;i++) {
+    if (!dimprs(call->argpnt[i+1],pst,pst->pfid,&dim,bounds+i,1,&wflag) || dim!=i/2) return -1;
+    if (!wflag) bounds[i]+=(i%2 ? 0.5 : -0.5);
+  }
+  for (i=0;i<2;i++) {
+    sample.dmin[i]=pst->pfid->gr2ab[i](pst->pfid->grvals[i],bounds[2*i]);
+    sample.dmax[i]=pst->pfid->gr2ab[i](pst->pfid->grvals[i],bounds[2*i+1]);
+  }
+  views=galloc((size_t)nz*sizeof(*views),"definedviews");
+  if (!views) return -1;
+  memset(views,0,(size_t)nz*sizeof(*views));
+  for (k=0;k<nz;k++) {
+    sample.dmin[2]=sample.dmax[2]=pst->pfid->gr2ab[2](pst->pfid->grvals[2],first+k);
+    i=defined_area_view(file,&sample,views+k,&one_stride);
+    if (i<0) goto done;
+    if (i) continue;
+    if (model<0) { model=k; stride=one_stride; }
+    else if (views[k].isiz!=views[model].isiz || views[k].jsiz!=views[model].jsiz || one_stride!=stride) goto done;
+  }
+  if (model>=0) {
+    xw=galloc((size_t)views[model].isiz*sizeof(*xw),"definedxw");
+    yw=galloc((size_t)views[model].jsiz*sizeof(*yw),"definedyw");
+    if (!xw || !yw) goto done;
+    aave_weights(views+model,sample.dmin[0],sample.dmax[0],sample.dmin[1],sample.dmax[1],1,xw,yw);
+  }
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(j,value,sum,weight) \
+    if(model>=0 && nz>1 && ga_omp_parallelize((double)nz*views[model].isiz*views[model].jsiz>INT_MAX ? INT_MAX : nz*views[model].isiz*views[model].jsiz))
+#endif
+  for (k=0;k<nz;k++) {
+    sum=weight=0;
+    if (views[k].grid) for (j=0;j<views[k].jsiz;j++) {
+      gadouble rowweight;
+      aave_row(views+k,(size_t)j*stride,xw,yw[j],1,&value,&rowweight);
+      sum+=value; weight+=rowweight;
+    }
+    mask[k]=weight>0; out[k]=mask[k] ? sum/weight : undef;
+  }
+  rc=gaqsig() ? 1 : 0;
+done:
+  if (views) gree(views,"definedviews");
+  if (xw) gree(xw,"definedxw"); if (yw) gree(yw,"definedyw");
+  return rc;
 }
 
 
@@ -3094,13 +3238,21 @@ static struct gagrid *ave_section(struct gafunc *pfc, struct gastat *pst,
                                   struct gafile *file, gaint dim, gaint first, gaint last) {
   struct gastat sample=*pst;
   struct gagrid *sec;
-  gaint r=pst->idim,rc;
+  struct gafile *source=file;
+  gaint r=pst->idim,rc,k;
   gadouble length=1,lo,hi;
-  if (dim>2 || last<=first || pst->jdim>=0 || r==dim ||
-      !ave_plain_var(pfc->argpnt[0],pst,NULL)) return NULL;
+  if (dim>2 || last<=first || pst->jdim>=0 || r==dim) return NULL;
+  if (!ave_plain_var(pfc->argpnt[0],pst,NULL)) {
+    source=reduction_defined(pfc->argpnt[0],pst);
+    if (!source || source->climo || source->dnum[dim]<=1 || (r>=0 && source->dnum[r]<=1)) return NULL;
+    /* Average limits/weights use the default file. Only accept a defined
+       section whose averaged coordinates agree at every requested point. */
+    for (k=first;k<=last;k++) if (file->gr2ab[dim](file->grvals[dim],k)!=
+         source->gr2ab[dim](source->grvals[dim],k)) return NULL;
+  }
   if (r>=0) {
-    lo=floor(file->ab2gr[r](file->abvals[r],pst->dmin[r])+0.0001);
-    hi=ceil(file->ab2gr[r](file->abvals[r],pst->dmax[r])-0.0001);
+    lo=floor(source->ab2gr[r](source->abvals[r],pst->dmin[r])+0.0001);
+    hi=ceil(source->ab2gr[r](source->abvals[r],pst->dmax[r])-0.0001);
     length=hi-lo+1;
   }
   if (length<1 || (last-first+1)*length>AVE_SECTION_MAX) return NULL;
@@ -3931,8 +4083,15 @@ gaint gadefseries(char *expression, struct gastat *pst, gaint z1, gaint z2,
   gadouble bounds[4],*values=NULL,*xw=NULL,*yw=NULL,*sums=NULL,*counts=NULL,gr;
   gaint dim,wflag=0,rc=-1,k,x,y,i,j,nz=z2-z1+1,tx,ty,nx,ny,lx,ly,ox,oy;
   size_t n,pos,pp;
-  if (z2<=z1 || z1<1 || !reduction_call(expression,name,&call) ||
-      !(var=ave_plain_var(call.argpnt[0],pst,NULL)) || z2>var->levels) return -1;
+  if (z2<=z1 || z1<1 || !reduction_call(expression,name,&call)) return -1;
+  if (!strcmp(name,"aave") && shape->idim<0 && reduction_defined(call.argpnt[0],pst))
+    return aave_defined_series(&call,pst,z1,z2,out,outmask,undef);
+  var=ave_plain_var(call.argpnt[0],pst,NULL);
+  if (!var) {
+    struct gafile *defined=reduction_defined(call.argpnt[0],pst);
+    if (!defined || defined->dnum[2]<2 || z1<=defined->dimoff[2] ||
+        z2>defined->dimoff[2]+defined->dnum[2]) return -1;
+  } else if (z2>var->levels) return -1;
   if (!strcmp(name,"ave") && shape->idim<0 && call.argnum>=3 && call.argnum<=4) {
     if (!dimprs(call.argpnt[1],pst,file,&dim,&gr,1,&wflag) || dim>1) return -1;
     sample.idim=2; sample.jdim=-1;
@@ -3948,7 +4107,7 @@ gaint gadefseries(char *expression, struct gastat *pst, gaint z1, gaint z2,
     for (k=0;k<nz;k++) { outmask[k]=plane->umask[k]; out[k]=outmask[k] ? plane->grid[k] : undef; }
     gafree(&sample); return 0;
   }
-  if ((!file->adios2flg && file->ncflg) || strcmp(name,"aave") || call.argnum!=5 ||
+  if (!var || (!file->adios2flg && file->ncflg) || strcmp(name,"aave") || call.argnum!=5 ||
       shape->idim>=0 || file->ppflag || file->idxflg) return -1;
   for (i=0;i<4;i++) {
     if (!dimprs(call.argpnt[i+1],pst,file,&dim,bounds+i,1,&wflag) || dim!=i/2) return -1;

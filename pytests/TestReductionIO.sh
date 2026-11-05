@@ -103,17 +103,34 @@ for label,dataset,dtype,template in formats:
                  'ave(f,x=1,x=256)','ave(f,y=1,y=256)'):
         series+='define prof='+expr+'\nd prof\n'
         series+='define ref='+expr.replace('(f,','(f+0,')+'\nd ref\n'
+    # Read-only views must respect cropped offsets, row strides, masks and
+    # simultaneous Z/T variation, and must not change the defined source.
+    defined='set x 9 264\nset y 9 264\nset z 1 4\nset t 1 2\ndefine cached=f+0\n'
+    source='set t 1\nset z 1\nset x 9 20\nset y 9 20\nd cached\n'
+    defined+=source+'set x 1\nset y 1\n'
+    for op in ('aave','amean','asum','asumg','atot'):
+        for field in ('cached','cached+0'):
+            defined+='d '+op+'('+field+',x=1.2,x=255.8,y=1.3,y=255.7)\n'
+    defined+='set y 20\nset z 1 4\nset t 1 2\n'
+    for expr in ('aave(cached,x=1,x=256,y=1,y=256)','ave(cached,x=1,x=256)'):
+        defined+='define dp='+expr+'\nd dp\n'
+        defined+='define dr='+expr.replace('(cached,','(cached+0,')+'\nd dr\n'
+    defined+=source
     for threads in ((1,8) if reverse else (1,2,4,8)):
-        actual=run(ctl,commands+extra+slabs+series,threads)
-        assert len(actual)==(34 if extra else 30),(label,len(actual))
+        actual=run(ctl,commands+extra+slabs+series+defined,threads)
+        assert len(actual)==(50 if extra else 46),(label,len(actual))
         compare([actual[1]],[actual[2]],label+' native/evaluator',exact=True)
         if extra:
             compare([actual[6],actual[8]],[actual[7],actual[9]],label+' batch/evaluator',exact=True)
         start=10 if extra else 6
         for idx in range(start,start+16,2):
             compare([actual[idx]],[actual[idx+1]],label+' vertical slab/evaluator',exact=True)
-        for idx in range(start+16,len(actual),2):
+        for idx in range(start+16,start+24,2):
             compare([actual[idx]],[actual[idx+1]],label+' DEFINE profile/evaluator')
+        ds=start+24
+        compare([actual[ds]],[actual[-1]],label+' defined source unchanged',exact=True)
+        for idx in range(ds+1,ds+15,2):
+            compare([actual[idx]],[actual[idx+1]],label+' read-only defined/evaluator')
         key=(reverse,template)
         if key not in references:references[key]=actual[:start]
         else:compare(actual[:start],references[key],label+' cross-format/threads')

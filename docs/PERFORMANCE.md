@@ -101,6 +101,32 @@ against the pre-change executable had matching masks and maximum BP5 absolute
 difference `1.07e-14`. The synthetic regression also covers reversed axes,
 templates and independent evaluator references for each profile.
 
+### Averages of defined arrays
+
+A bare defined variable passed to an area reduction uses a private read-only
+view, with the source's row stride and clipped global coordinates. The view
+never enters the expression evaluator. All-missing regions, cropped offsets,
+fixed Z/T/E broadcasts and the source mask keep their existing meaning;
+climatological arrays and unsupported shapes retain the evaluator.
+
+Defined area-mean profiles share X/Y weights across Z and distribute complete
+levels to OpenMP threads. No parser, allocator or file-library call runs on a
+worker. Defined X/Z and Y/Z sections also use the spatial section path.
+
+Three-trial warm-memory BP5-derived results (preload excluded):
+
+| Defined calculation | 1 thread (s) | 4 threads (s) | 8 threads (s) |
+|---|---:|---:|---:|
+| `aave`, 1024 x 1024 plane | 0.00357 | 0.00093 | 0.00050 |
+| `aave`, 512 x 512 x 69 profile | 0.06131 | 0.01614 | 0.00819 |
+
+These show calculation scaling after data is resident; they do not include
+the potentially much larger cost of initially defining the source cube.
+Real BP5/HDF5/NetCDF/binary comparisons of cropped views, broadcasts and all
+area reduction variants matched the pre-change executable exactly in the
+tested cases. Regression tests also compare against `defined+0`, check source
+values before/after averaging, and exercise simultaneous Z/T variation.
+
 ## Indexed vertical slices
 
 [`zslice`](ZSLICE.md) reads a different Z index at each horizontal point.
