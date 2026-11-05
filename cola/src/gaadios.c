@@ -2001,6 +2001,68 @@ gaint gaadios_read_zint(struct gafile *pfi, struct gavar *pvar,
   return rc;
 }
 
+/* Read all requested levels together, so a BP5 writer block is decoded
+   once per horizontal tile rather than once per model level. */
+gaint gaadios_read_volume(struct gafile *pfi, struct gavar *pvar,
+                          struct gagrid *grid, gadouble *values, char *mask) {
+  struct gaadios_plan plan;
+  struct gaadios_missing missing;
+  size_t stride[GA_ADIOS_MAX_DIMS],axis[3]={0,0,0},n=1,pos,index,size,type_size;
+  size_t nx=grid->dimmax[0]-grid->dimmin[0]+1,ny=grid->dimmax[1]-grid->dimmin[1]+1;
+  gaint rc,d,g,coord[3],nz=grid->dimmax[2]-grid->dimmin[2]+1;
+  gaint t=grid->dimmin[3],status,linear,reverse[3]={0,pfi->yrflg,pfi->zrflg};
+  gadouble value;
+  void *native;
+  rc=gaadios_plan_grid(pfi,pvar,grid,&plan);
+  if (rc) return rc;
+  if (plan.scalar) return -1;
+  size=nx*ny*(size_t)nz;
+  status=gaadios_time_available(pfi,pvar,plan.variable,t);
+  if (status<0) return 1;
+  if (!status) { gaadios_set_undefined(pfi,size,values,mask); return 0; }
+  for (d=(gaint)plan.ndims-1;d>=0;d--) {
+    g=pvar->units[d]<=-100 && pvar->units[d]>=-102 ? -100-(gaint)pvar->units[d] : -1;
+    if (g==2) {
+      plan.start[d]=pfi->zrflg ? pvar->levels-grid->dimmax[2] : grid->dimmin[2]-1;
+      plan.count[d]=nz;
+    }
+    stride[d]=n;
+    if (plan.count[d]>SIZE_MAX/n) return -1;
+    n*=plan.count[d];
+    if (g>=0) axis[g]=stride[d];
+  }
+  type_size=gaadios_type_size(plan.type);
+  if (!type_size || n>SIZE_MAX/type_size) return -1;
+  if (gaadios_plan_select(&plan,t,status)!=adios2_error_none) return 1;
+  native=galloc(n*type_size,"adiosvolume");
+  if (!native) return 1;
+  if (adios2_get(((struct gaadios_state *)pfi->adios2)->engine,plan.variable,native,adios2_mode_sync)!=adios2_error_none) {
+    gree(native,"adiosvolume"); return 1;
+  }
+  gaadios_missing_bounds(pvar,&missing);
+  linear=!reverse[1] && !reverse[2] && axis[0]==1 && axis[1]==nx && axis[2]==nx*ny;
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(coord,g,index,value) \
+    if(ga_omp_parallelize(size>INT_MAX ? INT_MAX : (gaint)size))
+#endif
+  for (pos=0;pos<size;pos++) {
+    index=pos;
+    if (!linear) {
+      coord[0]=pos%nx; coord[1]=(pos/nx)%ny; coord[2]=pos/(nx*ny);
+      index=0;
+      for (g=0;g<3;g++) {
+        size_t count=g==0 ? nx : g==1 ? ny : (size_t)nz;
+        index+=(reverse[g] ? count-1-coord[g] : (size_t)coord[g])*axis[g];
+      }
+    }
+    value=plan.type==adios2_type_float ? (gadouble)((float *)native)[index] :
+          plan.type==adios2_type_double ? ((gadouble *)native)[index] : gaadios_value(native,plan.type,index);
+    mask[pos]=!gaadios_missing_test(&missing,value);
+    values[pos]=mask[pos] ? value : pfi->undef;
+  }
+  gree(native,"adiosvolume"); return 0;
+}
+
 gaint gaadios_read_grid (struct gafile *pfi, struct gavar *pvar,
                           struct gagrid *pgrid, gadouble *gr, char *gru) {
   struct gaadios_state *state;
