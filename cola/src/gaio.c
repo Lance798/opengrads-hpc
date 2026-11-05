@@ -234,6 +234,51 @@ cleanup:
 #endif
 
 
+/* Ordinary stream rows are contiguous when the complete X axis is
+   selected. Read the valid rectangle once even when an area-mean halo
+   extends past the file; pad only the missing rows/columns. */
+static gaint gabinpad(struct gagrid *grid, gaint z, gaint t, gaint e,
+                       gadouble *out, char *outmask) {
+  gaint lo=grid->dimmin[1]<1 ? 1 : grid->dimmin[1];
+  gaint hi=grid->dimmax[1]>pfi->dnum[1] ? pfi->dnum[1] : grid->dimmax[1];
+  gaint nx=pfi->dnum[0],row,i,rc;
+  size_t n,pos,lead=(size_t)(1LL-grid->dimmin[0]);
+  gadouble *values=NULL;
+  char *mask=NULL;
+  if (pfi->wrap && (grid->dimmin[0]<1 || grid->dimmax[0]>nx)) return -1;
+  if (lead>(size_t)grid->isiz || (size_t)nx>(size_t)grid->isiz-lead) return -1;
+  if (lo>hi) {
+    for (pos=0;pos<(size_t)grid->isiz*grid->jsiz;pos++) { out[pos]=pfi->undef; outmask[pos]=0; }
+    return 0;
+  }
+  n=(size_t)nx*(hi-lo+1);
+  if (n>64*1024*1024/(sizeof(*values)+1)) return -1;
+  values=galloc(n*sizeof(*values),"binarypadvalues"); mask=galloc(n,"binarypadmask");
+  if (!values || !mask) { rc=-1; goto done; }
+  rc=garrow(1,lo,z,t,e,(gaint)n,values,mask,0);
+  if (rc) goto done;
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(i,pos) \
+    if(ga_omp_parallelize(grid->isiz*grid->jsiz))
+#endif
+  for (row=0;row<grid->jsiz;row++) {
+    gaint y=grid->dimmin[1]+row;
+    pos=(size_t)row*grid->isiz;
+    if (y<lo || y>hi) {
+      for (i=0;i<grid->isiz;i++) { out[pos+i]=pfi->undef; outmask[pos+i]=0; }
+      continue;
+    }
+    for (i=0;i<(gaint)lead;i++) { out[pos+i]=pfi->undef; outmask[pos+i]=0; }
+    memcpy(out+pos+lead,values+(size_t)(y-lo)*nx,(size_t)nx*sizeof(*values));
+    memcpy(outmask+pos+lead,mask+(size_t)(y-lo)*nx,(size_t)nx);
+    for (i=(gaint)lead+nx;i<grid->isiz;i++) { out[pos+i]=pfi->undef; outmask[pos+i]=0; }
+  }
+done:
+  if (values) gree(values,"binarypadvalues");
+  if (mask) gree(mask,"binarypadmask");
+  return rc;
+}
+
 /* Routine resets flag to allow warning in regards to interpolation */
 void gaiomg () {
   msgflg = 1;
@@ -435,6 +480,13 @@ gaint gaggrd (struct gagrid *pgrid) {
       id==0 && jd==1 && pgr->dimmin[0]==1 && pgr->dimmax[0]==dx[0] &&
       pgr->dimmin[1]>=1 && pgr->dimmax[1]<=dx[1]) {
     return garrow(1,d[1],d[2],d[3],d[4],size,gr,gru,pgr->toff);
+  }
+
+  if (!pfi->adios2flg && !pfi->ncflg && !pfi->idxflg && !pfi->ppflag &&
+      !pfi->seqflg && !pfi->yrflg && !pgr->toff && id==0 && jd==1 &&
+      pgr->dimmin[0]<=1 && pgr->dimmax[0]>=dx[0]) {
+    rc=gabinpad(pgr,d[2],d[3],d[4],gr,gru);
+    if (rc>=0) return rc;
   }
 
   /* JMA still need to optimize handling of OPeNDAP pre-projected grids */
