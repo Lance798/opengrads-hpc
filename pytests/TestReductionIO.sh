@@ -125,9 +125,10 @@ for label,dataset,dtype,template in formats:
         times+='define tp='+expr+'\nd tp\n'
         times+='define tr='+expr.replace('(f,','(f+0,').replace('(cached,','(cached+0,')+'\nd tr\n'
     times+='set z 4\ndefine tp=aave(surface,x=1,x=128,y=1,y=128)\nd tp\ndefine tr=aave(surface+0,x=1,x=128,y=1,y=128)\nd tr\n'
+    outside='set t 1\nset z 1\nset x 0 257\nset y -5 -2\nd f\nset z 4\nd surface\n'
     for threads in ((1,8) if reverse else (1,2,4,8)):
-        actual=run(ctl,commands+extra+slabs+series+selectors+defined+times,threads)
-        assert len(actual)==(76 if extra else 72),(label,len(actual))
+        actual=run(ctl,commands+extra+slabs+series+selectors+defined+times+outside,threads)
+        assert len(actual)==(78 if extra else 74),(label,len(actual))
         compare([actual[1]],[actual[2]],label+' native/evaluator',exact=True)
         if extra:
             compare([actual[6],actual[8]],[actual[7],actual[9]],label+' batch/evaluator',exact=True)
@@ -143,8 +144,9 @@ for label,dataset,dtype,template in formats:
         for idx in range(ds+1,ds+15,2):
             compare([actual[idx]],[actual[idx+1]],label+' read-only defined/evaluator')
         compare([actual[ds+16]],[actual[ds+17]],label+' surface fixed-Z broadcast',exact=True)
-        for idx in range(ds+18,len(actual),2):
+        for idx in range(ds+18,len(actual)-2,2):
             compare([actual[idx]],[actual[idx+1]],label+' AAVE time series/evaluator')
+        assert all(v is None for grid in actual[-2:] for v in grid),label+' outside-Y masks'
         key=(reverse,template)
         if key not in references:references[key]=actual[:start]
         else:compare(actual[:start],references[key],label+' cross-format/threads')

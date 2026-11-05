@@ -35,6 +35,11 @@ native values; corresponding times were 0.152 s and 0.166 s. The measured speedu
 depends on the dataset, compression layout, cache and storage state. These are
 observations on this host, not general throughput guarantees.
 
+The spatial/profile/time comparisons below use `6cc0735` as their preceding
+implementation unless noted. Reads and computation are included; startup,
+plotting and (for defined arrays) preload are excluded. Overall improvement
+from changing the reader is distinct from scaling with calculation threads.
+
 ## Spatial average slabs
 
 Vertical `ave`, `mean`, `sum`, and `sumg` of a bare BP5/HDF5 variable
@@ -189,6 +194,42 @@ maximum absolute/relative differences were `1.49e-8` and `3.24e-15` (the large
 absolute difference is in large-magnitude totals). ASan/UBSan passed for the
 changed reader, reduction and define units, including failure recovery;
 legacy global-allocation leak reporting was disabled.
+
+### Binary boundary slabs
+
+An ordinary stream-binary XY request spanning the complete X axis can now
+read its in-file rectangle once and pad missing boundary rows/columns. Values
+and masks use at most 64 MiB of extra workspace. Templates and byte swapping
+use the existing row reader's positioning/conversion rules; sequential
+records, reversed Y and periodic X extensions keep the established path.
+No scientific arithmetic changes in this reader.
+
+For a 256 x 256 binary plane, the file area mean measured about 0.000371 s
+at one thread and 0.000277 s at four; the earlier implementation measured
+about 0.000602 s at one thread. The 32-time binary series subsequently
+measured 0.00554 s at four threads. These small synthetic timings do not
+predict throughput for every binary layout or storage system.
+
+`TestBinaryHalo.sh` independently checks 524332 finite values, native/swapped
+byte order, missing boundary masks, out-of-file Y requests, nonuniform-height
+integrals and weighted Z/T profiles at one/eight threads. Grid reads and
+integrals are exact; maximum absolute profile difference from the analytic
+reference was `3.64e-12`. Both this test and the complete cross-format suite
+passed ASan/UBSan after the binary reader change.
+
+Final checks on the actual datasets included:
+
+| Command/workflow | Previous 1 thread (s) | Current 1 thread (s) | Current 8 threads (s) |
+|---|---:|---:|---:|
+| BP5 defined area profile, 1024 x 1024 x 69 | 13.816 | 0.672 | 0.484 |
+| HDF5 X-mean profile, 1024 x 69 | 0.170 | 0.0868 | 0.0863 |
+| HDF5 area profile, 1024 x 64 x 69 | 0.135 | 0.134 | 0.115 |
+
+The HDF5 rows were remeasured with both executables in the final session;
+area-profile throughput is essentially unchanged, while the X/Z section
+avoids duplicate decoding. The preceding BP5 measurement is from the
+original audit on the same data. Thread scaling is strongest for resident
+area reductions; native compressed reads remain a limiting factor.
 
 ## Indexed vertical slices
 
