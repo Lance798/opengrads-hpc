@@ -107,8 +107,9 @@ static gaint gah5read(struct gagrid *grid, gadouble *gr, char *mask, gaint volum
        (size_t)grid->isiz*grid->jsiz;
   for (d=0;d<3;d++) {
     gaint limit=d==2 ? (pvr->levels ? pvr->levels : 1) : pfi->dnum[d];
-    lo[d]=grid->dimmin[d]<1 ? 1 : grid->dimmin[d];
-    hi[d]=grid->dimmax[d]>limit ? limit : grid->dimmax[d];
+    /* Surface fields ignore fixed Z, as the row reader does. */
+    lo[d]=d==2 && !pvr->levels ? 1 : grid->dimmin[d]<1 ? 1 : grid->dimmin[d];
+    hi[d]=d==2 && !pvr->levels ? 1 : grid->dimmax[d]>limit ? limit : grid->dimmax[d];
     reverse[d]=d==1 ? pfi->yrflg : d==2 ? pfi->zrflg : 0;
     if (lo[d]>hi[d]) {
       for (pos=0;pos<size;pos++) { gr[pos]=pfi->undef; mask[pos]=0; }
@@ -138,7 +139,7 @@ static gaint gah5read(struct gagrid *grid, gadouble *gr, char *mask, gaint volum
     g=unit<=-100 && unit>=-102 ? -100-unit : -1;
     count[d]=1;
     if (g>=0) {
-      gaint limit=g==2 ? pvr->levels : pfi->dnum[g];
+      gaint limit=g==2 ? (pvr->levels ? pvr->levels : 1) : pfi->dnum[g];
       start[d]=reverse[g] ? limit-hi[g] : lo[g]-1;
       count[d]=hi[g]-lo[g]+1;
     } else start[d]=unit==-103 ? t-1 : unit==-104 ? ee-1 : unit;
@@ -202,6 +203,7 @@ static gaint gah5read(struct gagrid *grid, gadouble *gr, char *mask, gaint volum
       continue;
     }
     for (g=0;g<3;g++) coord[g]=grid->dimmin[g];
+    if (!pvr->levels) coord[2]=1;
     if (volume) {
       size_t nx=grid->dimmax[0]-grid->dimmin[0]+1,ny=grid->dimmax[1]-grid->dimmin[1]+1;
       coord[0]+=pos%nx; coord[1]+=(pos/nx)%ny; coord[2]+=pos/(nx*ny);
