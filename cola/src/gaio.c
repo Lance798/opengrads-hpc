@@ -98,7 +98,7 @@ static gaint gah5read(struct gagrid *grid, gadouble *gr, char *mask, gaint volum
   hid_t dsid,vid,memory=-1,type=-1;
   H5T_class_t cls;
   gadouble *buffer=NULL,value,tolerance;
-  gaint rank,d,g,coord[3],lo[3],hi[3],reverse[3],i,j,linear=0;
+  gaint rank,d,g,coord[3],lo[3],hi[3],reverse[3],i,j,linear=0,horizontal=0;
   gaint t=grid->dimmin[3],e=grid->dimmin[4],ee=e,oflg=0,rc=1;
   if (grid->idim>2 || grid->jdim>2 || grid->toff || pfi->ppflag ||
       (pfi->wrap && (grid->dimmin[0]<1 || grid->dimmax[0]>pfi->dnum[0]))) return -1;
@@ -151,6 +151,9 @@ static gaint gah5read(struct gagrid *grid, gadouble *gr, char *mask, gaint volum
     g=pvr->units[d]<=-100 && pvr->units[d]>=-102 ? -100-(gaint)pvr->units[d] : -1;
     if (g>=0) axis[g]=stride[d];
   }
+  horizontal=!volume && grid->idim==0 && grid->jdim==1 && !reverse[1] &&
+             axis[0]==1 && axis[1]==(size_t)(hi[0]-lo[0]+1) &&
+             n==(size_t)(hi[0]-lo[0]+1)*(hi[1]-lo[1]+1);
   if (n>256*1024*1024/sizeof(*buffer)) return -1;
   type=H5Dget_type(pvr->h5varflg);
   if (type<0) goto cleanup;
@@ -162,6 +165,12 @@ static gaint gah5read(struct gagrid *grid, gadouble *gr, char *mask, gaint volum
   if (volume && n==size && !reverse[1] && !reverse[2] &&
       axis[0]==1 && axis[1]==(size_t)(hi[0]-lo[0]+1) &&
       axis[2]==(size_t)(hi[0]-lo[0]+1)*(hi[1]-lo[1]+1) &&
+      lo[0]==grid->dimmin[0] && hi[0]==grid->dimmax[0] &&
+      lo[1]==grid->dimmin[1] && hi[1]==grid->dimmax[1] &&
+      lo[2]==grid->dimmin[2] && hi[2]==grid->dimmax[2]) linear=1;
+  if (!volume && n==size && grid->idim>=0 && !reverse[grid->idim] &&
+      axis[grid->idim]==1 && (grid->jdim<0 ||
+      (!reverse[grid->jdim] && axis[grid->jdim]==(size_t)grid->isiz)) &&
       lo[0]==grid->dimmin[0] && hi[0]==grid->dimmax[0] &&
       lo[1]==grid->dimmin[1] && hi[1]==grid->dimmax[1] &&
       lo[2]==grid->dimmin[2] && hi[2]==grid->dimmax[2]) linear=1;
@@ -180,6 +189,16 @@ static gaint gah5read(struct gagrid *grid, gadouble *gr, char *mask, gaint volum
       value=buffer[pos];
       mask[pos]=isfinite(value) && !(value>=pvr->undef-tolerance && value<=pvr->undef+tolerance);
       gr[pos]=mask[pos] ? (pfi->packflg ? value*pvr->scale+pvr->add : value) : pfi->undef;
+      continue;
+    }
+    if (horizontal) {
+      i=grid->dimmin[0]+pos%grid->isiz;
+      j=grid->dimmin[1]+pos/grid->isiz;
+      mask[pos]=0; gr[pos]=pfi->undef;
+      if (i<lo[0] || i>hi[0] || j<lo[1] || j>hi[1]) continue;
+      value=buffer[(size_t)(j-lo[1])*(hi[0]-lo[0]+1)+i-lo[0]];
+      if (!isfinite(value) || (value>=pvr->undef-tolerance && value<=pvr->undef+tolerance)) continue;
+      gr[pos]=pfi->packflg ? value*pvr->scale+pvr->add : value; mask[pos]=1;
       continue;
     }
     for (g=0;g<3;g++) coord[g]=grid->dimmin[g];

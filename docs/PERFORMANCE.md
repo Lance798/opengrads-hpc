@@ -76,9 +76,10 @@ and the existing non-finite-value behavior of each reader.
 ### Defined Z profiles
 
 `define p=ave(field,x=...,x=...)` (or a Y average) can retain Z through one
-section evaluation when the per-level result is scalar. BP5, NetCDF and binary
-files use this path. HDF5 retains its existing evaluation because its small
-chunk cache and native Z-plane layout made this change slower in testing.
+section evaluation when the per-level result is scalar. BP5, HDF5, NetCDF
+and binary files use this path. Simple spatial sections are fetched before
+the first two positions are evaluated, and supply their metadata as well as
+values. This avoids reading and decoding the first positions twice.
 
 For `define p=aave(field,x=...,x=...,y=...,y=...)`, BP5 and binary files can
 stream horizontal tiles containing all requested levels, sharing coordinate
@@ -89,7 +90,10 @@ keep their faster established plane path. General expressions, cyclic
 longitude requests, and unsupported layouts retain the evaluator.
 
 On the same Taiwan VVM BP5 data, a 69-level defined X-mean profile fell from
-6.16 s to about 0.185 s (one thread). A 512 x 512 area-mean profile fell from
+6.16 s to about 0.090 s (one thread). A direct display of that BP5 profile
+takes about 0.046 s. HDF5 X/Z and Y/Z mean profiles take about 0.085 s and
+0.042 s respectively with the default cache, versus 0.168 s and 0.130 s
+before these changes. A 512 x 512 area-mean profile fell from
 10.14 s to 0.364 s (one thread) or 0.314 s (eight). These improvements primarily
 remove repeated decompression; scaling with additional calculation threads
 is smaller. Real-data profile, fractional-bound and multiple-time comparisons

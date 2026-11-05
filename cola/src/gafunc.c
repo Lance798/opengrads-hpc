@@ -3085,57 +3085,37 @@ static struct gavar *ave_sum_vars(char *expr, struct gastat *pst,
   return a;
 }
 
-/* An average over x, y or z of a bare variable whose result varies in
-   one dimension at most (a profile, a section's line, a point): every
-   position it averages over is read at once, as one grid in which the
-   averaged dimension varies too, rather than a read for each position.
-   Read one at a time, a profile averaged over x and y is a read of a
-   column for every point of the plane, each of which costs a file format
-   such as BP5 the whole block it lies in. Returns that grid, or NULL to
-   read a position at a time; its values are the ones those reads give.
-   pgr1 is the grid read for the first position. */
-#define AVE_SECTION_MAX 33554432.0     /* values in one such read, 256 MB */
-static struct gagrid *ave_section (struct gafunc *pfc, struct gastat *pst,
-                                   struct gafile *pfi, gaint dim, gaint d1, gaint d2,
-                                   struct gagrid *pgr1) {
-  struct gagrid *sec;
-  gadouble (*conv) (gadouble *, gadouble);
-  gadouble smin, smax;
-  gaint sidim, sjdim, r, rc;
+#define AVE_SECTION_MAX 33554432.0     /* values in one read, 256 MiB */
 
-  if (dim>2 || d2<=d1 || pgr1->jdim>=0) return NULL;
-  if ((gadouble)(d2-d1+1)*pgr1->isiz > AVE_SECTION_MAX) return NULL;
-  if (ave_plain_var(pfc->argpnt[0],pst,pgr1)==NULL) return NULL;
-  r = pgr1->idim;
-  if (r==dim) return NULL;
-  sidim = pst->idim;
-  sjdim = pst->jdim;
-  smin = pst->dmin[dim];
-  smax = pst->dmax[dim];
-  conv = pfi->gr2ab[dim];
-  pst->dmin[dim] = conv(pfi->grvals[dim],(gadouble)d1);
-  pst->dmax[dim] = conv(pfi->grvals[dim],(gadouble)d2);
-  if (r<0)        { pst->idim = dim; pst->jdim = -1; }
-  else if (r<dim) { pst->idim = r;   pst->jdim = dim; }
-  else            { pst->idim = dim; pst->jdim = r; }
-  rc = gaexpr(pfc->argpnt[0],pst);
-  pst->idim = sidim;
-  pst->jdim = sjdim;
-  pst->dmin[dim] = smin;
-  pst->dmax[dim] = smax;
-  if (rc) return NULL;
-  if (pst->type!=1) {
-    gafree(pst);
-    return NULL;
+/* Plan a complete section before evaluating its first positions. The
+   section supplies the result's metadata too: no duplicate native reads
+   are needed just to discover its shape. */
+static struct gagrid *ave_section(struct gafunc *pfc, struct gastat *pst,
+                                  struct gafile *file, gaint dim, gaint first, gaint last) {
+  struct gastat sample=*pst;
+  struct gagrid *sec;
+  gaint r=pst->idim,rc;
+  gadouble length=1,lo,hi;
+  if (dim>2 || last<=first || pst->jdim>=0 || r==dim ||
+      !ave_plain_var(pfc->argpnt[0],pst,NULL)) return NULL;
+  if (r>=0) {
+    lo=floor(file->ab2gr[r](file->abvals[r],pst->dmin[r])+0.0001);
+    hi=ceil(file->ab2gr[r](file->abvals[r],pst->dmax[r])-0.0001);
+    length=hi-lo+1;
   }
-  sec = pst->result.pgr;
-  /* it holds every position, and the rest is laid out as the first grid */
-  if (sec->dimmin[dim]!=d1 || sec->dimmax[dim]!=d2 ||
-      (r>=0 && (sec->dimmin[r]!=pgr1->dimmin[r] || sec->dimmax[r]!=pgr1->dimmax[r])) ||
-      sec->isiz*sec->jsiz != (d2-d1+1)*pgr1->isiz*pgr1->jsiz ||
-      (r<0 ? sec->idim!=dim : (sec->idim!=(r<dim ? r : dim) || sec->jdim!=(r<dim ? dim : r)))) {
-    gagfre(sec);
-    return NULL;
+  if (length<1 || (last-first+1)*length>AVE_SECTION_MAX) return NULL;
+  sample.dmin[dim]=file->gr2ab[dim](file->grvals[dim],first);
+  sample.dmax[dim]=file->gr2ab[dim](file->grvals[dim],last);
+  if (r<0) { sample.idim=dim; sample.jdim=-1; }
+  else { sample.idim=r<dim ? r : dim; sample.jdim=r<dim ? dim : r; }
+  rc=gaexpr(pfc->argpnt[0],&sample);
+  if (rc) return NULL;
+  if (sample.type!=1) { gafree(&sample); return NULL; }
+  sec=sample.result.pgr;
+  if (sec->alocf || sec->dimmin[dim]!=first || sec->dimmax[dim]!=last ||
+      sec->isiz*sec->jsiz!=(last-first+1)*length ||
+      sec->idim!=sample.idim || sec->jdim!=sample.jdim) {
+    gagfre(sec); return NULL;
   }
   return sec;
 }
@@ -3152,6 +3132,29 @@ static void ave_section_at (struct gagrid *sec, gaint dim, gaint k, gaint siz,
     val[i] = sec->grid[o];
     valu[i] = sec->umask[o];
   }
+}
+
+/* An owned output grid sliced from an immutable input section. */
+static struct gagrid *ave_section_grid(struct gagrid *sec, gaint dim, gaint at) {
+  struct gagrid *grid=galloc(sizeof(*grid),"avesectiongrid");
+  gaint r=sec->idim==dim ? sec->jdim : sec->idim;
+  if (!grid) return NULL;
+  *grid=*sec;
+  grid->idim=r; grid->jdim=-1; grid->jsiz=1;
+  grid->isiz=r<0 ? 1 : sec->idim==r ? sec->isiz : sec->jsiz;
+  grid->dimmin[dim]=grid->dimmax[dim]=sec->dimmin[dim]+at;
+  if (r==sec->jdim) {
+    grid->igrab=sec->jgrab; grid->iabgr=sec->jabgr;
+    grid->ivals=sec->jvals; grid->iavals=sec->javals; grid->ilinr=sec->jlinr;
+  }
+  if (r<0) { grid->grid=&grid->rmin; grid->umask=&grid->umin; }
+  else {
+    grid->grid=galloc((size_t)grid->isiz*sizeof(*grid->grid),"avesectionvalues");
+    grid->umask=galloc((size_t)grid->isiz,"avesectionmask");
+    if (!grid->grid || !grid->umask) { gagfre(grid); return NULL; }
+  }
+  ave_section_at(sec,dim,at,grid->isiz,grid->grid,grid->umask);
+  return grid;
 }
 
 /* A bounded XYZ slab for a vertical reduction of a plain file variable.
@@ -3448,8 +3451,13 @@ struct gagrid *sect=NULL;
     }
   }
 
-  /* Get first grid */
-  rc = gaexpr(pfc->argpnt[0],pst);
+  /* Read a simple spatial section before its first two output grids. */
+  sect=ave_section(pfc,pst,pfi,dim,d1,d2);
+  if (sect) {
+    pst->result.pgr=ave_section_grid(sect,dim,0);
+    if (!pst->result.pgr) { gagfre(sect); return 1; }
+    pst->type=1; rc=0;
+  } else rc=gaexpr(pfc->argpnt[0],pst);
   if (rc) return (rc);
   if (pst->type == 0) {
     gafree (pst);
@@ -3539,7 +3547,11 @@ struct gagrid *sect=NULL;
     }
   }
 
-  rc = gaexpr(pfc->argpnt[0],pst);    /* Get 2nd grid */
+  if (sect) {
+    pst->result.pgr=ave_section_grid(sect,dim,d-d1);
+    if (!pst->result.pgr) { gagfre(pgr1); gagfre(sect); return 1; }
+    pst->type=1; rc=0;
+  } else rc=gaexpr(pfc->argpnt[0],pst);    /* Get 2nd grid */
   if (rc) {
     gagfre(pgr1);
     return (rc);
@@ -3633,7 +3645,7 @@ struct gagrid *sect=NULL;
      else, or a format without such a reader, goes a time at a time. */
   d+=incr;
   rc = 0;
-  if (dim==2 && d<=d2) {
+  if (dim==2 && d<=d2 && !sect) {
     rc=ave_volume(pfc,pst,pfi,pgr1,pgr2,d,d2,sel,bndflg,wlo,whi);
     if (rc>=0) { gaprogstep(d2-d1+1); goto average_done; }
     rc=0;
@@ -3644,7 +3656,6 @@ struct gagrid *sect=NULL;
     readgrid=*pgr1; readgrid.pvar=direct;
     readother=*pgr1; readother.pvar=other;
   }
-  if (d<=d2) sect = ave_section(pfc,pst,pfi,dim,d1,d2,pgr1);
   if (sect) {
     secv = (gadouble *)galloc(sizeof(gadouble)*(size_t)siz,"avesecv");
     secu = (char *)galloc((size_t)siz,"avesecu");
@@ -3922,7 +3933,7 @@ gaint gadefseries(char *expression, struct gastat *pst, gaint z1, gaint z2,
   size_t n,pos,pp;
   if (z2<=z1 || z1<1 || !reduction_call(expression,name,&call) ||
       !(var=ave_plain_var(call.argpnt[0],pst,NULL)) || z2>var->levels) return -1;
-  if (file->ncflg!=3 && !strcmp(name,"ave") && shape->idim<0 && call.argnum>=3 && call.argnum<=4) {
+  if (!strcmp(name,"ave") && shape->idim<0 && call.argnum>=3 && call.argnum<=4) {
     if (!dimprs(call.argpnt[1],pst,file,&dim,&gr,1,&wflag) || dim>1) return -1;
     sample.idim=2; sample.jdim=-1;
     sample.dmin[2]=file->gr2ab[2](file->grvals[2],z1);
