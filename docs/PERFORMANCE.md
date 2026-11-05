@@ -127,6 +127,18 @@ area reduction variants matched the pre-change executable exactly in the
 tested cases. Regression tests also compare against `defined+0`, check source
 values before/after averaging, and exercise simultaneous Z/T variation.
 
+### Resident section calculations
+
+A spatial section is folded in one OpenMP region, with one owner per output
+point. Coordinate weights are computed once. Every point preserves its
+position-by-position addition order and min/max location tie rule; reductions
+never merge partial sums for the same point. On the tested 1024 x 69 defined
+X/Z section, the X-mean command fell from about 0.95 ms to 0.47 ms at one
+thread (0.40 ms at eight); reading/copying the defined section still dominates
+this small calculation. All eight reduction selectors and fractional bounds
+matched the pre-change executable exactly at one and eight threads on BP5,
+HDF5, NetCDF and binary data.
+
 ## Indexed vertical slices
 
 [`zslice`](ZSLICE.md) reads a different Z index at each horizontal point.
