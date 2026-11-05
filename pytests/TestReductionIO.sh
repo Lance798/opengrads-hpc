@@ -118,10 +118,10 @@ for label,dataset,dtype,template in formats:
     for expr in ('aave(cached,x=1,x=256,y=1,y=256)','ave(cached,x=1,x=256)'):
         defined+='define dp='+expr+'\nd dp\n'
         defined+='define dr='+expr.replace('(cached,','(cached+0,')+'\nd dr\n'
-    defined+=source
+    defined+=source+'set t 2\nset x 1 128\nset y 1 128\nset z 1\nd surface\nset z 4\nd surface\n'
     for threads in ((1,8) if reverse else (1,2,4,8)):
         actual=run(ctl,commands+extra+slabs+series+selectors+defined,threads)
-        assert len(actual)==(66 if extra else 62),(label,len(actual))
+        assert len(actual)==(68 if extra else 64),(label,len(actual))
         compare([actual[1]],[actual[2]],label+' native/evaluator',exact=True)
         if extra:
             compare([actual[6],actual[8]],[actual[7],actual[9]],label+' batch/evaluator',exact=True)
@@ -133,9 +133,10 @@ for label,dataset,dtype,template in formats:
         for idx in range(start+24,start+40,2):
             compare([actual[idx]],[actual[idx+1]],label+' section selector/evaluator',exact=True)
         ds=start+40
-        compare([actual[ds]],[actual[-1]],label+' defined source unchanged',exact=True)
+        compare([actual[ds]],[actual[ds+15]],label+' defined source unchanged',exact=True)
         for idx in range(ds+1,ds+15,2):
             compare([actual[idx]],[actual[idx+1]],label+' read-only defined/evaluator')
+        compare([actual[-2]],[actual[-1]],label+' surface fixed-Z broadcast',exact=True)
         key=(reverse,template)
         if key not in references:references[key]=actual[:start]
         else:compare(actual[:start],references[key],label+' cross-format/threads')
