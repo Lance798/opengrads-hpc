@@ -19,6 +19,7 @@
 
 #include "grads.h"
 #include "gaomp.h"
+#include "gatime.h"
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -701,8 +702,8 @@ gaint y,z,t,e;
 
 
 /* Read a bounded batch of fixed-Z horizontal grids. BP5 can submit its
-   steps together. Other libraries stay on the caller thread and fill the
-   same buffers directly, avoiding parser calls and per-time grid copies. */
+   steps together. HDF5 can isolate its reads in persistent time workers.
+   Other libraries stay on the caller thread and fill the same buffers. */
 gaint gagrdsteps(struct gagrid *grid, gaint t0, gaint n, gaint incr,
                   gadouble *values, char *mask) {
   struct gafile *file=grid->pfile;
@@ -737,6 +738,10 @@ gaint gagrdsteps(struct gagrid *grid, gaint t0, gaint n, gaint incr,
     return -1;
 #endif
   } else if (file->ncflg || grid->idim!=0 || (grid->jdim!=1 && grid->jdim!=-1)) return -1;
+  if (file->ncflg==3) {
+    rc=ga_time_readsteps(grid,t0,n,incr,values,mask,cachesf);
+    if (rc>=0) return rc;
+  }
   for (k=0;k<n;k++) {
     sub.dimmin[3]=sub.dimmax[3]=t0+k*incr;
     sub.dimmin[4]=sub.dimmax[4]=grid->dimmin[4];

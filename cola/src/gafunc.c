@@ -23,6 +23,7 @@
 #include "grads.h"
 #include "gahelp.h"
 #include "gaomp.h"
+#include "gatime.h"
 
 #if OPENGRADS == 1
 #include "gaudx.h"
@@ -3877,7 +3878,7 @@ struct gagrid *sect=NULL;
   }
   chunk = 1;
   if (direct) {
-    chunk = (gaint)((64.0*1024.0*1024.0) / ((gadouble)siz*(sizeof(gadouble)+1)));
+    chunk = (gaint)(ga_time_batch_bytes(pfi) / ((gadouble)siz*(sizeof(gadouble)+1)));
     if (other) chunk/=2;
     if (chunk>256) chunk = 256;
     if (chunk<2) direct = NULL;
@@ -3903,7 +3904,7 @@ struct gagrid *sect=NULL;
       nstep = (d2-d)/incr + 1;
       if (nstep>(pfi->dnum[3]-d)/incr+1) nstep = (pfi->dnum[3]-d)/incr+1;
       if (nstep>chunk) nstep = chunk;
-      if (other && !pfi->adios2flg) {
+      if (other && !pfi->adios2flg && !ga_time_can_read(pfi)) {
         /* Keep template files open while reading both fields at a time. */
         rc=0;
         for (k=0;k<nstep && !rc;k++) {
