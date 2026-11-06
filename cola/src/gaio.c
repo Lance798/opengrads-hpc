@@ -34,6 +34,9 @@
 #endif
 #if USEHDF5 ==1
 #include "hdf5.h"
+#if H5_VERSION_GE(2,0,0) && USEOPENMP == 1
+#include <zlib.h>
+#endif
 #endif
 
 /* global struct for warning level setting */
@@ -1029,6 +1032,242 @@ void gazintadd(struct gazint *z, size_t pos, gaint k, gadouble value) {
 }
 
 #if USEHDF5==1
+#if H5_VERSION_GE(2,0,0) && USEOPENMP == 1
+/* Raw-chunk decoding is deliberately narrow: native IEEE float/double,
+   canonical Z/Y/X chunks, and the shuffle/deflate/Fletcher32 pipeline.
+   HDF5 metadata and raw reads stay on the calling thread. */
+#define H5_ZINT_DECODE_BUDGET ((size_t)256*1024*1024)
+struct h5_zint_job {
+  hsize_t origin[4],start[4],count[4];
+  size_t stride[4],points,packed;
+  unsigned filters;
+  unsigned char *raw,*scratch;
+  gadouble *values;
+  gaint error,imin,imax,jmin,jmax,kmin,kmax;
+};
+
+/* HDF5 uses big-endian 16-bit words and a little-endian stored digest.
+   Folding more often keeps both sums bounded without changing the result.
+   See HDFGroup/hdf5 src/H5checksum.c and src/H5Zfletcher32.c. */
+static uint32_t gah5checksum(const unsigned char *data,size_t bytes) {
+  uint32_t a=0,b=0;size_t i;
+  for(i=0;i<bytes;i+=2) {
+    a+=((uint32_t)data[i]<<8)+(i+1<bytes ? data[i+1] : 0);
+    b+=a;
+    if((i&255)==254) { a=(a&65535)+(a>>16);b=(b&65535)+(b>>16); }
+  }
+  a=(a&65535)+(a>>16);b=(b&65535)+(b>>16);
+  a=(a&65535)+(a>>16);b=(b&65535)+(b>>16);
+  return (b<<16)|a;
+}
+
+static void gah5decode(struct h5_zint_job *job,size_t width,size_t elements,
+                       size_t bytes,const hsize_t *chunks,int xd,int yd,int zd,
+                       int shuffle,int deflate,int checksum) {
+  const unsigned char *data=job->raw;size_t length=job->packed,z,y,x,q=0,index,c;
+  unsigned char scalar[sizeof(double)];
+  job->error=1;
+  if(checksum>=0 && !(job->filters&(1u<<checksum))) {
+    uint32_t actual,stored,legacy;
+    if(length<=4)return;
+    length-=4;
+    stored=(uint32_t)data[length]|((uint32_t)data[length+1]<<8)|
+           ((uint32_t)data[length+2]<<16)|((uint32_t)data[length+3]<<24);
+    actual=gah5checksum(data,length);
+    /* Retain HDF5's compatibility with pre-1.6.3 byte-swapped digests. */
+    legacy=((actual&0xff00ff00u)>>8)|((actual&0x00ff00ffu)<<8);
+    if(stored!=actual && stored!=legacy)return;
+  }
+  if(deflate>=0 && !(job->filters&(1u<<deflate))) {
+    uLongf output=(uLongf)bytes;
+    if(uncompress(job->scratch,&output,data,(uLong)length)!=Z_OK || output!=bytes)return;
+    data=job->scratch;length=bytes;
+  }
+  if(length!=bytes)return;
+  for(z=0;z<(size_t)job->count[zd];z++)
+    for(y=0;y<(size_t)job->count[yd];y++)
+      for(x=0;x<(size_t)job->count[xd];x++,q++) {
+        index=(((size_t)(job->start[zd]-job->origin[zd])+z)*(size_t)chunks[yd]+
+                 (size_t)(job->start[yd]-job->origin[yd])+y)*(size_t)chunks[xd]+
+                 (size_t)(job->start[xd]-job->origin[xd])+x;
+        if(shuffle>=0 && !(job->filters&(1u<<shuffle))) {
+          for(c=0;c<width;c++)scalar[c]=data[c*elements+index];
+        } else memcpy(scalar,data+index*width,width);
+        if(width==sizeof(float)) { float value;memcpy(&value,scalar,sizeof(value));job->values[q]=value; }
+        else memcpy(job->values+q,scalar,sizeof(double));
+      }
+  job->error=0;
+}
+
+static void gah5jobsfree(struct h5_zint_job *jobs,size_t n) {
+  size_t i;
+  if(!jobs)return;
+  for(i=0;i<n;i++) {
+    free(jobs[i].raw);free(jobs[i].scratch);free(jobs[i].values);
+    jobs[i].raw=jobs[i].scratch=NULL;jobs[i].values=NULL;
+  }
+}
+
+/* A spatial tile owns its output columns through every chunk in a batch.
+   Each column sees chunks and Z additions in exactly the native reader's
+   order; chunks at different heights never race on the same accumulator. */
+static void gah5foldjobs(struct h5_zint_job *jobs,size_t n,struct gagrid *grid,
+                         struct gazint *integral,int xd,int yd,int zd,double tolerance) {
+  size_t size=(size_t)grid->isiz*grid->jsiz,tile,tiles=(size+255)/256;
+  int threads=ga_omp_get_threads();
+  if((size_t)threads>tiles)threads=(int)tiles;
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) num_threads(threads) if(threads>1)
+#endif
+  for(tile=0;tile<tiles;tile++) {
+    size_t first=tile*256,last=first+256<size ? first+256 : size,c,p,lo,hi,offset;
+    int j,jfirst=(int)(first/grid->isiz),jlast=(int)((last-1)/grid->isiz),k;
+    for(c=0;c<n;c++) {
+      struct h5_zint_job *job=jobs+c;
+      int a=jfirst>job->jmin ? jfirst : job->jmin,b=jlast+1<job->jmax ? jlast+1 : job->jmax;
+      for(j=a;j<b;j++) {
+        size_t row=(size_t)j*grid->isiz;
+        lo=row+job->imin;if(lo<first)lo=first;
+        hi=row+job->imax;if(hi>last)hi=last;
+        if(lo>=hi)continue;
+        for(k=job->kmin;k<job->kmax;k++)if(gazintlevel(integral,k)) {
+          size_t nativez=(size_t)(pfi->zrflg ? integral->nz-1-k : k);
+          size_t nativey=(size_t)(pfi->yrflg ? pfi->dnum[1]-(grid->dimmin[1]+j) : grid->dimmin[1]+j-1);
+          offset=(nativez-job->start[zd])*job->stride[zd]+(nativey-job->start[yd])*job->stride[yd];
+          for(p=lo;p<hi;p++) {
+            size_t x=(size_t)(grid->dimmin[0]+(int)(p-row)-1);
+            gadouble value=job->values[offset+x-job->start[xd]];
+            if(!isfinite(value) || (value>=pvr->undef-tolerance && value<=pvr->undef+tolerance))continue;
+            if(pfi->packflg)value=value*pvr->scale+pvr->add;
+            gazintadd(integral,p,k,value);
+          }
+        }
+      }
+    }
+  }
+}
+
+static gaint gah5zintparallel(struct gagrid *grid,struct gazint *integral,hid_t prop,
+                              int rank,const hsize_t *chunks,const hsize_t *begin,
+                              const hsize_t *finish,int xd,int yd,int zd,double tolerance) {
+  struct h5_zint_job *jobs=NULL;hid_t type=-1;char connector[16]={0};
+  size_t n=1,i,first,last,elements=1,bytes,width,budget,total=0;
+  int d,nfilters,shuffle=-1,deflate=-1,checksum=-1,previous=-1,rc=-1,threads=ga_omp_get_threads();
+  const char *setting=getenv("GA_H5_DECODE");
+  unsigned allfilters,options;hsize_t origin[4];
+  if(threads<2 || (setting && (!strcmp(setting,"off") || !strcmp(setting,"0"))) ||
+     grid->idim!=0 || grid->jdim!=1 || (rank!=3 && rank!=4) ||
+     xd!=rank-1 || yd!=rank-2 || zd!=rank-3 || (rank==4 && chunks[0]!=1) ||
+     H5Pget_layout(prop)!=H5D_CHUNKED)return -1;
+  if(H5Pget_chunk_opts(prop,&options)<0)return 1;
+  if(options)return -1;
+  if(H5VLget_connector_name(pvr->h5varflg,connector,sizeof(connector))!=6 || strcmp(connector,"native"))return -1;
+  type=H5Dget_type(pvr->h5varflg);if(type<0)return 1;
+  width=H5Tget_size(type);
+  d=(width==sizeof(float) && H5Tequal(type,H5T_NATIVE_FLOAT)>0) ||
+    (width==sizeof(double) && H5Tequal(type,H5T_NATIVE_DOUBLE)>0);
+  H5Tclose(type);if(!d)return -1;
+  nfilters=H5Pget_nfilters(prop);if(nfilters<1 || nfilters>3)return -1;
+  for(d=0;d<nfilters;d++) {
+    unsigned flags,config,values[16];size_t count=16;int order;
+    H5Z_filter_t filter=H5Pget_filter2(prop,(unsigned)d,&flags,&count,values,0,NULL,&config);
+    if(filter==H5Z_FILTER_SHUFFLE && count==1 && values[0]==width) { order=0;shuffle=d; }
+    else if(filter==H5Z_FILTER_DEFLATE && count==1) { order=1;deflate=d; }
+    else if(filter==H5Z_FILTER_FLETCHER32 && count==0) { order=2;checksum=d; }
+    else return -1;
+    if(order<=previous)return -1;
+    previous=order;
+  }
+  if(deflate<0)return -1;
+  allfilters=(1u<<nfilters)-1;
+  for(d=0;d<rank;d++) {
+    hsize_t count;
+    if(!chunks[d] || finish[d]<=begin[d])return -1;
+    count=(finish[d]-1)/chunks[d]-begin[d]/chunks[d]+1;
+    if(count>65536/n || chunks[d]>SIZE_MAX/elements)return -1;
+    n*=(size_t)count;elements*=(size_t)chunks[d];
+    origin[d]=(begin[d]/chunks[d])*chunks[d];
+  }
+  if(n<4 || n>16*1024*1024/sizeof(*jobs) || elements>16*1024*1024/width)return -1;
+  bytes=elements*width;
+  if(bytes<32768 || (double)n*bytes<1024*1024 ||
+     (double)n*bytes<2.0*cachesf*pfi->cachesize)return -1;
+  jobs=calloc(n,sizeof(*jobs));if(!jobs)return -1;
+  /* Discover every allocation/filter mask before modifying any result.
+     Unallocated chunks retain HDF5's established fill-value reader. */
+  for(i=0;i<n;i++) {
+    struct h5_zint_job *job=jobs+i;hsize_t packed;haddr_t address;
+    if(gaqsig()) { rc=1;goto cleanup; }
+    if(!(i%128))gaprogpulse();
+    job->points=1;
+    for(d=rank-1;d>=0;d--) {
+      hsize_t end=origin[d]+chunks[d];
+      job->origin[d]=origin[d];job->start[d]=origin[d]>begin[d] ? origin[d] : begin[d];
+      if(end>finish[d])end=finish[d];
+      job->count[d]=end-job->start[d];job->stride[d]=job->points;
+      if(job->count[d]>SIZE_MAX/job->points)goto cleanup;
+      job->points*=(size_t)job->count[d];
+    }
+    if(H5Dget_chunk_info_by_coord(pvr->h5varflg,origin,&job->filters,&address,&packed)<0) { rc=1;goto cleanup; }
+    if(address==HADDR_UNDEF || !packed || packed>H5_ZINT_DECODE_BUDGET ||
+       (job->filters&~allfilters) || job->points>H5_ZINT_DECODE_BUDGET/sizeof(double))goto cleanup;
+    job->packed=(size_t)packed;
+    if(job->packed+bytes+job->points*sizeof(double)+256*1024>H5_ZINT_DECODE_BUDGET)goto cleanup;
+    job->imin=(int)job->start[xd]+1-grid->dimmin[0];job->imax=job->imin+(int)job->count[xd];
+    job->jmin=(pfi->yrflg ? pfi->dnum[1]-(int)(job->start[yd]+job->count[yd])+1 : (int)job->start[yd]+1)-grid->dimmin[1];
+    job->jmax=job->jmin+(int)job->count[yd];
+    job->kmin=pfi->zrflg ? integral->nz-(int)(job->start[zd]+job->count[zd]) : (int)job->start[zd];
+    job->kmax=job->kmin+(int)job->count[zd];
+    for(d=rank-1;d>=0;d--) {
+      origin[d]+=chunks[d];if(origin[d]<finish[d])break;
+      origin[d]=(begin[d]/chunks[d])*chunks[d];
+    }
+  }
+  gaprogtotal((int)n);
+  for(first=0;first<n;first=last) {
+    int team;
+    budget=0;last=first;
+    while(last<n && last-first<128 && last-first<(size_t)threads*2) {
+      size_t need=jobs[last].packed+bytes+jobs[last].points*sizeof(double)+256*1024;
+      if(need>H5_ZINT_DECODE_BUDGET-budget)break;
+      budget+=need;last++;
+    }
+    if(last==first)goto cleanup;
+    rc=1;
+    for(i=first;i<last;i++) {
+      struct h5_zint_job *job=jobs+i;size_t capacity=job->packed;
+      if(gaqsig())goto cleanup;
+      job->raw=malloc(job->packed);job->scratch=malloc(bytes);job->values=malloc(job->points*sizeof(double));
+      if(!job->raw || !job->scratch || !job->values)goto cleanup;
+      if(H5Dread_chunk2(pvr->h5varflg,H5P_DEFAULT,job->origin,&job->filters,job->raw,&capacity)<0 ||
+         !capacity || capacity>job->packed || (job->filters&~allfilters))goto cleanup;
+      job->packed=capacity;
+    }
+    team=threads<(int)(last-first) ? threads : (int)(last-first);
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) num_threads(team) if(team>1)
+#endif
+    for(i=first;i<last;i++)gah5decode(jobs+i,width,elements,bytes,chunks,xd,yd,zd,shuffle,deflate,checksum);
+    for(i=first;i<last;i++)if(jobs[i].error) {
+      gaprnt(0,"HDF5 I/O Error: chunk decode/checksum failed\n");goto cleanup;
+    }
+    if(gaqsig())goto cleanup;
+    gah5foldjobs(jobs+first,last-first,grid,integral,xd,yd,zd,tolerance);
+    for(i=first;i<last;i++)total+=jobs[i].points;
+    gah5jobsfree(jobs+first,last-first);
+    gaprogstep((int)last);
+  }
+  if(getenv("GA_ZINT_TRACE")) {
+    snprintf(pout,1255,"ZINT I/O: HDF5 parallel chunks=%lu, native values=%lu, decode budget=%lu MiB\n",
+             (unsigned long)n,(unsigned long)total,(unsigned long)(H5_ZINT_DECODE_BUDGET/(1024*1024)));
+    gaprnt(2,pout);
+  }
+  rc=0;
+cleanup:
+  gah5jobsfree(jobs,n);free(jobs);return rc;
+}
+#endif
+
 /* Read each intersecting physical chunk once, reducing it immediately. The
    chunk buffer is reused and no complete global 3-D cube is constructed. */
 static gaint gah5zint(struct gagrid *grid, struct gazint *integral) {
@@ -1096,6 +1335,13 @@ static gaint gah5zint(struct gagrid *grid, struct gazint *integral) {
       if (chunks[d]>limit) chunks[d]=limit;
     }
   }
+  tolerance=dequal(pvr->undef,0.0,1e-8)==0 ? 1e-5 : fabs(pvr->undef/EPSILON);
+#if H5_VERSION_GE(2,0,0) && USEOPENMP == 1
+  {
+    gaint parallel_rc=gah5zintparallel(grid,integral,prop,rank,chunks,begin,finish,xd,yd,zd,tolerance);
+    if(parallel_rc>=0) { rc=parallel_rc;goto cleanup; }
+  }
+#endif
   H5Pclose(prop); prop=-1;
   for (d=0;d<rank;d++) {
     if (!chunks[d]) goto cleanup;

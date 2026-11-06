@@ -1126,6 +1126,96 @@ larger single-time target. Records, summary JSON and the call-count/latency
 figure are in `tmp/new-machine-baseline/stage6-density-production/`
 (`density-reads.png` and PDF).
 
+#### Stage 7: parallel compressed HDF5 chunks within one time
+
+Native HDF5 ZINT maps can now decode independent compressed chunks with
+OpenMP. This covers `zint(u)` and native field/profile products such as
+`zint(qv*rhobar)`, for both DEFINE and direct DISPLAY. HDF5 metadata and raw
+chunk reads remain on the calling thread; workers run private zlib decoding
+and gather selected values. A separate column-owned fold preserves the
+native reader's exact chunk and vertical addition order, masks, unpacking,
+density factors and layer weights.
+
+The path requires HDF5 2.0 or later, OpenMP, the native HDF5 connector,
+native-endian float/double data, a 2-D X/Y result, and canonical Z/Y/X or
+T/Z/Y/X chunks (one time per chunk). It accepts ordered shuffle/deflate/
+Fletcher32 subsets with deflate present and honors each chunk's skipped-filter
+mask. Checksums remain verified, including the legacy digest compatibility
+of HDF5's [Fletcher32 filter](https://github.com/HDFGroup/hdf5/blob/develop/src/H5Zfletcher32.c).
+Unsupported filters, integer/endian conversion, sparse unallocated chunks,
+partial-chunk filter options, other layouts, and small or cache-fitting
+selections retain the native HDF5 reader. `GA_H5_DECODE=off` explicitly
+selects that reader. Isolated time workers still use one thread each, so
+this stage does not multiply the total CPU budget across times.
+
+Decode batches contain at most 128 chunks and use at most 256 MiB of raw,
+scratch and selected-value buffers, including a zlib workspace reserve.
+Chunk metadata has a separate 16 MiB limit. No global 3-D cube is allocated.
+Allocation/filter metadata is checked before any accumulation; decoding or
+checksum errors discard the incomplete result. Progress advances only after
+a batch is folded, and cancellation preserves an existing DEFINE value.
+
+`TestH5Decode.sh` compares 9022578 finite values exactly, with matching masks,
+against the native reader. Fixtures cover float/double, four dimensions,
+packing, reversed axes, partial chunks and Z bounds, cropped regions/halos,
+all eight skipped-filter combinations, legacy checksums and fallback layouts.
+Corrupt checksums and deflate streams fail safely, subsequent reads recover,
+and PNGs are byte-identical. PTY checks exercise monotonic progress, iTerm2
+clearing, off mode and cancellation after partial accumulation. The suite
+also passes ASan/UBSan. All fourteen decode/ZINT/time-worker/mask/OpenMP/
+reduction/I/O/section/progress/graphics regressions pass. Separate compile
+checks disable OpenMP, HDF5 and the new API block; these check feature guards,
+not compilation against an independently installed older HDF5 release.
+
+The real-data sweep uses T=2400, a 386 x 88 regional map and a 1536 x 384
+global map, with 44 levels. It contains 224 timed evaluations across seven
+CPU budgets, DEFINE and DISPLAY, with a first command and three repeats
+per process. All 43665440 compared output values and masks match the frozen
+Stage 6 serial executable exactly. DISPLAY evaluation medians in milliseconds:
+
+| Case | 1 CPU | 4 | 8 | 16 | 32 | 64 | 128 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Regional `zint(u)` | 64.61 | 32.30 | 22.35 | 18.80 | 18.14 | 14.71 | 20.35 |
+| Regional CWV | 71.24 | 31.10 | 20.66 | 16.53 | 16.91 | 13.99 | 9.92 |
+| Global `zint(u)` | 446.03 | 163.68 | 163.45 | 120.24 | 104.32 | 95.17 | 106.80 |
+| Global CWV | 438.13 | 157.70 | 157.57 | 96.20 | 99.93 | 89.14 | 101.41 |
+
+These are warm OS-cache measurements, including reads and calculation,
+excluding startup, export, ASCII verification and rendering. Rendering is
+verified separately. DEFINE results and first-command overhead are plotted
+alongside repeated DISPLAY times in
+`tmp/new-machine-baseline/stage7-single-production/scaling.png` (also PDF),
+with records, summary and metadata JSON. The region intersects 88 chunks;
+the globe intersects 396. Serial raw reads, memory traffic, available chunks
+and SMT limit scaling: 64 threads improve these global maps by about 4.7--4.9x,
+but 128 do not consistently improve them. This host has 104 physical cores.
+HDF5 probe counters count `H5Dread`, not `H5Dread_chunk2`; a zero read count
+on the new path does not mean no I/O. Single-process CPU counters include
+all OpenMP threads.
+
+A final T=2145:2400 check of both integrals at 1, 16, 64 and 128 CPUs
+compares another 69566464 values and masks exactly against the original
+256-time references. This confirms coexistence with the one-thread time
+workers; it is a one-trial correctness check, not a replacement scaling
+sweep. Records are in `tmp/new-machine-baseline/stage7-times-check/`.
+
+A separate configuration-only `OMP_WAIT_POLICY=PASSIVE` pilot checks
+24951680 additional values exactly. For global CWV at 128 threads, repeated
+DISPLAY CPU time falls from 4.84 to 1.59 CPU seconds while elapsed time is
+approximately unchanged (101.4 vs 99.8 ms). This may reduce waiting cost,
+but does not establish a universal latency improvement; no default changes.
+To reproduce with the local development launcher, use
+`./dev exec env OMP_WAIT_POLICY=PASSIVE ./opengrads`.
+Records are in `tmp/new-machine-baseline/stage7-passive-pilot/`.
+
+The next priorities are reducing serial chunk-read/fold overhead for a
+single time, then profiling and reducing the large input-time grid transfer
+to the parent. Any overlap/shared-memory implementation must retain bounded
+memory, ordered accumulation, cancellation and crash recovery. Hybrid
+workers/threads remain a future scheduling experiment; there is no mid-command
+switch from 64 x 1 to 32 x 2. The uncommon compound spatial/time averages
+remain deferred as requested.
+
 ### Mixed synthetic workload
 
 Run the supplied benchmark after building `grads` and `libgxdummy.la`:
