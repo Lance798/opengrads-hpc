@@ -41,6 +41,7 @@
 #include "grads.h"
 #include "gahelp.h"
 #include "gaomp.h"
+#include "gatime.h"
 #include "gx.h"
 
 #if OPENGRADS == 1
@@ -609,6 +610,8 @@ FILE *pdefid=NULL;
   lowcas (cmd);
   while (*cmd==' ') cmd++;
   while (*com==' ') com++;
+  if (cmpwrd("quit",cmd) || cmpwrd("reinit",cmd) || cmpwrd("reset",cmd) || cmpwrd("close",cmd))
+    ga_time_shutdown();
 
   retcod = 0;
   gacmdlvl++;
@@ -3274,6 +3277,15 @@ char name[20];
 
     res  = pfiv->rbuf;
     resu = pfiv->ubuf;
+    if (iemin==iemax) {
+      rc=ga_time_define(cmd,pcm,izmin,izmax,itmin,itmax,iemin,pgr1,res,resu,pcm->undef);
+      if (rc>0) { gaprnt(0,"DEFINE error: Time evaluation failed\n");goto retrn; }
+      if (!rc) {
+        if (pgr1->idim>-1) { gree(pgr1->grid,"f86a");gree(pgr1->umask,"f87a"); }
+        pgr1->grid=NULL;pgr1->umask=NULL;pst->result.pgr=NULL;
+        goto time_define_done;
+      }
+    }
     for (ie=iemin; ie<=iemax; ie++) {
       if (izmin==izmax && itmax>itmin) {
         conv=pfi->gr2ab[2];
@@ -3379,6 +3391,7 @@ char name[20];
     }
   }
 
+time_define_done:
   siz = siz * sizeof(gadouble);
   snprintf(pout,1255,"Define memory allocation size = %ld bytes\n",siz);
   gaprnt (2,pout);
@@ -5680,7 +5693,8 @@ size_t sz;
   /* Evaluate all the subexpressions */
   pos = expr;
   for (i=0; i<num; i++) {
-    rc = gaexpr (pos, pst);
+    rc = ga_time_display(pos,pst,pcm);
+    if (rc<0) rc = gaexpr (pos, pst);
     if (!rc) rc = gaqsig();
     if (rc) goto err;
     pcm->type[i] = pst->type;

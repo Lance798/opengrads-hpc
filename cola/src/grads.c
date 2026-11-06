@@ -38,6 +38,7 @@
 #include "grads.h"
 #include "gaomp.h"
 #include "gahelp.h"
+#include "gatime.h"
 
 #if USEGUI == 1
 #include "gagui.h"
@@ -112,7 +113,9 @@ int main (int argc, char *argv[])  {
   gxdopt[0] = '\0';
   gxpopt[0] = '\0';
   xgeom[0] = '\0';
+  for(i=1;i<argc;i++)if(!strcmp(argv[i],"--time-worker"))ga_time_prepare_worker();
   ga_omp_init();
+  ga_time_init(argv[0]);
   
   
 #if READLINE == 1
@@ -140,7 +143,10 @@ int main (int argc, char *argv[])  {
   if (argc>1) {
     for (i=1; i<argc; i++) {
       /* user needs help */
-      if (*(argv[i]+0)=='-' &&
+      if (!strcmp(argv[i],"--time-worker")) {
+        /* The private binary protocol uses fd 3; no terminal or graphics. */
+        ipcflg=0;hstflg=0;
+      } else if (*(argv[i]+0)=='-' &&
 	  *(argv[i]+1)=='h' &&
 	  *(argv[i]+2)=='e' &&
 	  *(argv[i]+3)=='l' &&
@@ -351,6 +357,9 @@ int main (int argc, char *argv[])  {
   else      rc = 0;                     /* set up for entering the main command line loop */
   
   signal(2,gasig);                      /* Trap cntrl c */
+  for (i=1;i<argc;i++) if (!strcmp(argv[i],"--time-worker")) {
+    rc=ga_time_worker(&gcmn,3);gxend();return rc;
+  }
   
 #if USEGUI == 1
   if (!ipcflg) 

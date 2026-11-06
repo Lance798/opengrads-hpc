@@ -841,6 +841,103 @@ and PDF, timing records, and example `ua.png`, `ua2.png`, `qcavg.png`,
 `cwv.png`, `maskedqc.png`. These display diagnostics are separate from the
 three-trial seven-count scaling sweep and the isolated HDF5 rank experiment.
 
+#### Stage 2: integrated time workers for DEFINE and DISPLAY
+
+The standalone process experiment above has now been integrated as a bounded,
+persistent pool of headless GrADS processes. Each worker owns one complete
+time, including HDF5 reads/decompression and the spatial calculation, and uses
+one calculation thread. The parent assembles values and masks in their original
+T/Z order and alone owns graphics and the progress bar. Workers start with
+`posix_spawn`, so no GrADS parser or file-library state is shared between
+processes. They communicate directly over sockets; intermediate files are not
+part of this execution path.
+
+`set threads N` is a total CPU budget for this path. The command chooses its
+worker count before dispatch, capped by N, the number of times, 128 workers and
+a memory estimate. It does not change from 64x1 to 32x2 halfway through a
+calculation. Workers currently always use one thread. The pool is reused across
+eligible DEFINE/DISPLAY commands and released on a changed CPU budget, close,
+reset, reinit, quit, cancellation or worker failure. Child CPU affinity is
+restored to the allocation represented by the parent's OpenMP places, rather
+than inheriting just the calling thread's single-core binding.
+
+This first integration targets read-only expressions over the default HDF5
+grid descriptor: top-level `ave`, `mean`, `aave` or `zint`, with a restricted
+set of nested arithmetic/built-ins, including `maskout`. Defined inputs,
+file-qualified expressions, plug-ins and unsupported syntax retain the
+ordinary evaluator. Parallel DEFINE needs at least 32 output times, one
+ensemble member and a sufficiently large source domain. Each time result is
+capped at 128 MiB. The worker estimate includes buffers and two dataset caches,
+with an aggregate ceiling of the smaller of 8 GiB and one quarter of currently
+available system memory. This is a workspace estimate, not an OS-enforced
+resident-memory limit; the existing parent result allocation remains separate.
+Set `GA_TIME_WORKERS=off` to use serial time execution, or `GA_TIME_TRACE=1`
+to report the selected workers and their PIDs. Other formats and non-POSIX
+builds keep their existing paths.
+
+Direct Z/T DISPLAY now assembles a temporary result with the same per-time
+evaluator; a permanent DEFINE is unnecessary. Short requests can use serial
+assembly. The original main-thread graphics code consumes that finished grid.
+The initial direct two-time checks for `ave(u)`, `aave(u)` and conditional
+`aave(qc)` all complete in approximately 0.11--0.13 s and agree with their
+defined references. Cached graph/PNG timings remain a separate measurement.
+Fixed-time XY calculations keep their existing evaluator.
+
+This stage parallelizes *output times*. An expression such as
+`mean(u,t=1,t=256)` that reduces many input times into a single output still
+uses the existing time-batch reader; parallelizing those input reads is the
+next stage. Likewise, a single-time large-domain calculation cannot use
+multiple time workers.
+
+`TestTimeWorkers.sh` checks regular/template HDF5, reversed axes, fractional
+spatial bounds, masks, surface broadcasting, ZINT, direct DISPLAY, identical
+rendered PNGs, descriptor symlinks and pool reuse. Its 28444 printed reference
+samples match exactly, including missing masks. PTY tests verify monotonic
+worker progress, iTerm2 clearing, progress-off mode, Ctrl-C, killed-worker
+recovery and child cleanup. The existing OpenMP, ReductionIO, BinaryHalo,
+ZInt, AveSection, Progress, Undo, DefineNames, Saturation and ClearCanvas
+regressions also pass (the optional original-P3 source comparison is skipped
+without its external source/compiler settings).
+
+The integrated 256-time sweep uses the same T=2145:2400 double-precision
+references as the original diagnosis. All 365933568 compared values (365828400
+finite) and masks match exactly across 105 measurements: five cases, seven
+CPU budgets and three trials. Medians in seconds, with a fresh pool per trial:
+
+| Case | 1 CPU | 4 | 8 | 16 | 32 | 64 | 128 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `ua` | 14.314 | 3.671 | 1.975 | 1.192 | 0.841 | 0.808 | 1.218 |
+| `ua2` | 16.194 | 4.129 | 2.177 | 1.272 | 0.899 | 0.839 | 1.223 |
+| `qcavg` | 13.970 | 3.540 | 1.863 | 1.081 | 0.804 | 0.767 | 1.219 |
+| `zu` | 17.501 | 4.496 | 2.385 | 1.413 | 1.007 | 0.972 | 1.360 |
+| `cwv` | 16.567 | 4.302 | 2.285 | 1.377 | 0.986 | 0.958 | 1.334 |
+
+These timers include pool startup/configuration and computation, but exclude
+result export. They describe warm-cache execution and cannot establish cold
+storage throughput. The probe's CPU, HDF5-call and VmHWM counters cover the
+parent only after integration; do not interpret them as total worker CPU,
+total reads or aggregate memory. The elapsed-time scaling remains directly
+measured. Records, summary CSV/JSON and the new figure are in
+`tmp/new-machine-baseline/stage2-production/scaling.png` (also PDF).
+
+Separate 256-time trials issue four commands in the same process and verify
+that all four report identical worker PIDs. For `ua2`, three-trial medians
+after the first command are approximately 0.441 s at 64 workers and 0.253 s
+at 128; for `cwv`, they are 0.524 s and 0.394 s. The exported results and masks
+match the original references exactly. Thus the 128-worker first-command
+regression above does not imply that the additional workers are useless:
+pool reuse amortizes their startup. These targeted records are in
+`tmp/new-machine-baseline/stage2-reuse/`; they are separate from the 105-run
+fresh-pool sweep.
+
+An independent build instruments the modified orchestration units and the
+shared readers/reducers with AddressSanitizer and UndefinedBehaviorSanitizer.
+The complete TimeWorkers test passes with no reported memory/UB error
+(legacy leak reporting disabled). A dynamically linked PIE sanitizer build
+had an intermittent failure during runtime initialization; the validation
+uses a non-PIE executable with static ASan runtime, without changing production
+build flags. Logs are in `tmp/acceleration-stages/stage2/asan-test-static.log`.
+
 ### Mixed synthetic workload
 
 Run the supplied benchmark after building `grads` and `libgxdummy.la`:
