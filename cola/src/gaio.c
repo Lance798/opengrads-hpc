@@ -1028,7 +1028,7 @@ void gazintadd(struct gazint *z, size_t pos, gaint k, gadouble value) {
    chunk buffer is reused and no complete global 3-D cube is constructed. */
 static gaint gah5zint(struct gagrid *grid, struct gazint *integral) {
   hid_t prop=-1,memory=-1,dsid,vid;
-  hsize_t shape[16],chunks[16],begin[16],finish[16],origin[16],start[16],count[16],length;
+  hsize_t shape[16],chunks[16],begin[16],finish[16],origin[16],start[16],count[16];
   size_t strides[16],nvalues,capacity=0,offset,reads=0,total=0;
   gadouble *buffer=NULL,tolerance,value;
   gaint rank,d,xd=-1,yd=-1,zd=-1,t=grid->dimmin[3],e=grid->dimmin[4],ee=e,oflg=0;
@@ -1114,8 +1114,9 @@ static gaint gah5zint(struct gagrid *grid, struct gazint *integral) {
       if (!buffer) goto cleanup;
       capacity=nvalues;
     }
-    length=(hsize_t)nvalues;
-    memory=H5Screate_simple(1,&length,NULL);
+    /* The buffer is dense in native dimension order. Matching its rank to
+       the selected chunk avoids HDF5's costly rank-changing conversion. */
+    memory=H5Screate_simple(rank,count,NULL);
     if (memory<0 || H5Sselect_hyperslab(pvr->dataspace,H5S_SELECT_SET,start,NULL,count,NULL)<0 ||
         H5Dread(pvr->h5varflg,H5T_NATIVE_DOUBLE,memory,pvr->dataspace,H5P_DEFAULT,buffer)<0) goto cleanup;
     H5Sclose(memory); memory=-1;

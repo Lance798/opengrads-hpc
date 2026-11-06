@@ -5,6 +5,10 @@ is **4 calculation threads**. OpenMP is detected automatically by
 `configure`; no extra user action is needed with a supported GCC, Clang, or
 vendor compiler.
 
+The November 5 measurements below were collected on the shared Derecho host.
+The November 6 RLL profile diagnosis uses the new Xeon machine and different
+data; its timings are recorded separately below.
+
 ## Height-coordinate column integrals
 
 [`zint`](ZINT.md) reduces unmodified BP5 inputs by writer block and HDF5 inputs
@@ -536,6 +540,306 @@ matching masks. The larger absolute difference occurs in large-magnitude
 reductions. The changed calculation/readers passed ASan/UBSan checks (legacy
 global-allocation leak reporting disabled). This host's verification covers
 HDF5, NetCDF and stream binary data; HDF4 was not enabled.
+
+### November 6 RLL profile diagnosis
+
+Commit `92c934a` was rebuilt on an Intel Xeon Platinum 8481C host (two sockets,
+104 physical cores, 208 logical CPUs), with GCC 13.4, HDF5 2.2.0, NetCDF 4.10.1
+and serial ADIOS2 2.11.0. `TestOpenMP.sh`, `TestReductionIO.sh` and
+`TestBinaryHalo.sh` passed in that order. The reduction test compared
+56,284,434 finite values with matching masks; the analytic binary test compared
+524,332 values with maximum absolute difference `2.73e-12`.
+
+The new input is
+`/data/Aaron/VVMex_run/output/rll_tropical_0.25_sam/visualization/vvm_plot.ctl`:
+1536 x 384 x 44, one HDF5 file per hour. The `u` field is float32 with
+`(1,128,512)` chunks, shuffle, gzip level 1 and Fletcher32. The requested
+workflow is:
+
+```text
+set lon 0
+set lat 0
+set z 1 44
+set t 1 2400
+define ua=ave(u,lon=0,lon=90)
+define ua2=aave(u,lon=0,lon=90,lat=-10,lat=10)
+```
+
+For diagnosis, T=2397:2400 was primed once and measured twice per thread count,
+in forward/reverse thread-count order, with `OMP_PROC_BIND=spread` and
+`OMP_PLACES=cores`. Median seconds below include the DEFINE's reads and
+calculation, excluding process startup and correctness output. They are short
+warm-cache diagnostics, **not full T=1:2400 measurements**.
+
+| Calculation threads | `ua` (s) | `ua2` (s) |
+|---:|---:|---:|
+| 1 | 0.2310 | 0.2592 |
+| 4 | 0.2321 | 0.2558 |
+| 16 | 0.2292 | 0.2566 |
+| 32 | 0.2312 | 0.2786 |
+| 64 | 0.2289 | 0.3075 |
+| 128 | 0.2366 | 0.3757 |
+
+The HDF5 calls account for about 99% of `ua` and 91% of one-thread `ua2` wall
+time. `ua` already reads a complete X/Z section per time (five HDF5 reads for
+four times, including the initial shape evaluation). Its small resident
+sections do not reach the OpenMP size threshold. HDF5 `ua2` retains the plane
+path: 176 reads for four times and 44 levels. Its roughly 34,000-cell planes
+barely cross the parallel threshold and provide only 88 reduction rows.
+Large thread teams therefore add overhead to a small calculation while the
+reader remains serial. At 128 threads, `ua2` consumed about 47.35 CPU seconds
+in 0.376 wall seconds. `OMP_WAIT_POLICY=PASSIVE` reduced that CPU cost to 2.84
+seconds, but did not improve wall time (0.408 seconds).
+
+An independent-process prototype split T=2273:2400 into contiguous intervals,
+using one calculation thread per process. A full serial pass primed the input
+and supplied the reference. The following are one measured pass per worker
+count, including process startup and correctness output; they are separate
+from the DEFINE-only timings above.
+
+| Time workers (processes) | `ua` (s) | `ua2` (s) |
+|---:|---:|---:|
+| 1 | 7.341 | 8.285 |
+| 4 | 1.946 | 2.249 |
+| 16 | 0.546 | 0.598 |
+| 32 | 0.324 | 0.348 |
+| 64 | 0.234 | 0.252 |
+| 128 | 0.247 | 0.257 |
+
+Each result contains 5632 values; all values and masks matched the serial
+reference exactly. The process prototype demonstrates useful concurrency
+across time files, reaching about 31--33x at 64 workers in this short case.
+It is **not an implemented `set threads` feature** or evidence of the same
+speedup over all 2400 times. The plateau also argues against assuming that
+128 workers will outperform 64.
+
+The next implementation should isolate reader state and schedule independent
+time blocks. The current evaluator and `gaio.c` globals cannot be called from
+arbitrary OpenMP workers. This HDF5 build enables thread safety but disables
+concurrency support, so separate handles alone do not establish concurrent
+HDF5 decoding. Independent reader processes are one option; another is a
+bounded producer of compressed chunks with parallel decoding outside HDF5,
+preserving filters, checksum validation, packing, masks and fallback behavior.
+Within one time, column/row calculations and level reductions can use threads,
+but substantial speedup here requires parallel decoding as well. Batching all
+Z levels may reduce calls and thread-team overhead; it does not by itself
+remove gzip work. If both profiles are computed together per time, their
+overlapping `u` chunks also offer an opportunity to share decoding.
+
+Raw logs, diagnostic scripts and JSON samples are kept locally under
+`tmp/new-machine-baseline/`. Original Derecho backups remain under
+`tmp/tmp/ave-scenarios/` and `tmp/tmp/average-stages/`.
+
+### 256-time RLL scaling follow-up
+
+The same Xeon host and executable were measured over **T=2145:2400 (256
+times)**, using 1, 4, 8, 16, 32, 64 and 128 calculation threads or independent
+time processes. Each setting has three measured trials; tables show medians
+in seconds. A serial pass primed each case/method and supplied a double-
+precision reference. The six originally requested counts alternate forward
+and reverse order between trials. The subsequently requested 8-CPU setting
+was measured separately against the same references after the main sweep.
+The input resides on XFS; operating-system caches were warm. These are not
+cold-storage measurements or a full T=1:2400 run.
+
+`ua` and `ua2` are the commands above, retaining 44 Z levels and all 256 times.
+The added conditional profile is:
+
+```text
+define qcavg=aave(maskout(qc,(qc>1e-5)-0.5),lon=0,lon=90,lat=-10,lat=10)
+```
+
+Only cells with `qc>1e-5` contribute values and area weights. Of the 11264
+Z/T outputs, 6256 are finite and 5008 are undefined because no cells qualify.
+This is a conditional mean, with masked cells excluded from the denominator.
+
+The two integral cases use `set lon 0 90`, `set lat -10 10`, `set z 1`,
+the same 256-time range, and `define zu=zint(u)` or
+`define cwv=zint(qv*rhobar)`. `zint` integrates all 44 source levels; fixing Z
+prevents DEFINE from computing the same column integral for every Z output.
+Each result contains 386 x 88 x 256 values. No drawing is timed.
+
+Current **single-process OpenMP**, timing DEFINE reads/calculation, excluding
+startup and correctness exports:
+
+| Calculation threads | `ua` | `ua2` | Conditional `qc` | `zint(u)` | CWV `zint` |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 14.364 | 16.268 | 13.726 | 27.763 | 26.973 |
+| 4 | 14.322 | 16.251 | 11.998 | 27.801 | 26.877 |
+| 8 | 14.459 | 16.245 | 11.573 | 27.718 | 27.028 |
+| 16 | 14.318 | 16.397 | 11.702 | 27.711 | 26.951 |
+| 32 | 14.387 | 17.541 | 12.766 | 27.623 | 26.857 |
+| 64 | 14.308 | 19.665 | 14.946 | 27.612 | 26.801 |
+| 128 | 14.314 | 23.895 | 18.833 | 27.692 | 26.813 |
+
+Independent **time-process prototype**, including process startup and
+double-precision NetCDF exports, excluding subsequent comparison. Every
+process has one calculation thread and a disjoint contiguous T interval:
+
+| Time processes (1 thread each) | `ua` | `ua2` | Conditional `qc` | `zint(u)` | CWV `zint` |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 14.447 | 16.457 | 13.801 | 27.678 | 26.578 |
+| 4 | 3.775 | 4.279 | 3.576 | 7.335 | 7.235 |
+| 8 | 1.976 | 2.275 | 1.877 | 3.779 | 3.729 |
+| 16 | 1.077 | 1.179 | 0.978 | 2.077 | 1.931 |
+| 32 | 0.640 | 0.693 | 0.592 | 1.189 | 1.162 |
+| 64 | 0.428 | 0.471 | 0.376 | 0.971 | 0.969 |
+| 128 | 0.403 | 0.410 | 0.406 | 0.699 | 0.656 |
+
+The two tables use different timing scopes. Speedups must use the matching
+one-thread or one-process baseline. The process table demonstrates a possible
+execution strategy; it is not functionality currently selected by
+`set threads`. Original input files were never modified.
+
+Across the 210 measured runs, 731,656,800 finite values were
+compared. Masks matched throughout; maximum absolute/relative differences
+were `6.39488e-14` and `2.09299e-13`. Independent time processes
+matched their serial references exactly. OpenMP area sums can differ in the
+last bits. All comparisons used double-precision exports and the existing
+`1e-8 + 2e-12*abs(reference)` criterion.
+
+The raw probe's `ru_maxrss` can retain the Python parent's earlier high-water
+mark through fork/exec, so those RSS values are not used to estimate actual
+worker memory. The 8-count supplement instead reads the executed worker's
+`/proc/self/status` VmHWM. A sum of per-process peaks is not a measurement of
+simultaneous total memory or proportional shared-library usage.
+
+#### Optimization priorities for 32--128 CPUs
+
+1. **Parallelize independent times, including reads and decompression.**
+   Build a bounded time execution plan for these file-backed profiles and
+   integrals. The existing process prototype is the measured starting point;
+   persistent workers and direct result transfer can remove per-command
+   startup and intermediate NetCDF overhead. Keep workers' file/evaluator
+   state isolated and results in fixed T/Z order. Arbitrary concurrent
+   `gaexpr`/`gaio.c` calls remain unsafe.
+2. **Treat the requested CPU count as a total budget.** Most of these time
+   workers should use one calculation thread, with a small inner team only
+   for sufficiently large resident work. Cap teams by useful rows/tiles and
+   minimum work per thread; avoid multiplying an outer worker count by the
+   full requested inner count. The measurements support useful 16/32/64
+   time concurrency, with workload-dependent further benefit at 128. This
+   machine has 104 physical cores, so 128 also uses SMT.
+3. **Remove repeated work in common expressions.** A narrow fused
+   `aave(maskout(field,condition),...)` path can read the field once, test the
+   condition and accumulate valid area weights without intermediate grids.
+   Here the evaluator makes 22528 HDF5 calls for the conditional profile,
+   versus 11264 for a bare area profile; cache hits mean this is not proof
+   of twice the decompression. For `zint(qv*rhobar)`, bulk-reading the density
+   profile could replace 44 scalar profile reads per time with one. Preserve
+   strict thresholds, missing masks, packing and all-masked behavior.
+   These `ua`, `ua2` and `zint(u)` requests also intersect the same physical
+   `u` chunks. An explicit multi-output time plan or a bounded resident
+   source cache could share their decoding; arbitrary future commands cannot
+   be assumed when evaluating the first DEFINE.
+4. **Prototype thread-parallel decoding for few-time, large-volume cases.**
+   Reader-local contexts are necessary but this HDF5 build's lack of
+   concurrency also matters. An explicit raw-chunk read/decode pipeline
+   would need bounded buffers, filter-mask handling, shuffle/deflate and
+   Fletcher32 validation, type conversion and the established fallback for
+   unsupported layouts. Measure producer throughput before assuming it
+   can feed 128 decoder threads. Batching reads alone does not parallelize
+   gzip decoding.
+
+A follow-up production implementation should be checked over 1024 or all
+2400 times, with throughput and CPU cost as well as latency, bounded memory,
+template changes, failure recovery and Ctrl-C cleanup. Warm-cache scaling
+should remain separate from storage throughput. On this host, testing near
+the 104 physical-core count can help distinguish SMT effects from scheduler
+or reader limits.
+
+Local artifacts are `tmp/new-machine-baseline/suite256/summary.csv`,
+`summary.json`, `scaling.png` and `scaling.pdf`. The figure shows three-trial
+medians with observed min/max bars, not confidence intervals. Diagnostic
+drivers are `benchmark256.py` and `summarize256.py` in the parent directory;
+the added 8-count records are in `suite256-eight/`.
+
+#### Isolated HDF5 memory-rank experiment
+
+A diagnostic preload shim, with the production executable unchanged, replaced
+the one-dimensional memory dataspace of each dense rectangular chunk read
+with a dataspace whose rank/extents match the file selection. HDF5 still
+performed native type conversion, decompression and checksum validation.
+Over the same 256 times, with one calculation thread and three measured trials:
+
+| Integral | Existing (s) | Matched rank (s) | Speedup |
+|---|---:|---:|---:|
+| `zint(u)` | 27.763 | 17.597 | 1.58x |
+| `zint(qv*rhobar)` | 26.973 | 16.538 | 1.63x |
+
+All 52,174,848 compared values and their masks matched
+the baseline exactly. Each run remapped 22528 chunk reads; read-call and
+selected-value counts were unchanged. The CWV density profile's 11264 scalar
+reads were retained. This is evidence for a small reader improvement separate
+from time concurrency: use `H5Screate_simple(rank,count,NULL)` for the chunk
+memory dataspace in `gah5zint`, then rerun the cross-format/ZINT regressions
+before integrating it. These timings describe the original isolated experiment.
+
+Stage 1 subsequently applied this memory-dataspace change to `gah5zint`.
+`TestOpenMP.sh`, `TestReductionIO.sh`, `TestBinaryHalo.sh` and `TestZInt.sh`
+passed after rebuilding. The production executable was compared with the
+original 256-time double-precision references at 1 and 128 threads for both
+integrals: all 34,783,232 values and masks matched exactly. The one-thread
+`zint(u)` verification took 17.658 s, consistent with the isolated experiment.
+The arithmetic, native filters, chunk selection and workspace budget are
+unchanged. Stage logs are under `tmp/acceleration-stages/stage1/`.
+
+The diagnostic is `tmp/new-machine-baseline/h5_rank_probe.c`; records and a
+separate `hdf5-rank.png`/PDF are in `tmp/new-machine-baseline/suite256-rank/`.
+
+#### Display is part of the optimization target
+
+The 256-time scaling figure above is complete for DEFINE; it does not time
+interactive graphics. Additional single-run diagnostics used `gxdummy` for
+graph construction and Cairo for 1200 x 800 PNG output. They cover both Z/T
+profiles and fixed-time XY fields, with four calculation threads. They do
+not measure X11/terminal transport or the viewer's rendering latency.
+
+Direct Z/T display needs its own execution path. With `set lon 0`,
+`set lat 0`, `set z 1 44`, `set t 2399 2400`, a direct
+`d ave(u,lon=0,lon=90)` did not finish within a 10-second process budget.
+The existing section fast path excludes two varying result dimensions.
+Direct `d aave(...)` and `d aave(maskout(...),...)` reject varying Z/T in
+the current implementation. These are different from DEFINE, which fixes
+Z/T for the inner evaluation and assembles the requested result.
+
+For a defined 44 x 256 Z/T result over T=2145:2400:
+
+| Result | Read + compute DEFINE (s) | Cached shaded graph (ms) | Cairo PNG (ms) |
+|---|---:|---:|---:|
+| `ua` | 14.335 | 2.41 | 28.84 |
+| `ua2` | 16.360 | 2.05 | 28.92 |
+| `qcavg` | 11.994 | 2.86 | 35.24 |
+
+For XY fields at T=2400, lon=0:90 and lat=-10:10 (`maskedqc` uses Z=10):
+
+| Field | Direct statistics (ms) | Direct shaded graph (ms) | Cached shaded graph (ms) | PNG (ms) |
+|---|---:|---:|---:|---:|
+| `cwv` | 111.58 | 110.22 | 7.66 | 39.03 |
+| `maskedqc` | 3.26 | 3.35 | 3.05 | 29.86 |
+
+`maskedqc` is `maskout(qc,(qc>1e-5)-0.5)`. Direct/cached outputs matched;
+the full Z/T grids and the XY CWV field also matched the earlier double-
+precision references within their reduction tolerance. Subsequent direct XY
+evaluations can reuse the open dataset's decompressed chunks, particularly
+for the small single-level masked field; these are diagnostic stage timings,
+not independent cold-read trials.
+
+The shared optimization target is therefore an evaluation plan used by both
+DEFINE and DISPLAY. It should assemble transient Z/T results with the same
+bounded time workers, mask semantics and metadata, then hand the finished grid
+to the existing main-thread graphics path. Direct averages should not require
+users to materialize a permanent defined variable to get the accelerated
+reader. Keep graphical state and Cairo/X11/terminal calls on the main thread.
+For sequences of XY frames, bounded computation/prefetch and ordered display
+can overlap; single-frame PNG and interactive transport costs need their own
+measurement after data preparation is faster. Tiny masked XY fields already
+spend more time on PNG output than on calculation.
+
+Artifacts are under `tmp/new-machine-baseline/display/`: `display-stages.png`
+and PDF, timing records, and example `ua.png`, `ua2.png`, `qcavg.png`,
+`cwv.png`, `maskedqc.png`. These display diagnostics are separate from the
+three-trial seven-count scaling sweep and the isolated HDF5 rank experiment.
 
 ### Mixed synthetic workload
 
