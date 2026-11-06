@@ -2466,6 +2466,7 @@ off_t ftello(FILE *stream) {
 #include "gaomp.h"
 
 #define PROG_LEVELS 8
+#include "gatime.h"
 
 static struct {
   char what[16];
@@ -2569,9 +2570,12 @@ gaint i,cols,width,fill,pct,used;
     if (i) strncat(label," > ",sizeof(label)-strlen(label)-1);
     strncat(label,prog[i].what,sizeof(label)-strlen(label)-1);
   }
-  i = ga_omp_get_threads();                /* the calculation threads at work */
-  snprintf(count,sizeof(count),"%d/%d  %d thread%s",prog[0].done,prog[0].total,
-           i,i==1 ? "" : "s");
+  i = ga_time_active_workers();
+  if (i) snprintf(count,sizeof(count),"%d/%d  %d workers x 1 thread",prog[0].done,prog[0].total,i);
+  else {
+    i = ga_omp_get_threads();
+    snprintf(count,sizeof(count),"%d/%d  %d thread%s",prog[0].done,prog[0].total,i,i==1 ? "" : "s");
+  }
   progtime(el,sizeof(el),elapsed);
   if (f>0.0 && elapsed>=1.0) {
     progtime(left,sizeof(left),elapsed*(1.0-f)/f);
