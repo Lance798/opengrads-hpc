@@ -81,17 +81,16 @@ static double time_available_memory(void) {
   return 32.0*1024*1024*1024;
 }
 
-/* Only read-only built-ins and unmodified fields of the default descriptor.
+/* Whole expressions may use read-only built-ins, arithmetic and unmodified
+   fields of the default descriptor; no particular outer function is required.
    Defined variables, file qualifiers, plug-ins, strings and unknown syntax
    retain the ordinary evaluator. Never serialize pointers/session objects. */
 static int time_expression(char *expr, struct gastat *pst) {
   static const char *functions[]={"ave","mean","sum","sumg","aave","amean",
     "asum","atot","maskout","zint","abs","sqrt","exp","log","log10",
-    "sin","cos","tan","asin","acos","atan","atan2","pow","mag","const",NULL};
+    "sin","cos","tan","asin","acos","atan2","pow","mag","const",NULL};
   static const char *words[]={"x","y","z","t","e","lon","lat","lev","ens","auto","global",NULL};
   char name[32],*p=expr,*end; int n,i,field=0; struct gavar *v;
-  if (strncmp(expr,"ave(",4) && strncmp(expr,"mean(",5) && strncmp(expr,"aave(",5) &&
-      strncmp(expr,"amean(",6) && strncmp(expr,"zint(",5)) return 0;
   while (*p) {
     if (isdigit((unsigned char)*p) || (*p=='.' && isdigit((unsigned char)p[1]))) {
       (void)strtod(p,&end); if(end==p)return 0; p=end; continue;
@@ -115,7 +114,7 @@ static int time_expression(char *expr, struct gastat *pst) {
         else { for(i=0;words[i] && strcmp(name,words[i]);i++); if(!words[i])return 0; }
       }
     } else {
-      if(!strchr("()+-*/<>=!,",*p))return 0;
+      if(!strchr("()+-*/<>=!,&|",*p))return 0;
       p++;
     }
   }
@@ -555,14 +554,46 @@ gaint ga_time_define(char *expr,struct gacmn *pcm,gaint z1,gaint z2,gaint t1,gai
   gree(pst,"timepst");return rc;
 }
 
+/* Fixing an axis before evaluating a reduction over that varying axis can
+   change its result shape or make an invalid relative bound look valid.
+   Keep those DISPLAY expressions in the ordinary evaluator. DEFINE already
+   fixes Z/T for each evaluation by its established command semantics. */
+static int time_display_reduces_axis(const char *expr,int z,int t) {
+  const char *p=expr;
+  /* These native functions require fixed Z/T. Only the established outer
+     profile paths explicitly supply their per-level/per-time environment. */
+  if((z || t) && (strstr(expr,"aave(") || strstr(expr,"amean(") ||
+     strstr(expr,"asum(") || strstr(expr,"atot(") || strstr(expr,"zint(")))return 1;
+  while((p=strchr(p,','))) {
+    const char *name=++p;size_t length;
+    while(isalpha((unsigned char)*p))p++;
+    length=(size_t)(p-name);
+    if(!strchr("=+-",*p) || !*p)continue;
+    if((t && length==1 && *name=='t') ||
+       (z && ((length==1 && *name=='z') || (length==3 && !strncmp(name,"lev",3)))))return 1;
+  }
+  return 0;
+}
+
+static int time_profile_expression(const char *expr) {
+  return !strncmp(expr,"ave(",4) || !strncmp(expr,"mean(",5) ||
+         !strncmp(expr,"aave(",5) || !strncmp(expr,"amean(",6) || !strncmp(expr,"zint(",5);
+}
+
 /* DISPLAY uses the same per-time evaluator, with a temporary Z/T grid.
    Coordinate arrays stay owned by the open descriptor, as for TLOOP. */
 gaint ga_time_display(char *expr,struct gastat *pst,struct gacmn *pcm) {
   struct gastat sample=*pst,model;struct gafile *f=pst->pfid;
   struct gagrid *shape=NULL,*out=NULL;struct time_config c;
-  int z1,z2,t1,t2,e,nt,nz,k,rc,lv;size_t size;
+  int z1,z2,t1,t2,e,nt,nz,k,rc,lv,generic;size_t size;
+  const char *setting=getenv("GA_TIME_WORKERS");
   if(!time_supported(expr,pst) || pcm->vdim[0] || pcm->vdim[1] || pcm->vdim[4] ||
      (pst->idim!=2 && pst->idim!=3) || (pst->jdim!=-1 && pst->jdim!=3))return -1;
+  /* Preserve the established profile path. New compound expressions that
+     reduce a displayed axis need a separate shape plan, not Z/T expansion. */
+  generic=!time_profile_expression(expr);
+  if(generic &&
+     time_display_reduces_axis(expr,pcm->vdim[2],pcm->vdim[3]))return -1;
   if(pst->idim==2 && pst->jdim<0 && strncmp(expr,"aave(",5) && strncmp(expr,"amean(",6))return -1;
   z1=(int)floor(f->ab2gr[2](f->abvals[2],pst->dmin[2])+0.001);
   z2=(int)ceil(f->ab2gr[2](f->abvals[2],pst->dmax[2])-0.001);
@@ -574,6 +605,8 @@ gaint ga_time_display(char *expr,struct gastat *pst,struct gacmn *pcm) {
   if(z1<1 || z2>f->dnum[2] || t1<1 || t2>f->dnum[3] || z2<z1 || t2<t1)return -1;
   if(!strncmp(expr,"zint(",5) && z2>z1)return -1;
   nz=z2-z1+1;nt=t2-t1+1;
+  if(generic && (nt<32 || ga_omp_get_threads()<2 ||
+     (setting && (!strcmp(setting,"off") || !strcmp(setting,"0")))))return -1;
   if((double)nz*nt>INT_MAX)return -1;
   sample.idim=sample.jdim=-1;sample.result.pgr=NULL;
   sample.dmax[2]=sample.dmin[2]=f->gr2ab[2](f->grvals[2],z1);
@@ -600,6 +633,7 @@ gaint ga_time_display(char *expr,struct gastat *pst,struct gacmn *pcm) {
   if(out->jdim>=0) { out->jgrab=NULL;out->jvals=f->grvals[3];out->jlinr=1; }
   rc=time_parallel(&c,t1,t2,1,out->grid,out->umask);
   if(rc<0) {
+    if(generic) { gagfre(shape);gagfre(out);gaprogend(lv);return -1; }
     gagfre(shape);shape=NULL;
     for(k=t1;k<=t2;k++) {
       if(time_series(&c,&model,&shape,k,out->grid+(size_t)(k-t1)*nz,out->umask+(size_t)(k-t1)*nz))goto error;

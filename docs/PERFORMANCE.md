@@ -1262,6 +1262,86 @@ match the independent `field+0` evaluator exactly. OpenMP, ReductionIO and
 BinaryHalo pass. Stage logs are in
 `tmp/acceleration-stages/stage8-section/`.
 
+#### Stage 8c: general output-time expressions for DEFINE and DISPLAY
+
+Time-worker eligibility now examines the complete expression without
+requiring an outer AVE/MEAN/AAVE/AMEAN/ZINT function. Native HDF5 fields,
+arithmetic, parentheses, comparisons/logical operators and the supported
+read-only built-ins can share the existing isolated pool. Examples include
+`u+v`, `mag(u,v)`, `pow(u,2)`, `sin(u/10)+cos(v/10)` and
+`maskout(qc,(qc>1e-5)-0.5)*1000`. Every worker evaluates the original complete
+expression at its assigned time; there is no reassociation or partial-sum
+merge. DEFINE retains the original T/Z/grid storage order.
+
+Direct T and Z/T DISPLAY at fixed X/Y uses the same pool. Short generic
+series, one-CPU/disabled execution and insufficient worker memory keep the
+ordinary evaluator. New compound expressions that reduce a displayed axis,
+or would bypass native fixed-Z/T restrictions of area reductions/ZINT,
+retain the native path. Existing outer profile paths are preserved. X/Y
+time animations are outside this stage. Defined inputs, file/dimension
+qualifiers, plug-ins and unsupported functions retain their existing paths.
+
+[TIME_WORKERS.md](TIME_WORKERS.md) documents usage, memory limits and all
+66 registered built-in names: 24 are on the worker allowlist and 42 remain
+on their existing paths pending additional validation. Trigonometry includes
+SIN/COS/TAN/ASIN/ACOS/ATAN2; the unregistered ATAN allowlist entry was removed.
+MASKOUT and CONST participate without changing missing-value rules. IF and
+the remaining functions were audited but not enabled speculatively.
+
+`TestTimeExpressions.sh` compares 349077 finite samples exactly, including
+masks and invalid-value classifications. It covers regular/template/reversed
+HDF5, packed values, cropped planes, surface/profile/scalar broadcasts,
+arithmetic, masks, all-missing results, zero denominators, invalid powers,
+out-of-domain inverse trigonometry, NaN/Inf, fallback and T/Z ordering.
+DEFINE/direct DISPLAY PNGs also match the native serial PNGs byte-for-byte.
+PTY checks verify monotonic progress, iTerm2 clearing, off mode, cancellation,
+killed-worker recovery, cleanup and preservation of an old DEFINE value.
+The suite passes ASan/UBSan, including the expression evaluator. Feature-guard
+compile checks disable OpenMP and POSIX orchestration; these are not runtime
+tests on other platforms. All fifteen expression/OpenMP/reduction/I/O/ZINT/
+worker/mask/section/progress/Undo/DEFINE/saturation/canvas suites pass. The
+optional external original-P3 reference remains unavailable, as in prior runs.
+
+The RLL production sweep measures T=2145:2400 at all seven CPU budgets,
+with one first command and three repeats per process: 168 timed evaluations.
+Every DEFINE export and the separately printed direct DISPLAY grid agree
+with frozen Stage 7 one-CPU references: 974324736 compared output positions,
+identical masks, maximum absolute difference zero. Warm repeated-command
+medians in seconds:
+
+| Case | 1 CPU | 4 | 8 | 16 | 32 | 64 | 128 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| DEFINE `(u+v)*0.5`, regional X/Y | 0.863 | 0.230 | 0.121 | 0.078 | 0.061 | 0.061 | 0.069 |
+| DEFINE `mag(u,v)`, regional X/Y | 0.884 | 0.239 | 0.134 | 0.081 | 0.064 | 0.062 | 0.073 |
+| DEFINE `pow(u,2)`, regional X/Y | 0.660 | 0.182 | 0.097 | 0.063 | 0.060 | 0.062 | 0.066 |
+| DEFINE threshold QC mask, regional X/Y | 0.245 | 0.080 | 0.054 | 0.051 | 0.054 | 0.058 | 0.063 |
+| DEFINE trigonometry, point Z/T | 14.450 | 3.681 | 1.889 | 1.024 | 0.571 | 0.389 | 0.230 |
+| DISPLAY trigonometry, point Z/T | 14.475 | 3.632 | 1.851 | 0.996 | 0.558 | 0.389 | 0.259 |
+
+The regional maps are 386 x 88 at Z=22. Each command returns 8695808 grid
+positions (about 74.6 MiB of values/masks); only 9036 positions pass the QC
+threshold in that mask case. The point profile fixes lon=45, lat=0 and
+retains all 44 levels. Timers include reads/calculation, exclude application startup,
+exports, ASCII verification and rendering; first-command worker startup is
+included in its own timer and plotted separately. At 128 CPUs that first
+command takes about 1.1--1.2 s in these cases. Repeated commands reuse the
+same worker PIDs. All requested worker counts, including 128, were observed.
+
+Results support 64/128-worker benefit for the read/decode-heavy point profile
+(DISPLAY about 37x/56x faster than one CPU), while full-grid transfer and
+storage leave the regional maps near a 16/32-worker plateau. A short fresh
+128-worker map can be slower than serial; reuse and workload size matter.
+No automatic mid-command hybrid worker/thread switching was added. The
+probe's CPU/RSS/HDF counters cover only the parent, not aggregate pool cost.
+
+Records, metadata, summary JSON and figures are in
+`tmp/new-machine-baseline/stage8-expressions-production/`:
+`scaling.png`/PDF show first versus repeated latency, and `speedup.png`/PDF
+show repeated speedup. Drivers are `expressions_stage8.py` and
+`plot_expressions_stage8.py` in the parent directory. Functional, sanitizer,
+compatibility and build logs are under
+`tmp/acceleration-stages/stage8-expressions/`.
+
 ### Mixed synthetic workload
 
 Run the supplied benchmark after building `grads` and `libgxdummy.la`:
