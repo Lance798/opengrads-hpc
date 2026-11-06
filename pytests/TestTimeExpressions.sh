@@ -83,8 +83,23 @@ maths=['pow(f,2)','abs(-f)','exp(f/10000)','log(f)','log10(f)',
        'asin(sin(f/10000))','acos(cos(f/10000))','asin(f)','acos(f)',
        'atan2(f,g)','exp(f)','const(f,0)',
        'maskout(f,(f>1e9)-0.5)','maskout(f,(g>2000)-0.5)+surface']
+# Cold/warm phase branches, explicit phase grids, pressure guards and the
+# user's theta/Exner composition. F spans temperature branches over time;
+# RHO is a native Z profile, like PIBAR in the production descriptor.
+saturation=['esat(150+f/200)','esat(150+f/200,auto)',
+            'esat(150+f/200,0)','esat(150+f/200,1)',
+            'esat(150+f/200,(g>18000)-0.5)',
+            'esat(f-f)','esat(-f)',
+            'qvsat(150+f/200,100000)','qvsat(150+f/200,100000,auto)',
+            'qvsat(150+f/200,100000,0)','qvsat(150+f/200,100000,1)',
+            'qvsat(150+f/200,100000,(g>18000)-0.5)',
+            'qvsat(150+f/200,0)','qvsat(150+f/200,surface-2000)',
+            'qvsat(150+f/200,100000*rho)',
+            'qvsat((150+f/200)*rho,100000*pow(rho,1004/287))',
+            'maskout(qvsat(150+f/200,100000),(g>18000)-0.5)',
+            'esat(150+f/200)+qvsat(150+f/200,100000)']
 for ctl in ctls:
-    for setup,expressions,direct in ((xy,core,False),(zt,core+maths,True)):
+    for setup,expressions,direct in ((xy,core+saturation,False),(zt,core+maths+saturation,True)):
         render=''.join('set z '+str(k)+'\nd answer\n' for k in range(1,5))+'set z 1 4\n' if not direct else 'd answer\n'
         command=setup+''.join('define answer='+expr+'\n'+render for expr in expressions)
         reference=parse(run(ctl,command,1,True))
@@ -95,6 +110,13 @@ for ctl in ctls:
             assert len(groups(text))==len(expressions),(ctl,groups(text))
             compare(parse(text),reference)
     print('Time expressions DEFINE/ZT passed:',ctl.name,flush=True)
+
+for ctl in ctls:
+    for expr in ('amean(qvsat((150+f/200)*rho,100000*pow(rho,1004/287)),x=1,x=16,y=1,y=12)',
+                 'amean(esat((150+f/200)*rho),x=1,x=16,y=1,y=12)'):
+        command=zt+'define answer='+expr+'\nd answer\nd '+expr+'\n'
+        text=run(ctl,command);assert len(groups(text))==2,expr
+        compare(parse(text),parse(run(ctl,command,1,True)))
 
 # T-only display, one varying spatial axis, non-unit coordinates and packing.
 for setup in ('set x 6\nset y 4\nset z 2\nset t 1 32\n',
@@ -115,7 +137,7 @@ compare(parse(text),parse(run(packed,command,1,True)))
 
 # A missing template time must retain per-operand masks, including CONST.
 piece=root/'slice16.h5';saved=root/'slice16.saved';piece.rename(saved)
-command=zt+'define answer=f+g\nd answer\nd const(f,0)+g\n'
+command=zt+'define answer=f+g\nd answer\nd const(f,0)+g\nd esat(150+f/200)\nd qvsat(150+f/200,100000)\n'
 compare(parse(run(ctls[1],command,missing=True)),parse(run(ctls[1],command,1,True,missing=True)))
 saved.rename(piece)
 
@@ -168,14 +190,15 @@ g=groups(text);assert len(g)==3 and g[0]==g[1]==g[2],g
 value=parse(text);compare(value[:1],parse(run(ctls[0],zt+'d f+g',1,True)))
 
 # Compare both worker graphics with the original evaluator's graphics.
-for expr in ('f+g','mag(f,g)','pow(f,2)'):
+for expr in ('f+g','mag(f,g)','pow(f,2)','esat(150+f/200)',
+             'qvsat((150+f/200)*rho,100000*pow(rho,1004/287))'):
     a=root/'defined.png';b=root/'direct.png';c=root/'serial.png'
     run(ctls[0],zt+'define answer='+expr+'\nset gxout shaded\nd answer\nprintim '+str(a)+
         ' x640 y480\nclear canvas\nd '+expr+'\nprintim '+str(b)+' x640 y480\n')
     run(ctls[0],zt+'set gxout shaded\nd '+expr+'\nprintim '+str(c)+' x640 y480\n',1,True)
     assert a.read_bytes()==b.read_bytes()==c.read_bytes(),('expression graphics differ',expr)
 
-heavy='('+ '+'.join(['sin(f)']*32)+')/32+pow(g,2)*0.000001'
+heavy='('+ '+'.join(['sin(f)']*32)+')/32+pow(g,2)*0.000001+qvsat(150+f/200,100000)+esat(150+g/200)*0.0001'
 def terminal(cancel=False,fail=False,off=False):
     e=dict(env,GA_PROGRESS='off' if off else '.000001',GA_TIME_WORKERS='auto',LANG='C',LC_ALL='C',LC_TERMINAL='iTerm2')
     e.pop('TMUX',None)
