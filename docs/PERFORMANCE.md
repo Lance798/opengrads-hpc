@@ -1103,6 +1103,29 @@ as total pool reads or CPU. The figure and full records are in
 summary/records JSON and logs. DISPLAY timers evaluate statistics; PNG
 correctness is checked separately.
 
+#### Stage 6: bulk HDF5 density profiles for ZINT
+
+The native `zint(qv*rhobar)` path now reads an eligible HDF5 density profile
+as one Z vector instead of 44 scalar evaluations. Coordinate agreement,
+unpacking, masks and Z order retain their existing meaning. Other profile
+backends and unsupported layouts keep the scalar path. The integration
+arithmetic and chunk reader are unchanged.
+
+ZInt regressions now include partially missing and wholly invalid density
+profiles (NaN/Inf/undef), in native and evaluator products, with templates,
+reverse axes and separate profile descriptors. ZInt, TimeWorkers, OpenMP,
+ReductionIO and BinaryHalo pass; the ZInt suite also passes ASan/UBSan.
+Across 21 real-data measurements at all seven CPU budgets, 182611968 values
+and their masks match the original CWV references exactly. Serial HDF5 calls
+over 256 times fall from 33792 to 22784; selected values remain 382626816.
+
+Overall one-CPU latency is essentially unchanged: 16.539 s versus 16.567 s
+before this stage. This is a reduction of small-call overhead, not evidence
+of a material end-to-end speedup. Compressed chunk decoding remains the
+larger single-time target. Records, summary JSON and the call-count/latency
+figure are in `tmp/new-machine-baseline/stage6-density-production/`
+(`density-reads.png` and PDF).
+
 ### Mixed synthetic workload
 
 Run the supplied benchmark after building `grads` and `libgxdummy.la`:

@@ -5568,13 +5568,31 @@ static gaint zint_run(struct gafunc *pfc, struct gastat *pst) {
     sample=*pst; sample.idim=sample.jdim=-1;
     sample.dmin[0]=sample.dmax[0]=pf->gr2ab[0](pf->grvals[0],1);
     sample.dmin[1]=sample.dmax[1]=pf->gr2ab[1](pf->grvals[1],1);
-    for (k=0;k<nz;k++) {
-      sample.dmin[2]=sample.dmax[2]=file->gr2ab[2](file->grvals[2],k+1);
+    if(pf->ncflg==3 && !pf->ppflag && !pf->idxflg && !pf->climo) {
+      /* Native HDF5 profile coordinates were checked against the source
+         above. Read the complete vector once, with the same unpack/mask
+         rules as the scalar reader, then retain the original Z order. */
+      sample.idim=2;
+      sample.dmin[2]=file->gr2ab[2](file->grvals[2],1);
+      sample.dmax[2]=file->gr2ab[2](file->grvals[2],nz);
       if (gaexpr(profile,&sample)) goto cleanup;
       if (sample.type!=1) { gafree(&sample); goto invalid; }
       plane=sample.result.pgr;
-      factor[k]=plane->umask[0] && isfinite(plane->grid[0]) ? plane->grid[0] : NAN;
+      if(plane->idim!=2 || plane->jdim>=0 || plane->isiz!=nz ||
+         plane->dimmin[2]!=1 || plane->dimmax[2]!=nz)goto invalid;
+      for(k=0;k<nz;k++)
+        factor[k]=plane->umask[k] && isfinite(plane->grid[k]) ? plane->grid[k] : NAN;
       gagfre(plane); plane=NULL;
+      if(getenv("GA_ZINT_TRACE"))gaprnt(2,"ZINT I/O: bulk HDF5 density profile\n");
+    } else {
+      for (k=0;k<nz;k++) {
+        sample.dmin[2]=sample.dmax[2]=file->gr2ab[2](file->grvals[2],k+1);
+        if (gaexpr(profile,&sample)) goto cleanup;
+        if (sample.type!=1) { gafree(&sample); goto invalid; }
+        plane=sample.result.pgr;
+        factor[k]=plane->umask[0] && isfinite(plane->grid[0]) ? plane->grid[0] : NAN;
+        gagfre(plane); plane=NULL;
+      }
     }
   }
   if (var && var->levels>0 && !file->ppflag && !file->idxflg &&

@@ -163,6 +163,16 @@ int main(int argc, char **argv) {
       }
       H5Dclose(var); H5Pclose(prop); H5Sclose(space);
     }
+    {
+      const double profiles[2][NZ]={{1.2,-9999,NAN,0.9},{NAN,INFINITY,-9999,-INFINITY}};
+      const char *profile_names[2]={"rho_missing","rho_invalid"};
+      for(v=0;v<2;v++) {
+        hid_t space=H5Screate_simple(1,rdim,NULL);
+        hid_t var=H5Dcreate2(file,profile_names[v],H5T_NATIVE_DOUBLE,space,H5P_DEFAULT,H5P_DEFAULT,H5P_DEFAULT);
+        check(var>=0 && H5Dwrite(var,H5T_NATIVE_DOUBLE,H5S_ALL,H5S_ALL,H5P_DEFAULT,profiles[v])>=0,"HDF5 missing density profile");
+        H5Dclose(var);H5Sclose(space);
+      }
+    }
     check(H5Fclose(file)>=0,"HDF5 close");
     }
   }
