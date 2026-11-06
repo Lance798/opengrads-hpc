@@ -6205,6 +6205,48 @@ err2:
   return(1);
 }
 
+/* Reuse a native input for the common maskout(f,(f>cut)-0.5) form.
+   Comparisons in GrADS return +/-1; subtracting 0.5 retains exactly the
+   true cells. Unknown syntax and different fields keep the evaluator. */
+static gaint mask_threshold(struct gafunc *pfc,struct gastat *pst) {
+  struct gagrid *grid=pst->result.pgr;
+  char *field=pfc->argpnt[0],*p=pfc->argpnt[1],*end;
+  size_t length,n,i;
+  gadouble cutoff,shift;
+  gaint inclusive=0;
+  if(!ave_plain_var(field,pst,grid))return 0;
+  while(*field==' ')field++;
+  length=strlen(field);while(length && field[length-1]==' ')length--;
+  while(*p==' ')p++;
+  if(*p++!='(')return 0;
+  while(*p==' ')p++;
+  if(strncmp(p,field,length))return 0;
+  p+=length;while(*p==' ')p++;
+  if(*p++!='>')return 0;
+  if(*p=='=') { inclusive=1;p++; }
+  while(*p==' ')p++;
+  end=p;if(*end=='-')end++;
+  if(*end<'0' || *end>'9')return 0;
+  p=getdbl(p,&cutoff);if(!p || !isfinite(cutoff))return 0;
+  while(*p==' ')p++;
+  if(*p++!=')')return 0;
+  while(*p==' ')p++;
+  if(*p++!='-')return 0;
+  while(*p==' ')p++;
+  if(*p<'0' || *p>'9')return 0;
+  p=getdbl(p,&shift);if(!p || shift!=0.5)return 0;
+  while(*p==' ')p++;
+  if(*p)return 0;
+  n=(size_t)grid->isiz*grid->jsiz;
+#if USEOPENMP == 1
+#pragma omp parallel for simd schedule(static) if(ga_omp_parallelize(n>INT_MAX ? INT_MAX : (gaint)n))
+#endif
+  for(i=0;i<n;i++)if(grid->umask[i] &&
+       !(inclusive ? grid->grid[i]>=cutoff : grid->grid[i]>cutoff))grid->umask[i]=0;
+  if(getenv("GA_MASK_TRACE"))gaprnt(2,"MASKOUT I/O: reused native input for threshold\n");
+  return 1;
+}
+
 gaint ffmask (struct gafunc *pfc, struct gastat *pst) {
 struct gastat pst2;
 struct gastn *stn;
@@ -6220,6 +6262,8 @@ gaint rc,cnt,flag,i;
 
   rc = gaexpr(pfc->argpnt[0],pst);
   if (rc) return (rc);
+
+  if(pst->type==1 && mask_threshold(pfc,pst))return 0;
 
   if (pst->type!=0 || *(pfc->argpnt[1])!='\'') {
 

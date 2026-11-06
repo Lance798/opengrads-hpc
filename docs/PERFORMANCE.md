@@ -1066,6 +1066,43 @@ passive-wait experiments are retained under the earlier `stage4-*` diagnostic
 directories; those changes did not improve latency and were reverted before
 this AMEAN stage.
 
+#### Stage 5: reuse native inputs in threshold MASKOUT
+
+The common `maskout(f,(f>cut)-0.5)` and `>=` forms now reuse the native
+field already read for MASKOUT's first argument. The fused mask pass keeps
+strict/inclusive comparison boundaries, source values and original masks;
+the existing spatial reducer still computes the same weights and denominator.
+GrADS comparisons return +/-1, so the 0.5 shift retains precisely the true
+cells. Other mask syntax, different fields, defined inputs and dimension
+qualifiers retain the ordinary evaluator. `GA_MASK_TRACE=1` reports reuse.
+
+`TestMaskThreshold.sh` checks native/template/reversed binary, NetCDF3,
+NetCDF4, HDF5 and BP5 data, exact and neighboring thresholds, all-masked
+cases, invalid inputs, scalar grids, source values and fallback. Its 2639494
+samples match the independent `f+0` evaluator exactly, including masks and
+non-finite classifications; native and fallback PNGs are byte-identical.
+An HDF5 call-count probe confirms 2 reads become 1. ASan/UBSan and the
+TimeWorkers, TimeMeanWorkers, OpenMP, ReductionIO, BinaryHalo, ZInt and
+AveSection regressions pass.
+
+For the 44-level RLL `aave(maskout(qc,(qc>1e-5)-0.5),...)`, all 315392
+compared DEFINE/DISPLAY values and masks match the original references
+exactly. Fresh-pool DEFINE medians (three trials) and reused-pool direct
+DISPLAY medians (three trials), over T=2145:2400:
+
+| CPU budget | 1 | 4 | 8 | 16 | 32 | 64 | 128 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| DEFINE before fusion (s) | 13.970 | 3.540 | 1.863 | 1.081 | 0.804 | 0.767 | 1.219 |
+| DEFINE after fusion (s) | 10.324 | 2.659 | 1.410 | 0.870 | 0.679 | 0.724 | 1.193 |
+| DISPLAY after fusion, reused pool (s) | 10.353 | 2.574 | 1.308 | 0.684 | 0.438 | 0.278 | 0.189 |
+
+The serial improvement is approximately 35%; fresh high-worker-count runs
+remain dominated by startup. Parent-only probe counters must not be treated
+as total pool reads or CPU. The figure and full records are in
+`tmp/new-machine-baseline/stage5-mask-production/scaling.png` and PDF,
+summary/records JSON and logs. DISPLAY timers evaluate statistics; PNG
+correctness is checked separately.
+
 ### Mixed synthetic workload
 
 Run the supplied benchmark after building `grads` and `libgxdummy.la`:
