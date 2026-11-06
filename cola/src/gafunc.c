@@ -3243,7 +3243,9 @@ static struct gagrid *ave_section(struct gafunc *pfc, struct gastat *pst,
   struct gafile *source=file;
   gaint r=pst->idim,rc,k;
   gadouble length=1,lo,hi;
-  if (dim>2 || last<=first || pst->jdim>=0 || r==dim) return NULL;
+  /* Time and ensemble axes do not use spatial ab2gr/gr2ab callbacks.
+     Keep those output axes on the position-at-a-time evaluator. */
+  if (dim>2 || r>2 || last<=first || pst->jdim>=0 || r==dim) return NULL;
   if (!ave_plain_var(pfc->argpnt[0],pst,NULL)) {
     source=reduction_defined(pfc->argpnt[0],pst);
     if (!source || source->climo || source->dnum[dim]<=1 || (r>=0 && source->dnum[r]<=1)) return NULL;
