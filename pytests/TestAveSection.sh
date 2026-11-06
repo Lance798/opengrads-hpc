@@ -45,6 +45,14 @@ cases=(
   "set lon 100|set lat 10|set lev 500|set t 3|ave(ps,lon=0,lon=355)|ps"
 )
 
+# A spatial fold may leave T as its output axis. Its coordinate conversion
+# is not a spatial ab2gr callback; also exercise arithmetic outside the fold.
+for reduction in ave mean sum sumg min max minloc maxloc; do
+  cases+=("set x 20|set y 20|set z 1|set t 1 5|2*$reduction(ta,z=1,z=4)|ta")
+  cases+=("set x 20|set y 20|set z 1|set t 1 5|2*$reduction(ta,x=1,x=72)|ta")
+  cases+=("set x 20|set y 20|set z 1|set t 1 5|2*$reduction(ta,y=1,y=46)|ta")
+done
+
 commands="open $model_ctl"$'\n'"set gxout print"$'\n'"set prnopts %.17g 8 1"
 n=0
 for c in "${cases[@]}"; do

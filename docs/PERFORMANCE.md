@@ -1238,6 +1238,30 @@ The suite's 578083 finite samples match exactly, including the original
 TimeWorkers and OpenMP also pass. Artifacts are in
 `tmp/acceleration-stages/stage8-memory/`.
 
+#### Stage 8b: spatial reductions with a time-series result
+
+The spatial-section planner now rejects remaining T/E axes before calling
+spatial coordinate converters. Those axes use their existing position-at-a-time
+evaluator instead. The earlier planner called a null `ab2gr[3]` when a
+spatial reduction left a time series, causing a native DISPLAY crash even
+with Z fixed. The frozen Stage 7 executable reproduces the defect; ASan
+identified the null callback during the new-expression validation.
+
+The intended vertical-sum usage fixes the external Z dimension:
+
+```text
+set z 1
+set t 1 32
+display 2*sum(f,z=1,z=4)
+```
+
+The function arguments select the four input levels; the command's varying
+axis is T. AveSection adds all eight reduction selectors over X, Y and Z
+with T varying, including arithmetic around the reduction. Its 39 cases
+match the independent `field+0` evaluator exactly. OpenMP, ReductionIO and
+BinaryHalo pass. Stage logs are in
+`tmp/acceleration-stages/stage8-section/`.
+
 ### Mixed synthetic workload
 
 Run the supplied benchmark after building `grads` and `libgxdummy.la`:
