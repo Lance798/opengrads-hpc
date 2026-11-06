@@ -1216,6 +1216,28 @@ workers/threads remain a future scheduling experiment; there is no mid-command
 switch from 64 x 1 to 32 x 2. The uncommon compound spatial/time averages
 remain deferred as requested.
 
+#### Stage 8a: available-memory estimates with warm file caches
+
+Linux worker and input-batch budgets now use `/proc/meminfo`'s MemAvailable
+estimate, which includes reclaimable cache. Other hosts, or Linux without
+that field, retain the free-page fallback. The quarter-available-memory
+limit, 8 GiB worker estimate ceiling, 1 GiB input-batch ceiling and existing
+per-result limits are unchanged.
+
+During the new-expression regression, the host had about 1.8 TiB available
+but only about 10 GiB completely free. The preceding free-page estimate
+therefore reduced a requested 128-reader pool to roughly 75 workers, with
+small command-to-command changes. This was an estimate affected by cached
+files, not a numerical failure or evidence that 128 CPUs were unavailable.
+
+TimeMeanWorkers now also injects 1 GiB and 128 MiB available-memory reports
+through a test-only preload shim. Worker counts shrink under the first and
+the serial reader handles the second; all values/masks remain unchanged.
+The suite's 578083 finite samples match exactly, including the original
+128/62-reader batch reuse, progress, cancellation and recovery checks.
+TimeWorkers and OpenMP also pass. Artifacts are in
+`tmp/acceleration-stages/stage8-memory/`.
+
 ### Mixed synthetic workload
 
 Run the supplied benchmark after building `grads` and `libgxdummy.la`:
