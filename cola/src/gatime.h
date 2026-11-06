@@ -5,6 +5,7 @@
 struct gacmn;
 struct gastat;
 struct gagrid;
+struct gafile;
 void ga_time_init(const char *);
 void ga_time_prepare_worker(void);
 void ga_time_shutdown(void);
@@ -13,4 +14,8 @@ gaint ga_time_worker(struct gacmn *, int);
 gaint ga_time_define(char *, struct gacmn *, gaint, gaint, gaint, gaint,
                      gaint, struct gagrid *, gadouble *, char *, gadouble);
 gaint ga_time_display(char *, struct gastat *, struct gacmn *);
+gaint ga_time_can_read(struct gafile *);
+gadouble ga_time_batch_bytes(struct gafile *);
+gaint ga_time_readsteps(struct gagrid *, gaint, gaint, gaint,
+                        gadouble *, char *, long);
 #endif

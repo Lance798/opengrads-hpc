@@ -886,7 +886,7 @@ Fixed-time XY calculations keep their existing evaluator.
 This stage parallelizes *output times*. An expression such as
 `mean(u,t=1,t=256)` that reduces many input times into a single output still
 uses the existing time-batch reader; parallelizing those input reads is the
-next stage. Likewise, a single-time large-domain calculation cannot use
+stage described below. Likewise, a single-time large-domain calculation cannot use
 multiple time workers.
 
 `TestTimeWorkers.sh` checks regular/template HDF5, reversed axes, fractional
@@ -937,6 +937,85 @@ The complete TimeWorkers test passes with no reported memory/UB error
 had an intermittent failure during runtime initialization; the validation
 uses a non-PIE executable with static ASan runtime, without changing production
 build flags. Logs are in `tmp/acceleration-stages/stage2/asan-test-static.log`.
+
+#### Stage 3: ordered input-time reads for mean and ave
+
+The same process pool now serves the bounded HDF5 reader used by time
+reductions. Native file variables and supported two-variable sums can read
+and decompress independent input times concurrently even when there is only
+one output time, for example `mean(u,t=1,t=256)` or `ave(u+v,t=1,t=256)`.
+This applies to both DEFINE and DISPLAY. Arbitrary expressions and resident
+defined arrays keep their existing evaluator/calculation paths.
+
+The parent still folds every input time in ascending order for each grid
+point. Original weights, valid-sample denominators, paired-field masks,
+min/max tie rules, increments and fractional `-b` boundaries are unchanged;
+workers never return a mean of means. A large pool stays alive when a final
+batch needs fewer workers; only that subset is active. This is bounded batch
+scheduling, not a change to a hybrid worker/thread arrangement during the
+calculation. Each active worker continues to use one thread.
+
+Eligible HDF5 time batches use 8 MiB of parent workspace per requested CPU,
+with a 64 MiB floor, 1 GiB ceiling, and an available-memory cap; paired fields
+share the budget. Each batch still contains at most 256 times. This replaces
+the fixed 64 MiB limit that otherwise leaves too few large planes in flight
+for 32--128 workers. The worker-memory estimate and 128 MiB per-time result
+limit remain in force. Tiny batches, unsupported grids and other formats
+retain their existing readers. While a batch is being read, the progress bar
+refreshes elapsed time/active workers; completed reduction steps advance only
+after those values have actually been folded.
+
+`TestTimeMeanWorkers.sh` checks 320 input times across two batches, including
+the original time order, all eight reduction selectors, increments, weighted
+boundaries, paired masks, surface broadcasts, missing template files,
+reversed axes, packed native integers, descriptor symlinks, DEFINE and
+fallback. Its 569899 finite reference samples match exactly, including masks
+and non-finite classifications. PTY checks cover progress, iTerm2 clearing,
+off mode, cancellation, killed-reader recovery and cleanup. Both the normal
+and ASan/UBSan builds pass. The Stage 2 TimeWorkers test and all eleven
+OpenMP/reduction/I/O/progress/graphics regression suites also pass.
+
+The longer Stage 2 follow-up additionally compared 1024 times, T=1377:2400.
+Every exported result and mask matched exactly. The first serial read of the
+new time range was a cache-priming pass, so a separate warm serial pass is
+used for comparison: 64.134 s for `ua2` and 66.450 s for CWV. Pool-reuse
+medians at 64/128 workers are 1.555/0.967 s for `ua2` and 1.769/1.230 s for
+CWV. The first 128-worker command takes 1.805 s and 2.148 s, respectively.
+The longer runs amortize startup better than 256-time runs. The separate
+figure, records and warm serial checks are in
+`tmp/new-machine-baseline/stage2-reuse/pool-reuse.png` (also PDF).
+
+The input-time sweep checks four real-data cases at all seven CPU budgets,
+with one first command and three measured pool-reuse commands per process.
+All 18418512 exported values and masks agree with the frozen Stage 2
+executable; maximum absolute difference is `2.49e-14`, in the outer spatial
+area reduction. Native time-mean/ave maps match exactly. Warm pool-reuse
+medians in seconds (the one-CPU column uses the ordinary serial reader):
+
+| Case | 1 CPU | 4 | 8 | 16 | 32 | 64 | 128 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Regional `mean(u)` | 0.451 | 0.131 | 0.084 | 0.060 | 0.060 | 0.063 | 0.066 |
+| Regional `ave(u)` | 0.460 | 0.134 | 0.076 | 0.058 | 0.062 | 0.060 | 0.065 |
+| Global `mean(u)` | 2.139 | 0.956 | 0.792 | 0.596 | 0.540 | 0.614 | 0.796 |
+| `aave(mean(u))`, 44 levels | 18.957 | 5.590 | 3.206 | 2.394 | 2.632 | 2.688 | 2.972 |
+
+Here the time range is T=2145:2400. Regional maps cover lon=0:90,
+lat=-10:10 at Z=22; the global map is 1536 x 384 at the same level. The
+last case time-averages each cell before applying the spatial area mean at
+all 44 levels; missing-data semantics prohibit substituting the average of
+independent area means in general. First-command times include startup and
+are plotted separately. Export is excluded from all evaluation timers.
+Artifacts are `tmp/new-machine-baseline/stage3-production/scaling.png`,
+`speedup.png`, PDFs and summary/records JSON.
+
+This stage improves input-time reductions, but its 64/128-worker results
+do not yet beat 16/32 consistently. Large maps transfer every input grid
+back to the parent for the ordered fold. There is also excessive OpenMP
+team overhead: the regional fold has only 34 tiles, while small 33968-cell
+operations can still request 128 threads. A subsequent stage should cap
+calculation teams by actual work and useful tiles, then profile bulk result
+transfer before changing accumulation semantics. These limits are separate
+from the strong output-time profile scaling in Stage 2.
 
 ### Mixed synthetic workload
 

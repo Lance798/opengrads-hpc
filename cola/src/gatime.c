@@ -47,7 +47,7 @@ extern char **environ;
 #define TIME_CONFIG 0x47544331
 #define TIME_JOB 0x47544a31
 struct time_config {
-  int operation,z1,z2,e,idim,jdim,ri,rj,nx,ny,lo[5],hi[5];
+  int operation,z1,z2,e,idim,jdim,ri,rj,nx,ny,lo[5],hi[5],reads;
   int cachesf;
   double dmin[5],dmax[5],undef,cache_bytes;
   char path[TIME_TEXT],expression[TIME_TEXT];
@@ -158,7 +158,7 @@ struct time_slot { pid_t pid; int fd,t; size_t received; struct time_reply reply
 static struct time_slot slots[TIME_MAX_WORKERS];
 static int pool_count;
 static int pool_active;
-gaint ga_time_active_workers(void) { return pool_active ? pool_count : 0; }
+gaint ga_time_active_workers(void) { return pool_active; }
 static double time_now(void) { struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+1e-9*t.tv_nsec; }
 static int time_write(int fd,const void *p,size_t n) {
   const char *s=p;ssize_t k;
@@ -214,7 +214,7 @@ static int time_spawn(int n) {
   DIR *dir;struct dirent *entry;int pair[2],i,fd,rc,old,j,k,total; sigset_t empty;
   char **worker_env,*prefixes[]={"OMP_PROC_BIND=","OMP_NUM_THREADS=","GA_NUM_THREADS=","GOMP_CPU_AFFINITY=","GA_TIME_AFFINITY=","GA_PROGRESS=",NULL};
   char affinity[TIME_TEXT]="GA_TIME_AFFINITY=";
-  if(pool_count==n)return 0;
+  if(pool_count>=n)return 0;
   ga_time_shutdown();
 #ifdef __linux__
   {
@@ -292,7 +292,7 @@ void ga_time_prepare_worker(void) {
 
 static int time_workers(struct time_config *c,int nt) {
   double available=8.0*1024*1024*1024,per;int n=ga_omp_get_threads();const char *v=getenv("GA_TIME_WORKERS");
-  if(time_child || !time_executable[0] || n<2 || nt<32 ||
+  if(time_child || !time_executable[0] || n<2 || nt<(c->reads ? 2 : 32) ||
      (v && (!strcmp(v,"off") || !strcmp(v,"0"))))return 0;
 #ifdef _SC_AVPHYS_PAGES
   { long pages=sysconf(_SC_AVPHYS_PAGES),page=sysconf(_SC_PAGESIZE);
@@ -307,15 +307,16 @@ static int time_workers(struct time_config *c,int nt) {
   return n>1 ? n : 0;
 }
 
-static int time_parallel(struct time_config *c,int t1,int t2,double *values,char *mask) {
+static int time_parallel(struct time_config *c,int t1,int t2,int incr,double *values,char *mask) {
   struct pollfd polls[TIME_MAX_WORKERS];struct time_job job;
   size_t count=(size_t)c->nx*c->ny*(c->z2-c->z1+1),payload=count*(sizeof(double)+1),part,offset;
-  int n=time_workers(c,t2-t1+1),i,next=t1,done=0,rc;ssize_t got;char *dest;char trace[4096];
+  int nt=(t2-t1)/incr+1,n=time_workers(c,nt),i,done=0,rc;int64_t next=t1;
+  ssize_t got;char *dest;char trace[4096];
   if(!n)return -1;
   if(time_spawn(n))return -1;
-  pool_active=1;
+  pool_active=n;
   if(getenv("GA_TIME_TRACE")) {
-    offset=(size_t)snprintf(trace,sizeof(trace),"Time workers: workers=%d inner=1 times=%d levels=%d pids=",n,t2-t1+1,c->z2-c->z1+1);
+    offset=(size_t)snprintf(trace,sizeof(trace),"Time workers: workers=%d inner=1 times=%d levels=%d pids=",n,nt,c->z2-c->z1+1);
     for(i=0;i<n && offset<sizeof(trace);i++)offset+=(size_t)snprintf(trace+offset,sizeof(trace)-offset,"%s%ld",i ? "," : "",(long)slots[i].pid);
     if(offset<sizeof(trace)-1)strcat(trace,"\n");
     gaprnt(2,trace);
@@ -324,17 +325,17 @@ static int time_parallel(struct time_config *c,int t1,int t2,double *values,char
     int flags=fcntl(slots[i].fd,F_GETFL);fcntl(slots[i].fd,F_SETFL,flags&~O_NONBLOCK);
     rc=time_write(slots[i].fd,c,sizeof(*c));fcntl(slots[i].fd,F_SETFL,flags);
     if(rc)goto error;
-    job.operation=TIME_JOB;job.t=next++;slots[i].t=job.t;slots[i].received=0;
+    job.operation=TIME_JOB;job.t=next;next+=incr;slots[i].t=job.t;slots[i].received=0;
     if(time_write(slots[i].fd,&job,sizeof(job)))goto error;
   }
-  while(done<t2-t1+1) {
+  while(done<nt) {
     if(gaqsig())goto error;
     for(i=0;i<n;i++) { polls[i].fd=slots[i].t ? slots[i].fd : -1;polls[i].events=POLLIN;polls[i].revents=0; }
     rc=poll(polls,n,100);
     if(rc<0 && errno!=EINTR)goto error;
     for(i=0;i<n;i++)if(slots[i].t && polls[i].revents) {
       for(;;) {
-        offset=(size_t)(slots[i].t-t1)*count;
+        offset=(size_t)((slots[i].t-t1)/incr)*count;
         if(slots[i].received<sizeof(struct time_reply)) {
           part=sizeof(struct time_reply)-slots[i].received;dest=(char *)&slots[i].reply+slots[i].received;
         } else if(slots[i].received<sizeof(struct time_reply)+count*sizeof(double)) {
@@ -353,14 +354,15 @@ static int time_parallel(struct time_config *c,int t1,int t2,double *values,char
         if(slots[i].received==sizeof(struct time_reply)+payload) {
           done++;slots[i].t=0;
           if(next<=t2) {
-            job.operation=TIME_JOB;job.t=next++;slots[i].t=job.t;slots[i].received=0;
+            job.operation=TIME_JOB;job.t=next;next+=incr;slots[i].t=job.t;slots[i].received=0;
             if(time_write(slots[i].fd,&job,sizeof(job)))goto error;
           }
           break;
         }
       }
     }
-    gaprogstep(done*(c->z2-c->z1+1));
+    if(c->reads)gaprogpulse();
+    else gaprogstep(done*(c->z2-c->z1+1));
   }
   pool_active=0;return 0;
 error:
@@ -420,10 +422,76 @@ void ga_time_prepare_worker(void) {}
 void ga_time_shutdown(void) {}
 gaint ga_time_active_workers(void) { return 0; }
 gaint ga_time_worker(struct gacmn *pcm,int fd) { (void)pcm;(void)fd;return 1; }
-static int time_parallel(struct time_config *c,int t1,int t2,double *v,char *m) {
-  (void)c;(void)t1;(void)t2;(void)v;(void)m;return -1;
+static int time_parallel(struct time_config *c,int t1,int t2,int incr,double *v,char *m) {
+  (void)c;(void)t1;(void)t2;(void)incr;(void)v;(void)m;return -1;
 }
 #endif
+
+/* Input-time reductions reuse the same isolated workers. These entry points
+   only see native variables already accepted by the bounded batch reader;
+   no user expression or defined-variable state is reconstructed. */
+gaint ga_time_can_read(struct gafile *file) {
+#if TIME_POSIX
+  const char *v=getenv("GA_TIME_WORKERS");
+  return !time_child && time_executable[0] && ga_omp_get_threads()>1 &&
+    !(v && (!strcmp(v,"off") || !strcmp(v,"0"))) && file &&
+    file->type==1 && file->ncflg==3 && !file->ppflag && !file->idxflg && !file->climo;
+#else
+  (void)file;return 0;
+#endif
+}
+
+gadouble ga_time_batch_bytes(struct gafile *file) {
+  double bytes=64.0*1024*1024;
+  if(ga_time_can_read(file)) {
+    bytes=8.0*1024*1024*ga_omp_get_threads();
+    if(bytes<64.0*1024*1024)bytes=64.0*1024*1024;
+    if(bytes>1024.0*1024*1024)bytes=1024.0*1024*1024;
+#if TIME_POSIX && defined(_SC_AVPHYS_PAGES)
+    { long pages=sysconf(_SC_AVPHYS_PAGES),page=sysconf(_SC_PAGESIZE);
+      if(pages>0 && page>0 && bytes>(double)pages*page/4)bytes=(double)pages*page/4; }
+#endif
+  }
+  return bytes;
+}
+
+gaint ga_time_readsteps(struct gagrid *grid,gaint t0,gaint n,gaint incr,
+                        gadouble *values,char *mask,long cachesf) {
+  struct gafile *file=grid->pfile;struct time_config c;int d;
+  if(!ga_time_can_read(file) || !grid->pvar || grid->toff || n<2 ||
+     incr<1 || t0<1 || t0>file->dnum[3] || (n-1)>(file->dnum[3]-t0)/incr ||
+     grid->idim>1 || grid->jdim>1 || grid->isiz<1 || grid->jsiz<1 ||
+     cachesf<0 || cachesf>INT_MAX ||
+     (double)grid->isiz*grid->jsiz*n<GA_PARALLEL_MIN_CELLS ||
+     (double)grid->isiz*grid->jsiz>128.0*1024*1024/9 ||
+     strchr(file->dnam,'\n'))return -1;
+  memset(&c,0,sizeof(c));c.operation=TIME_CONFIG;c.reads=1;
+  c.idim=c.ri=grid->idim;c.jdim=c.rj=grid->jdim;
+  c.nx=grid->isiz;c.ny=grid->jsiz;c.undef=grid->undef;
+  c.z1=c.z2=grid->pvar->levels ? grid->dimmin[2] : 1;
+  c.e=grid->dimmin[4];c.cachesf=(int)cachesf;c.cache_bytes=(double)cachesf*file->cachesize;
+  if(c.z1<1 || c.z1>file->dnum[2])return -1;
+  for(d=0;d<5;d++) {
+    c.lo[d]=grid->dimmin[d];c.hi[d]=grid->dimmax[d];
+    if(d!=3) {
+      c.dmin[d]=file->gr2ab[d](file->grvals[d],grid->dimmin[d]);
+      c.dmax[d]=file->gr2ab[d](file->grvals[d],grid->dimmax[d]);
+    }
+  }
+#if TIME_POSIX
+  if(file->dnam[0]=='/')snprintf(c.path,sizeof(c.path),"%s",file->dnam);
+  else {
+    char cwd[TIME_TEXT];int length;
+    if(!getcwd(cwd,sizeof(cwd)))return -1;
+    length=snprintf(c.path,sizeof(c.path),"%s/%s",cwd,file->dnam);
+    if(length<0 || length>=(int)sizeof(c.path))return -1;
+  }
+#else
+  return -1;
+#endif
+  snprintf(c.expression,sizeof(c.expression),"%s",grid->pvar->abbrv);
+  return time_parallel(&c,t0,t0+(n-1)*incr,incr,values,mask);
+}
 
 static int time_configure(struct time_config *c,char *expr,struct gacmn *pcm,
                           struct gastat *pst,int z1,int z2,int e,struct gagrid *shape) {
@@ -461,7 +529,7 @@ gaint ga_time_define(char *expr,struct gacmn *pcm,gaint z1,gaint z2,gaint t1,gai
   pst=getpst(pcm);if(!pst)return 1;
   if(time_configure(&c,expr,pcm,pst,z1,z2,e,shape) && t1>=1 && t2<=pst->pfid->dnum[3] &&
      (double)pst->pfid->dnum[0]*pst->pfid->dnum[1]*pst->pfid->dnum[2]*(t2-t1+1)>=8388608.0) {
-    c.undef=undef;rc=time_parallel(&c,t1,t2,values,mask);
+    c.undef=undef;rc=time_parallel(&c,t1,t2,1,values,mask);
   }
   gree(pst,"timepst");return rc;
 }
@@ -509,7 +577,7 @@ gaint ga_time_display(char *expr,struct gastat *pst,struct gacmn *pcm) {
   out->ivals=f->grvals[out->idim];out->iavals=f->abvals[out->idim];out->ilinr=f->linear[out->idim];
   out->iwrld=out->jwrld=0;
   if(out->jdim>=0) { out->jgrab=NULL;out->jvals=f->grvals[3];out->jlinr=1; }
-  rc=time_parallel(&c,t1,t2,out->grid,out->umask);
+  rc=time_parallel(&c,t1,t2,1,out->grid,out->umask);
   if(rc<0) {
     gagfre(shape);shape=NULL;
     for(k=t1;k<=t2;k++) {

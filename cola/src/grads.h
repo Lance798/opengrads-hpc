@@ -909,6 +909,7 @@ gaint prntgaattr (struct gafile *, char *, gaint, gaint);
 gaint gaprogbeg (const char *, gaint);
 void gaprogtotal (gaint);
 void gaprogstep (gaint);
+void gaprogpulse (void);
 void gaprogend (gaint);
 void gaprogpause (void);
 void gaprogreset (void);

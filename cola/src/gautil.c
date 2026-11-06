@@ -2648,6 +2648,12 @@ void gaprogstep (gaint done) {
   if (progon>0) progdraw();
 }
 
+/* Reading a batch does not finish its reduction. Refresh elapsed time and
+   worker status without resetting the caller's completed-fold count. */
+void gaprogpulse (void) {
+  if (progdepth>0 && progdepth<=PROG_LEVELS && progon>0) progdraw();
+}
+
 /* The loop at this level is through, or gave up, with any inside it */
 
 void gaprogend (gaint level) {
