@@ -15,8 +15,21 @@ cat > "$test_root/slow.c" <<'C'
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <hdf5.h>
+FILE *fopen(const char *path,const char *mode) {
+  static FILE *(*next)(const char *,const char *);
+  const char *kib=getenv("GA_TEST_MEM_KIB");
+  if(!next)*(void **)(&next)=dlsym(RTLD_NEXT,"fopen");
+  if(kib && !strcmp(path,"/proc/meminfo")) {
+    FILE *file=tmpfile();
+    if(file) { fprintf(file,"MemAvailable: %s kB\n",kib);rewind(file); }
+    return file;
+  }
+  return next(path,mode);
+}
 herr_t H5Dread(hid_t a,hid_t b,hid_t c,hid_t d,hid_t e,void *f) {
   static herr_t (*next)(hid_t,hid_t,hid_t,hid_t,hid_t,void *);
   if(!next)*(void **)(&next)=dlsym(RTLD_NEXT,"H5Dread");
@@ -63,11 +76,13 @@ def compare(a,b):
             samples+=1;err=abs(u-v);max_abs=max(max_abs,err)
             assert err<=1e-8+2e-12*abs(v),(u,v)
 def groups(text):return re.findall(r'Time workers: workers=(\d+) inner=1 .*?pids=([0-9,]+)',text)
-def run(ctl,commands,n=4,off=False,missing=False):
+def run(ctl,commands,n=4,off=False,missing=False,mem_kib=None):
+    e=dict(env,GA_TIME_WORKERS='off' if off else 'auto')
+    if mem_kib is not None:e.update(LD_PRELOAD=str(root/'slow.so'),GA_TEST_MEM_KIB=str(mem_kib))
     p=subprocess.run([str(repo/'opengrads'),'-blu','-d','gxdummy','-h','gxdummy'],
         input=f'open {ctl}\nset threads {n}\nset cachesf 2\nset gxout print\nset prnopts %.17g 32 1\n'+commands+'\nquit\n',
         text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
-        env=dict(env,GA_TIME_WORKERS='off' if off else 'auto'),timeout=180)
+        env=e,timeout=180)
     fatal=r'DEFINE error|DISPLAY error|Time evaluation failed|Syntax Error|Operation Error' if missing else r'Error|ERROR|Time evaluation failed'
     assert p.returncode==0 and not re.search(fatal,p.stdout) and not any(int(v)>0 for v in re.findall(r'<RC> (-?\d+) </RC>',p.stdout)),p.stdout[-3000:]
     for _,pids in groups(p.stdout):
@@ -89,6 +104,17 @@ for ctl in ctls:
         text=run(ctl,commands,n);assert len(groups(text))>=len(expressions),'input times not dispatched'
         compare(parse(text),reference)
     print('Time mean values passed:',ctl.name,flush=True)
+
+# Available-memory estimates include reclaimable cache, but must still bound
+# concurrency and fall back safely when the reported available memory is low.
+reference=parse(run(ctls[0],setup+'d mean(f,t=1,t=320)',1,True))
+limited=run(ctls[0],setup+'d mean(f,t=1,t=320)',16,mem_kib=1024*1024)
+assert groups(limited) and all(1<int(n)<16 for n,_ in groups(limited))
+compare(parse(limited),reference)
+limited=run(ctls[0],setup+'d mean(f,t=1,t=320)',16,mem_kib=128*1024)
+assert not groups(limited),'low-memory execution incorrectly started workers'
+compare(parse(limited),reference)
+print('Time mean memory caps passed: bounded workers and serial fallback',flush=True)
 
 # A 256-time batch followed by 62 times must reuse a larger existing pool.
 text=run(ctls[0],setup+'d mean(f,t=1,t=320)\nd ave(f,t=1,t=320)',128)

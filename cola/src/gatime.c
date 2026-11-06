@@ -57,6 +57,30 @@ struct time_reply { int rc,t; uint64_t size; };
 static char time_executable[TIME_TEXT];
 static int time_child;
 
+/* Linux's free-page count excludes reclaimable file cache. Use the kernel's
+   available-memory estimate so warm input files do not artificially shrink
+   worker pools. Keep the conservative free-page fallback on other hosts. */
+static double time_available_memory(void) {
+#ifdef __linux__
+  FILE *file=fopen("/proc/meminfo","r");char line[256];unsigned long long kib;
+  if(file) {
+    while(fgets(line,sizeof(line),file)) {
+      if(sscanf(line,"MemAvailable: %llu kB",&kib)==1 && kib) {
+        fclose(file);return (double)kib*1024;
+      }
+    }
+    fclose(file);
+  }
+#endif
+#if TIME_POSIX && defined(_SC_AVPHYS_PAGES)
+  {
+    long pages=sysconf(_SC_AVPHYS_PAGES),page=sysconf(_SC_PAGESIZE);
+    if(pages>0 && page>0)return (double)pages*page;
+  }
+#endif
+  return 32.0*1024*1024*1024;
+}
+
 /* Only read-only built-ins and unmodified fields of the default descriptor.
    Defined variables, file qualifiers, plug-ins, strings and unknown syntax
    retain the ordinary evaluator. Never serialize pointers/session objects. */
@@ -292,13 +316,11 @@ void ga_time_prepare_worker(void) {
 }
 
 static int time_workers(struct time_config *c,int nt) {
-  double available=8.0*1024*1024*1024,per;int n=ga_omp_get_threads();const char *v=getenv("GA_TIME_WORKERS");
+  double available=8.0*1024*1024*1024,memory=time_available_memory()/4,per;
+  int n=ga_omp_get_threads();const char *v=getenv("GA_TIME_WORKERS");
   if(time_child || !time_executable[0] || n<2 || nt<(c->reads ? 2 : 32) ||
      (v && (!strcmp(v,"off") || !strcmp(v,"0"))))return 0;
-#ifdef _SC_AVPHYS_PAGES
-  { long pages=sysconf(_SC_AVPHYS_PAGES),page=sysconf(_SC_PAGESIZE);
-    if(pages>0 && page>0 && (double)pages*page/4<available)available=(double)pages*page/4; }
-#endif
+  if(memory<available)available=memory;
   per=32.0*1024*1024+4.0*c->nx*c->ny*(c->z2-c->z1+1)*9;
   /* Include two worst-case dataset caches; all estimates are command-local. */
   per+=2.0*c->cache_bytes;
@@ -445,13 +467,11 @@ gaint ga_time_can_read(struct gafile *file) {
 gadouble ga_time_batch_bytes(struct gafile *file) {
   double bytes=64.0*1024*1024;
   if(ga_time_can_read(file)) {
+    double memory=time_available_memory()/4;
     bytes=8.0*1024*1024*ga_omp_get_threads();
     if(bytes<64.0*1024*1024)bytes=64.0*1024*1024;
     if(bytes>1024.0*1024*1024)bytes=1024.0*1024*1024;
-#if TIME_POSIX && defined(_SC_AVPHYS_PAGES)
-    { long pages=sysconf(_SC_AVPHYS_PAGES),page=sysconf(_SC_PAGESIZE);
-      if(pages>0 && page>0 && bytes>(double)pages*page/4)bytes=(double)pages*page/4; }
-#endif
+    if(bytes>memory)bytes=memory;
   }
   return bytes;
 }
