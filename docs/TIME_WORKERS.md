@@ -68,7 +68,7 @@ remove the cost of transferring and storing full grids.
 ## Built-in function audit
 
 The `rtnprs` registry in `cola/src/gafunc.c` contains 66 built-in names.
-The current time-worker allowlist contains 24 of them. Eligibility depends on
+The current time-worker allowlist contains 26 of them. Eligibility depends on
 the complete expression and command shape; this is not a guarantee that every
 possible argument or dimension combination is parallelized.
 
@@ -77,6 +77,7 @@ possible argument or dimension combination is parallelized.
 | Arithmetic functions | `abs`, `sqrt`, `exp`, `log`, `log10`, `pow`, `mag` |
 | Trigonometry | `sin`, `cos`, `tan`, `asin`, `acos`, `atan2` |
 | Mask/value handling | `maskout`, `const` |
+| Saturation diagnostics | `esat`, `qvsat` |
 | Averages and sums | `ave`, `mean`, `sum`, `sumg`, `aave`, `amean`, `asum`, `atot` |
 | Height integral | `zint` |
 
@@ -87,13 +88,13 @@ those of the existing evaluator. GrADS comparisons return +1/-1; the 0.5
 shift in the MASKOUT example retains the true cells. There is no built-in
 `atan()`; `atan2` is the registered function.
 
-The remaining 42 names are deliberately left on their existing paths.
+The remaining 40 names are deliberately left on their existing paths.
 The categories below describe the additional review needed, not a finding
 that these functions are inherently unsafe or impossible to parallelize.
 
 | Additional review | Names | Main consideration |
 |---|---|---|
-| Branches and pointwise diagnostics | `if`, `skip`, `esat`, `qvsat`, `tvrh2q`, `tvrh2t` | Scalar/axis broadcasts, masks, branch storage, pressure/phase inputs and numerical guards |
+| Branches and pointwise diagnostics | `if`, `skip`, `tvrh2q`, `tvrh2t` | Scalar/axis broadcasts, masks, branch storage and numerical guards |
 | Spatial neighbors | `hdivg`, `hcurl`, `smth9`, `cdiff` | Coordinate metrics, halo reads and boundaries |
 | Additional spatial/statistical reductions | `asumg`, `grarea`, `min`, `max`, `minloc`, `maxloc`, `amin`, `amax`, `aminlocx`, `aminlocy`, `amaxlocx`, `amaxlocy` | Result dimensions, weights and location tie rules |
 | Vertical operations | `vint`, `zslice`, `gint`, `fndlvl` | Full-column dependencies, interpolation and output shape |

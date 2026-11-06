@@ -1342,6 +1342,93 @@ show repeated speedup. Drivers are `expressions_stage8.py` and
 compatibility and build logs are under
 `tmp/acceleration-stages/stage8-expressions/`.
 
+#### Stage 9: QVSAT and ESAT output-time workers
+
+ESAT and QVSAT now participate in the shared output-time expression evaluator.
+This enables concurrent reads, decoding and saturation calculations for native
+HDF5 inputs, both directly and inside supported outer AMEAN/AAVE profiles.
+The existing saturation kernels, formulas, operation order, pressure guards
+and default/explicit phase behavior are unchanged. Workers still use one
+calculation thread each; the 128-worker and memory limits remain unchanged.
+
+The requested expression is evaluated without algebraic changes:
+
+```text
+set x 1
+set y 1
+set z 1 44
+set t 1 256
+define c=qvsat(th*pibar,100000*pow(pibar,1004/287))
+define ev=esat(th*pibar)
+define cm=amean(qvsat(th*pibar,100000*pow(pibar,1004/287)),lon=0,lon=90,lat=-10,lat=10)
+define em=amean(esat(th*pibar),lon=0,lon=90,lat=-10,lat=10)
+```
+
+The AMEAN cases compute saturation at each cell before averaging, rather than
+moving the nonlinear function outside the mean. Default-file native PIBAR
+profiles retain their scalar/axis broadcasts and template-time reads. Defined
+temperature/pressure inputs and unsupported expressions retain their original
+evaluation paths. Single-time kernels keep their existing OpenMP behavior.
+
+TimeExpressions adds cold/warm branches, omitted/explicit auto, numeric and
+grid phases, zero/invalid temperatures and pressures, profile/surface broadcasts,
+the theta/Exner composition, masks and saturation inside AMEAN. All 610901
+finite reference samples match exactly, with identical masks and non-finite
+classifications. Saturation DEFINE/direct DISPLAY PNGs match serial PNGs
+byte-for-byte. Progress, off/iTerm2 mode, Ctrl-C, killed-worker recovery,
+cleanup and preservation of an old DEFINE also pass with saturation included
+in the active expression. The expanded suite passes ASan/UBSan; all fifteen
+expression/saturation/worker/reduction/I/O/progress/graphics regressions pass.
+OpenMP/POSIX-disabled compile checks pass. The optional original-P3 external
+reference remains unavailable; the ordinary independent saturation reference
+and all earlier saturation branches/backends pass.
+
+Usage is documented in [SATURATION.md](SATURATION.md). The function audit in
+[TIME_WORKERS.md](TIME_WORKERS.md) now lists 26 worker-eligible built-ins and
+40 functions retained on their existing paths. Functional/build/sanitizer
+logs are under `tmp/acceleration-stages/stage9-saturation/`.
+
+The production sweep uses the requested X=1, Y=1, Z=1:44, T=1:256 for
+the point profiles. AMEAN retains the same output Z/T environment and reads
+lon=0:90, lat=-10:10 (386 x 88 input cells per level). Each case measures a
+first DEFINE and three repeats in one process at all seven CPU budgets:
+112 timed evaluations. Each DEFINE export, plus direct DISPLAY checks at
+1/16/64/128 CPUs, matches the frozen `115e9ef` one-CPU reference exactly:
+1441792 output positions, matching masks and maximum absolute difference zero.
+All four reference profiles contain 11264 finite values.
+
+Warm repeated-command medians in seconds:
+
+| Case | 1 CPU | 4 | 8 | 16 | 32 | 64 | 128 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| QVSAT point profile | 8.819 | 2.243 | 1.111 | 0.552 | 0.294 | 0.196 | 0.126 |
+| ESAT point profile | 8.316 | 1.997 | 1.052 | 0.525 | 0.284 | 0.192 | 0.137 |
+| AMEAN(QVSAT), regional profile | 33.835 | 8.544 | 4.408 | 2.420 | 1.347 | 0.918 | 0.632 |
+| AMEAN(ESAT), regional profile | 20.661 | 5.033 | 2.599 | 1.442 | 0.837 | 0.558 | 0.380 |
+
+These include reads and calculation with warm OS caches, excluding application
+startup, exports and the separately verified DISPLAY. Per-process worker
+startup remains inside the first-command timer. Repeated 128-worker commands
+are about 54--70x faster than one CPU in this sweep; the first 128-worker
+command takes about 1.26--1.53 s and is slower than the first 64-worker
+command here. Pool reuse and workload size remain important. Actual active
+worker counts and reuse of the same PIDs are verified, including 128 workers.
+
+Single-CPU probe data illustrates why whole-expression workers help: the last
+QVSAT point evaluation spends 7.86 of 8.17 s in H5Dread, whereas the regional
+AMEAN(QVSAT) spends 13.64 of 33.53 s there. The remaining time includes
+calculation, averaging, parsing/allocation and other I/O metadata work.
+These counters are meaningful for the serial process; the parallel probe
+still covers only the parent and must not be interpreted as aggregate pool
+I/O, CPU or memory.
+
+Records, metadata and summary JSON are in
+`tmp/new-machine-baseline/stage9-saturation-production/`, alongside
+`scaling.png`/PDF (first versus repeated latency) and `speedup.png`/PDF.
+The driver is `tmp/new-machine-baseline/saturation_stage9.py`. This is a
+separate T=1:256 saturation sweep, rather than a rerun of the earlier
+T=2145:2400 arithmetic workload.
+
 ### Mixed synthetic workload
 
 Run the supplied benchmark after building `grads` and `libgxdummy.la`:

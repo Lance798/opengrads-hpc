@@ -88,7 +88,8 @@ static double time_available_memory(void) {
 static int time_expression(char *expr, struct gastat *pst) {
   static const char *functions[]={"ave","mean","sum","sumg","aave","amean",
     "asum","atot","maskout","zint","abs","sqrt","exp","log","log10",
-    "sin","cos","tan","asin","acos","atan2","pow","mag","const",NULL};
+    "sin","cos","tan","asin","acos","atan2","pow","mag","const",
+    "esat","qvsat",NULL};
   static const char *words[]={"x","y","z","t","e","lon","lat","lev","ens","auto","global",NULL};
   char name[32],*p=expr,*end; int n,i,field=0; struct gavar *v;
   while (*p) {

@@ -30,6 +30,38 @@ grids. Pressure conversion from Exner must use the simulation's own reference
 pressure and exponent; `qvsat` accepts pressure itself. Density and the actual
 water-vapor mixing ratio are not required inputs.
 
+## Parallel output times
+
+Native fields of the default HDF5 descriptor can use the isolated time-worker
+pool for both functions, including arithmetic and native Z-profile broadcasts.
+Using the requested RLL theta/Exner conversion:
+
+```text
+set threads 64
+set x 1
+set y 1
+set z 1 44
+set t 1 256
+define c=qvsat(th*pibar,100000*pow(pibar,1004/287))
+define ev=esat(th*pibar)
+```
+
+The same evaluator can compute saturation at every cell before an area mean:
+
+```text
+define cm=amean(qvsat(th*pibar,100000*pow(pibar,1004/287)),lon=0,lon=90,lat=-10,lat=10)
+define em=amean(esat(th*pibar),lon=0,lon=90,lat=-10,lat=10)
+```
+
+Workers preserve the formulas and default/explicit phase behavior. They do
+not move saturation outside the area mean. Direct T/Z-T DISPLAY at fixed
+X/Y also uses the pool for these expressions. Other formats and single-time
+calculations keep their existing readers and in-memory OpenMP kernels.
+Defined inputs, such as previously defined temperature/pressure arrays,
+retain their existing evaluator; keep native inputs in the complete expression
+to use output-time workers. See [TIME_WORKERS.md](TIME_WORKERS.md) for the
+minimum time count, CPU/memory limits and other fallback conditions.
+
 ## Error help and renamed functions
 
 Calling a function without its required arguments prints a short description
