@@ -104,7 +104,9 @@ def expected(t,kind='f',reverse=False,bottom=0,top=1300,profile=False):
                     v=1000*t+100*(zz+1)+10*yy+x+(0.125 if kind=='g' else 0)
                     if yy==0 and (x<3 or (x==3 and zz==1)):continue
                     if kind=='f' and zz==0 and yy==2 and x==4:continue
-                total+=v*(rho[zz] if profile else 1)*weight
+                factor=rho[zz] if profile is True else profile[zz] if profile else 1
+                if not math.isfinite(factor) or factor==-9999:continue
+                total+=v*factor*weight
             values.append(total)
     return values
 
@@ -129,10 +131,11 @@ for label,dataset,dtype in formats:
         ctl.write_text('dset ^'+dataset+'\n'+('dtype '+dtype+'\n' if dtype else '')+
                        ('options '+options+'\n' if options else '')+'undef -9999\n'+
                        'xdef 16 linear 10 0.1\nydef 8 linear 20 0.2\nzdef 4 levels 50 150 400 1000\n'+
-                       'tdef 2 linear 00z01jan2000 1hr\nvars '+('5' if hasrho else '4')+'\n'+
+                       'tdef 2 linear 00z01jan2000 1hr\nvars '+('7' if dtype=='hdf5_grid' else '5' if hasrho else '4')+'\n'+
                        'f 4 '+native+' Float field\ng 4 '+native+' Double field\n'+
                        'kmap 0 '+sdims+' Bound map\nsurface 0 '+sdims+' Surface field\n'+
-                       ('rho 4 z Density profile\n' if hasrho else '')+'endvars\n')
+                       ('rho 4 z Density profile\n' if hasrho else '')+
+                       ('rho_missing 4 z Missing density\nrho_invalid 4 z Invalid density\n' if dtype=='hdf5_grid' else '')+'endvars\n')
         prefix='open '+str(ctl)+'\nset gxout print\nset prnopts %.17g 16 1\n'
         cases=[('f','f',0,1300),('f+0','f',0,1300),('g','g',0,1300),('1','one',0,1300),
                ('lev','lev',0,1300),('surface','surface',0,1300),
@@ -143,12 +146,17 @@ for label,dataset,dtype in formats:
                ('f,kmap*100,100','f','map',100)]
         if hasrho:cases += [('rho','rho',0,1300),('f*rho','f',0,1300),('rho*f','f',0,1300),
                            ('(f*rho)+0','f',0,1300),('g*rho,kmap*100,surface','g','map','surface')]
+        if dtype=='hdf5_grid':cases += [('f*rho_missing','f',0,1300),('(f*rho_missing)+0','f',0,1300),
+                                       ('f*rho_invalid','f',0,1300),('(f*rho_invalid)+0','f',0,1300)]
         commands='';wanted=[]
         for t in range(2):
             commands+='set t '+str(t+1)+'\n'
             for expr,kind,bottom,top in cases:
                 commands+='d zint('+expr+')\n'
-                wanted.append(expected(t,kind,reverse,bottom,top,profile='*rho' in expr or 'rho*' in expr))
+                profile=(1.2,-9999,float('nan'),0.9) if 'rho_missing' in expr else \
+                        (float('nan'),float('inf'),-9999,-float('inf')) if 'rho_invalid' in expr else \
+                        '*rho' in expr or 'rho*' in expr
+                wanted.append(expected(t,kind,reverse,bottom,top,profile=profile))
             commands+='define column=zint(f)\nd column\nundefine column\n'
             wanted.append(expected(t,'f',reverse))
         out=run(prefix+commands);actual=grids(out)
@@ -159,7 +167,9 @@ for label,dataset,dtype in formats:
                 print('Failing expression:',cases[index%(len(cases)+1)] if index%(len(cases)+1)<len(cases) else 'define')
                 raise
         if dtype=='bp5':assert 'ZINT I/O: BP5 blocks=4' in out,out
-        if dtype=='hdf5_grid':assert 'ZINT I/O: HDF5 chunks=' in out,out
+        if dtype=='hdf5_grid':
+            assert 'ZINT I/O: HDF5 chunks=' in out,out
+            assert 'ZINT I/O: bulk HDF5 density profile' in out,out
 
         # Fixed lines/points, varying Z removal, defined cubes, and file qualifiers.
         out=run(prefix+'set y 4\nd zint(f)\nset z 1 4\nd zint(f)\nset z 1\n'+
