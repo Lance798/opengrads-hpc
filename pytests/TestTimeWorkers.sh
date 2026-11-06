@@ -74,6 +74,10 @@ cases=[('ave(f,x=1,x=256)',profile),
        ('aave(f,x=1.25,x=255.6,y=2.4,y=250.7)',profile),
        ('aave(maskout(f,(f>4500)-0.5),x=1,x=256,y=1,y=256)',profile),
        ('aave(surface,x=1,x=256,y=1,y=256)',profile),
+       ('amean(f,x=1,x=256,y=1,y=256)',profile),
+       ('amean(f,x=1.25,x=255.6,y=2.4,y=250.7)',profile),
+       ('amean(maskout(f,(f>4500)-0.5),x=1,x=256,y=1,y=256)',profile),
+       ('amean(surface,x=1,x=256,y=1,y=256)',profile),
        ('zint(f*rho)','set x 1 8\nset y 1 8\nset z 1\nset t 1 32\n')]
 for ctl in ctls:
     for expression,setup in cases:
@@ -82,10 +86,17 @@ for ctl in ctls:
         for n in (2,4,8):
             text=run(ctl,command,n);assert groups(text),(ctl,expression,'no workers')
             compare(parse(text),reference)
-        if expression.startswith(('ave(','aave(')):
+        if expression.startswith(('ave(','aave(','amean(')):
             direct=run(ctl,setup+'d '+expression)
             compare(parse(direct),reference)
     print('Time workers values/display passed:',ctl.name,flush=True)
+
+# AMEAN also displays Z alone (serial assembly), and T alone (time workers).
+for setup in ('set x 1\nset y 1\nset z 1 4\nset t 3\n',
+              'set x 1\nset y 1\nset z 2\nset t 1 32\n'):
+    expr='amean(f,x=1,x=256,y=1,y=256)'
+    reference=parse(run(ctls[0],setup+'define answer='+expr+'\nd answer',1,True))
+    compare(parse(run(ctls[0],setup+'d '+expr)),reference)
 
 # Missing middle template time retains each function's established mask rules.
 piece=root/'slice16.h5';saved=root/'slice16.saved';piece.rename(saved)
@@ -113,6 +124,10 @@ a=root/'defined.png';b=root/'direct.png'
 run(ctls[0],profile+'define answer='+cases[1][0]+'\nset gxout shaded\nd answer\nprintim '+str(a)+
     ' x640 y480\nclear canvas\nd '+cases[1][0]+'\nprintim '+str(b)+' x640 y480\n')
 assert a.read_bytes()==b.read_bytes(),'DEFINE/DISPLAY graphics differ'
+expr='amean(f,x=1,x=256,y=1,y=256)'
+run(ctls[0],profile+'define answer='+expr+'\nset gxout shaded\nd answer\nprintim '+str(a)+
+    ' x640 y480\nclear canvas\nd '+expr+'\nprintim '+str(b)+' x640 y480\n')
+assert a.read_bytes()==b.read_bytes(),'AMEAN DEFINE/DISPLAY graphics differ'
 
 heavy='aave('+ '+'.join(['sin(f)']*32)+',x=1,x=256,y=1,y=256)'
 def terminal(cancel=False,fail=False,off=False):

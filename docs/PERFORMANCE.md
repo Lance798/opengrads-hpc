@@ -940,6 +940,21 @@ build flags. Logs are in `tmp/acceleration-stages/stage2/asan-test-static.log`.
 
 #### Stage 3: ordered input-time reads for mean and ave
 
+Benchmark scope clarification: compound operations should use the requested
+spatial-first `ave(aave(...),t=...)` and `mean(amean(...),t=...)`, also with
+`maskout(qc,(qc>1e-5)-0.5)` inside the spatial average. The reverse-order
+`aave(mean(...))` measurements below are an additional diagnostic, not a
+substitute for those operations or evidence of their scaling. When valid
+spatial coverage changes with time, the two orders can have different
+denominators and results; the optimizer must preserve the expression's order.
+An additional benchmark driver is
+`tmp/new-machine-baseline/spatial_time_stage4.py`, with the matching
+`ave/aave` and `mean/amean` pairs. These compound spatial-first reductions
+have not yet completed a production scaling sweep. The user subsequently
+deferred these infrequently used compound operations; they are not the next
+optimization target. Keep the existing diagnostics and return priority to
+common time-series profiles, conditional area means, ZINT and DISPLAY.
+
 The same process pool now serves the bounded HDF5 reader used by time
 reductions. Native file variables and supported two-variable sums can read
 and decompress independent input times concurrently even when there is only
@@ -1016,6 +1031,40 @@ operations can still request 128 threads. A subsequent stage should cap
 calculation teams by actual work and useful tiles, then profile bulk result
 transfer before changing accumulation semantics. These limits are separate
 from the strong output-time profile scaling in Stage 2.
+
+#### Stage 4: standalone AMEAN workers and DISPLAY
+
+Standalone `amean(...)` now shares the isolated output-time workers and
+transient Z/T DISPLAY assembly with `aave`. Its latitude weights remain the
+existing linear-coordinate weights; this does not replace AMEAN with an
+area-weighted AAVE. Defined inputs and unsupported expressions retain their
+ordinary evaluator. The deferred compound time/spatial reductions above
+remain outside this stage.
+
+The expanded TimeWorkers regression includes fractional bounds, conditional
+masks, surface broadcasts, Z-only and T-only display, and identical AMEAN
+DEFINE/DISPLAY PNGs. It passes regular/template/reversed HDF5, progress,
+cancellation, killed-worker recovery and cleanup. Its 34528 finite samples
+agree within the established tolerance (maximum absolute difference
+`1.78e-11` in the single-time parallel spatial reduction). ASan/UBSan and
+TimeMeanWorkers, OpenMP, ReductionIO, BinaryHalo, ZInt and AveSection pass.
+
+The 44-level, 256-time RLL sweep compares 315392 DEFINE/DISPLAY values with
+the frozen Stage 3 executable's serial AMEAN reference; all values and masks
+match exactly. Warm-cache times in seconds:
+
+| CPU budget | 1 | 4 | 8 | 16 | 32 | 64 | 128 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| DEFINE, fresh pool, median of 3 | 16.279 | 4.095 | 2.166 | 1.248 | 0.918 | 0.868 | 1.245 |
+| Direct DISPLAY, reused pool, median of 3 | 16.150 | 3.992 | 2.073 | 1.110 | 0.640 | 0.433 | 0.286 |
+
+First-command startup is measured separately in the figure. DISPLAY timers
+evaluate statistics; rendering/PNG correctness is verified separately.
+Artifacts are `tmp/new-machine-baseline/stage4-amean-production/scaling.png`
+and PDF, summary/records JSON and logs. The discarded work-aware-team and
+passive-wait experiments are retained under the earlier `stage4-*` diagnostic
+directories; those changes did not improve latency and were reverted before
+this AMEAN stage.
 
 ### Mixed synthetic workload
 

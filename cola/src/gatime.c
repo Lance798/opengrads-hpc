@@ -66,7 +66,8 @@ static int time_expression(char *expr, struct gastat *pst) {
     "sin","cos","tan","asin","acos","atan","atan2","pow","mag","const",NULL};
   static const char *words[]={"x","y","z","t","e","lon","lat","lev","ens","auto","global",NULL};
   char name[32],*p=expr,*end; int n,i,field=0; struct gavar *v;
-  if (strncmp(expr,"ave(",4) && strncmp(expr,"mean(",5) && strncmp(expr,"aave(",5) && strncmp(expr,"zint(",5)) return 0;
+  if (strncmp(expr,"ave(",4) && strncmp(expr,"mean(",5) && strncmp(expr,"aave(",5) &&
+      strncmp(expr,"amean(",6) && strncmp(expr,"zint(",5)) return 0;
   while (*p) {
     if (isdigit((unsigned char)*p) || (*p=='.' && isdigit((unsigned char)p[1]))) {
       (void)strtod(p,&end); if(end==p)return 0; p=end; continue;
@@ -542,7 +543,7 @@ gaint ga_time_display(char *expr,struct gastat *pst,struct gacmn *pcm) {
   int z1,z2,t1,t2,e,nt,nz,k,rc,lv;size_t size;
   if(!time_supported(expr,pst) || pcm->vdim[0] || pcm->vdim[1] || pcm->vdim[4] ||
      (pst->idim!=2 && pst->idim!=3) || (pst->jdim!=-1 && pst->jdim!=3))return -1;
-  if(pst->idim==2 && pst->jdim<0 && strncmp(expr,"aave(",5))return -1;
+  if(pst->idim==2 && pst->jdim<0 && strncmp(expr,"aave(",5) && strncmp(expr,"amean(",6))return -1;
   z1=(int)floor(f->ab2gr[2](f->abvals[2],pst->dmin[2])+0.001);
   z2=(int)ceil(f->ab2gr[2](f->abvals[2],pst->dmax[2])-0.001);
   if(!pcm->vdim[2])z1=z2=(int)round(f->ab2gr[2](f->abvals[2],pst->dmin[2]));
