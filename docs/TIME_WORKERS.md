@@ -29,8 +29,9 @@ display sin(u/10)+cos(v/10)
 ```
 
 X/Y time animations retain their existing execution path. A single output
-time cannot use output-time workers; existing in-memory OpenMP and native
-reader optimizations still apply. Worker startup can dominate short commands;
+time cannot use output-time workers. A time reduction can instead dispatch
+its input times, as described below; existing in-memory OpenMP and native
+reader optimizations also apply. Worker startup can dominate short commands;
 the pool is reused by subsequent eligible commands until reset, close or a
 CPU-budget change. `GA_TIME_TRACE=1` reports the actual workers and their PIDs;
 `GA_TIME_WORKERS=off` disables the pool.
@@ -79,6 +80,54 @@ array. A global 1536 x 384 plane over 256 times requires about 1.27 GiB for
 that array alone, using double values and byte masks. More workers do not
 remove the cost of transferring and storing full grids.
 
+## SUM and input-time expression workers
+
+A time reduction can use workers even when its output has only one time.
+SUM now evaluates supported expressions independently at their input times,
+then folds grids in ascending time order using the original weights, missing
+masks and accumulator. This works in DEFINE and direct DISPLAY. The shared
+input producer also benefits AVE, MEAN, SUMG, MIN, MAX, MINLOC and MAXLOC;
+it does not add those last four names to the whole-expression allowlist.
+
+For a single XY map summed over 256 input times:
+
+```text
+set threads 64
+set lon 0 360
+set lat -20 20
+set z 1
+set t 1
+define c=sum(qvsat(th*pibar,100000*pow(pibar,1004/287)),t=1,t=256)
+display c
+display sum(u*v,t=1,t=256)
+```
+
+The expression is general: supported arithmetic, trigonometry, masks and
+saturation functions use the same mechanism. Varying input Z profiles,
+absolute spatial reductions and cyclic longitude retain the ordinary evaluator
+inside each worker. Keeping the outer T fixed produces one time-summed map;
+`set t 1 256` instead requests repeated output-time evaluations of that sum.
+
+The first two input times retain the original initialization. Eligible HDF5
+reductions with at least 32 requested input times then use batches of up to
+256 grids, bounded by the existing 64 MiB--1 GiB target and available memory.
+The active worker count also depends on batch length and workspace estimates;
+`set threads 128` may therefore use fewer than 128 workers for large maps.
+Pool workers each use one calculation thread. There is no adaptive switch
+between worker/thread combinations during the command.
+
+Defined fields, non-default-file/dimension-qualified inputs, unsupported
+functions, nested explicit time bounds, relative spatial bounds and varying
+ensemble axes keep their earlier paths. Short or memory-limited batches fall
+back to ordinary evaluation. `GA_TIME_TRACE=1` additionally prints
+`Time input expression: ...` when whole input expressions are dispatched.
+Progress remains owned by the parent; cancellation or failed workers discard
+incomplete results and preserve an existing DEFINE.
+
+Large XY results must transfer every per-time grid to the parent and fold them
+there. Scaling can saturate well before 128 workers; output profiles that
+reduce spatially inside each worker return far less data.
+
 ## Built-in function audit
 
 The `rtnprs` registry in `cola/src/gafunc.c` contains 66 built-in names.
@@ -102,7 +151,9 @@ those of the existing evaluator. GrADS comparisons return +1/-1; the 0.5
 shift in the MASKOUT example retains the true cells. There is no built-in
 `atan()`; `atan2` is the registered function.
 
-The remaining 40 names are deliberately left on their existing paths.
+The remaining 40 names are not accepted inside worker expressions. Outer
+MIN/MAX/MINLOC/MAXLOC can still use the shared input-time producer described
+above; their existing accumulator and result handling stay in the parent.
 The categories below describe the additional review needed, not a finding
 that these functions are inherently unsafe or impossible to parallelize.
 
@@ -129,6 +180,12 @@ broadcasts, arithmetic, trigonometry, masks, division by zero, invalid powers,
 out-of-domain inverse trigonometry and NaN/Inf classifications. It also
 checks pool reuse, fallback, identical PNGs, progress, cancellation,
 killed-worker recovery and preservation of an old DEFINE after failure.
+`TestTimeExpressionReductions.sh` additionally compares whole input expressions,
+all eight time-reduction selectors, fractional weights, increments, masks,
+nonlinear diagnostics, varying Z, spatial reductions and cyclic longitude.
+It checks worker reuse, memory caps, packed/template/reverse data, numerical
+and graphics agreement, progress, cancellation and killed-worker recovery.
+
 The earlier TimeWorkers and TimeMeanWorkers suites continue to exercise
 the reduction-specific paths. Performance results are recorded separately
 in [PERFORMANCE.md](PERFORMANCE.md).
@@ -137,13 +194,15 @@ The production build and combined regression command used for this stage:
 
 ```bash
 ./dev build
-./dev test TimeExpressions OpenMP ReductionIO BinaryHalo H5Decode ZInt \
+./dev test TimeExpressionReductions TimeExpressions OpenMP ReductionIO BinaryHalo H5Decode ZInt \
   TimeWorkers TimeMeanWorkers MaskThreshold AveSection Progress Undo \
   DefineNames Saturation ClearCanvas
 ```
 
-Compound expressions that reduce a displayed axis need their own shape
-plan and remain deferred. For a vertical sum producing a time series, fix
+Compound expressions that reduce a displayed axis retain their native output
+shape; constructing a repeated output-time grid for them remains deferred.
+Supported inner time reductions may use input-time workers without changing
+that shape. For a vertical sum producing a time series, fix
 Z outside the expression and specify the integration range in the function:
 
 ```text

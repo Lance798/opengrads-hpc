@@ -181,7 +181,11 @@ for expr in ('atot(f,x=1,x=8,y=1,y=6)',
 # Reducing a DISPLAY axis keeps the native shape (not a repeated Z/T grid).
 for expr in ('2*sum(f,z=1,z=4)','pow(mean(f,z=1,z=4),2)',
              'pow(mean(f,t=1,t=32),2)'):
-    text=run(ctls[0],zt+'d '+expr+'\n');assert not groups(text),expr
+    text=run(ctls[0],zt+'d '+expr+'\n')
+    if 't=1' in expr:
+        assert 'Time input expression:' in text,expr
+        assert 'levels=4' not in text,'input sum became a repeated output profile'
+    else:assert not groups(text),expr
     compare(parse(text),parse(run(ctls[0],zt+'d '+expr+'\n',1,True)))
 
 # The same pool serves different expressions, DEFINE and direct DISPLAY.

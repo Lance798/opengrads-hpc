@@ -289,6 +289,8 @@ void gaiomg () {
 }
 
 /* Routine to change the value of the cache scale factor */
+long getcachesf (void) { return cachesf; }
+
 void setcachesf (long sf) {
   cachesf = sf;
 }

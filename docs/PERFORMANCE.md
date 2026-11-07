@@ -1450,6 +1450,78 @@ is a correctness check, not a controlled before/after performance comparison.
 Logs and exported references are under
 `tmp/acceleration-stages/stage10-asum/`.
 
+### Whole-expression input-time SUM workers (stage 11)
+
+Time SUM now evaluates supported HDF5 expressions across isolated input-time
+workers in both DEFINE and DISPLAY. The existing native-variable batch reader
+remains the first choice where applicable; general expressions and cyclic
+longitude requests can use the complete evaluator in each worker. The parent
+retains the first two grids and folds subsequent grids in original time order,
+including fractional weights, masks and min/max tie behavior. The common
+producer also benefits AVE, MEAN, SUMG, MIN, MAX, MINLOC and MAXLOC.
+
+Input batches retain the 256-time limit, available-memory budgets and per-grid
+128 MiB ceiling. Spatial Z variation is preserved inside each time grid.
+Nested explicit time bounds, relative spatial bounds, varying ensemble axes,
+defined fields and unsupported syntax keep their earlier evaluators. A failed
+worker aborts the result; it does not silently retry an incomplete sum.
+
+`TestTimeExpressionReductions.sh` checks 110299 finite values with maximum
+absolute difference zero, alongside identical masks/non-finite classifications.
+Coverage includes all eight selectors, templates, reversed axes, packed fields,
+missing files, time increments, fractional weights, cyclic seams, absolute
+spatial reductions, varying input Z, saturation, masks and native fallbacks.
+Serial/worker DEFINE/direct DISPLAY PNGs match byte-for-byte. Progress,
+iTerm2/off mode, Ctrl-C, killed-worker recovery, pool reuse/cleanup and an old
+DEFINE surviving cancellation/failure also pass. The suite passes ASan/UBSan;
+OpenMP/POSIX-disabled compile checks pass. Logs are under
+`tmp/acceleration-stages/stage11-sum/`.
+
+The existing fifteen regression suites also pass. An initial TimeExpressions
+expectation was updated because an inner time reduction can now start input
+workers while retaining its native output shape. Undo's first PNG comparison
+straddled a minute boundary (its plots include a live minute label); its repeat,
+including byte-identical rendering checks, passed. The new SUM PNG comparisons
+explicitly disable that changing annotation.
+
+The production sweep uses the requested descriptor, outer T=1, Z=1,
+lon=0:360 and lat=-20:20, with SUM input T=1:256. This cyclic request retains
+the native 1538 x 172 result, including boundary cells. It measures the first
+DEFINE plus three repeats and one reused direct DISPLAY (`gxout stat`) at
+1/4/8/16/32/64/128 CPU budgets: 70 timed evaluations. The final DEFINE export
+and an additional printed DISPLAY per configuration match the frozen `0b23bcd`
+one-CPU evaluator exactly: 7407008 finite positions, identical masks and maximum
+absolute difference zero. Exports and ASCII verification are outside timers.
+
+Warm repeated DEFINE medians in seconds:
+
+| Input expression to time SUM | 1 CPU | 4 | 8 | 16 | 32 | 64 | 128 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `u*v` | 3.591 | 1.078 | 0.688 | 0.444 | 0.361 | 0.464 | 0.479 |
+| `qvsat(th*pibar,100000*pow(pibar,1004/287))` | 4.598 | 1.312 | 0.813 | 0.505 | 0.398 | 0.462 | 0.478 |
+
+All seven budgets are verified from actual worker traces, including 128 active
+workers. In this workload 32 workers give the fastest repeated evaluation
+(about 9.9x and 11.5x versus one CPU). Reused DISPLAY takes 0.360/0.382 s at
+32 workers and follows a similar scaling curve. This DISPLAY timing measures
+calculation/statistical output; separate PNG checks validate graphics and are
+not a contour-rendering benchmark. The fastest first-command configuration
+is 16 workers here; first 128-worker commands take about 1.48--1.51 s.
+These are warm-cache measurements on this machine, not the old Derecho record.
+The machine has 104 physical cores / 208 logical CPUs, so 128 also uses SMT.
+
+More workers do not guarantee lower latency for full-map time reductions.
+Each input grid still travels to the parent for an ordered fold: the 254 times
+after initialization transfer about 577 MiB of values/masks in this case.
+Transfer, buffer/fold bandwidth, worker startup and memory limits are the next
+places to profile before attempting further 64/128-worker optimization. This
+stage preserves accumulation order rather than merging worker partial sums.
+
+The reproducible driver is `tmp/new-machine-baseline/sum_stage11.py`.
+Metadata, reference arrays, command logs, JSON results and
+`scaling.png`/PDF and `speedup.png`/PDF are in
+`tmp/new-machine-baseline/stage11-sum-production/`.
+
 ### Mixed synthetic workload
 
 Run the supplied benchmark after building `grads` and `libgxdummy.la`:

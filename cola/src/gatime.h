@@ -14,6 +14,9 @@ gaint ga_time_worker(struct gacmn *, int);
 gaint ga_time_define(char *, struct gacmn *, gaint, gaint, gaint, gaint,
                      gaint, struct gagrid *, gadouble *, char *, gadouble);
 gaint ga_time_display(char *, struct gastat *, struct gacmn *);
+gaint ga_time_can_evaluate(char *, struct gastat *);
+gaint ga_time_evaluatesteps(char *, struct gastat *, struct gagrid *, gaint, gaint,
+                            gaint, gadouble *, char *);
 gaint ga_time_can_read(struct gafile *);
 gadouble ga_time_batch_bytes(struct gafile *);
 gaint ga_time_readsteps(struct gagrid *, gaint, gaint, gaint,

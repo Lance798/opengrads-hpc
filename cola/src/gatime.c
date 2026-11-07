@@ -178,6 +178,28 @@ static int time_series(struct time_config *c, struct gastat *model,
   return 0;
 }
 
+/* Input reductions evaluate the whole spatial grid at each time. Unlike
+   output profiles, varying Z belongs to this grid and must not be collapsed. */
+static int time_input_grid(struct time_config *c, struct gastat *model,
+                           struct gagrid **shape, int t, double *values, char *mask) {
+  struct gastat sample=*model;struct gagrid *g;size_t j,size=(size_t)c->nx*c->ny;
+  sample.result.pgr=NULL;
+  gr2t(model->pfid->grvals[3],t,&sample.tmin);sample.tmax=sample.tmin;
+  if(gaexpr(c->expression,&sample))return 1;
+  if(sample.type!=1) { gafree(&sample);return 1; }
+  g=sample.result.pgr;
+  if(g->idim!=c->ri || g->jdim!=c->rj || g->isiz!=c->nx || g->jsiz!=c->ny ||
+     (c->ri>=0 && (g->dimmin[c->ri]!=c->lo[c->ri] || g->dimmax[c->ri]!=c->hi[c->ri])) ||
+     (c->rj>=0 && (g->dimmin[c->rj]!=c->lo[c->rj] || g->dimmax[c->rj]!=c->hi[c->rj])) ||
+     (*shape && ((c->ri>=0 && gagchk(g,*shape,c->ri)) ||
+                 (c->rj>=0 && gagchk(g,*shape,c->rj))))) {
+    gagfre(g);return 1;
+  }
+  for(j=0;j<size;j++) { mask[j]=g->umask[j];values[j]=mask[j] ? g->grid[j] : c->undef; }
+  if(*shape)gagfre(g);else *shape=g;
+  return gaqsig() ? 1 : 0;
+}
+
 #if TIME_POSIX
 struct time_slot { pid_t pid; int fd,t; size_t received; struct time_reply reply; };
 static struct time_slot slots[TIME_MAX_WORKERS];
@@ -343,6 +365,11 @@ static int time_parallel(struct time_config *c,int t1,int t2,int incr,double *va
     for(i=0;i<n && offset<sizeof(trace);i++)offset+=(size_t)snprintf(trace+offset,sizeof(trace)-offset,"%s%ld",i ? "," : "",(long)slots[i].pid);
     if(offset<sizeof(trace)-1)strcat(trace,"\n");
     gaprnt(2,trace);
+    if(c->reads==2) {
+      snprintf(trace,sizeof(trace),"Time input expression: first=%d times=%d increment=%d grid=%dx%d axes=%d,%d\n",
+               t1,nt,incr,c->nx,c->ny,c->ri,c->rj);
+      gaprnt(2,trace);
+    }
   }
   for(i=0;i<n;i++) {
     int flags=fcntl(slots[i].fd,F_GETFL);fcntl(slots[i].fd,F_SETFL,flags&~O_NONBLOCK);
@@ -429,7 +456,9 @@ gaint ga_time_worker(struct gacmn *pcm,int fd) {
     } else if(operation==TIME_JOB && values && mask) {
       job.operation=operation;if(time_read(fd,&job.t,sizeof(job.t)))break;
       pcm->sig=0;
-      reply.rc=time_series(&c,&model,&shape,job.t,values,mask);reply.t=job.t;reply.size=count;
+      reply.rc=c.reads==2 ? time_input_grid(&c,&model,&shape,job.t,values,mask) :
+                           time_series(&c,&model,&shape,job.t,values,mask);
+      reply.t=job.t;reply.size=count;
       if(time_write(fd,&reply,sizeof(reply)))break;
       if(reply.rc)break;
       if(time_write(fd,values,count*sizeof(*values)) || time_write(fd,mask,count))break;
@@ -511,6 +540,54 @@ gaint ga_time_readsteps(struct gagrid *grid,gaint t0,gaint n,gaint incr,
   return -1;
 #endif
   snprintf(c.expression,sizeof(c.expression),"%s",grid->pvar->abbrv);
+  return time_parallel(&c,t0,t0+(n-1)*incr,incr,values,mask);
+}
+
+/* Relative spatial bounds can mutate the evaluator environment between
+   input times. Nested time bounds also retain the serial evaluator. */
+gaint ga_time_can_evaluate(char *expr,struct gastat *pst) {
+  char *p=expr,name[8];int n;
+  if(!ga_time_can_read(pst->pfid) || !time_supported(expr,pst) ||
+     pst->idim>2 || pst->jdim>2)return 0;
+  while((p=strchr(p,','))) {
+    p++;n=0;
+    while(isalpha((unsigned char)*p) && n<7)name[n++]=*p++;
+    name[n]=0;
+    if((!strcmp(name,"t") && (*p=='=' || *p=='+' || *p=='-')) ||
+       ((!strcmp(name,"x") || !strcmp(name,"y") || !strcmp(name,"z") ||
+         !strcmp(name,"e") || !strcmp(name,"lon") || !strcmp(name,"lat") ||
+         !strcmp(name,"lev") || !strcmp(name,"ens")) && (*p=='+' || *p=='-')))return 0;
+  }
+  return 1;
+}
+
+gaint ga_time_evaluatesteps(char *expr,struct gastat *pst,struct gagrid *shape,
+                            gaint t0,gaint n,gaint incr,gadouble *values,char *mask) {
+  struct time_config c;struct gafile *f=pst->pfid;int d;long cachesf=getcachesf();
+  if(!ga_time_can_evaluate(expr,pst) || n<2 || incr<1 || t0<1 || t0>f->dnum[3] ||
+     (n-1)>(f->dnum[3]-t0)/incr || shape->idim>2 || shape->jdim>2 ||
+     shape->isiz<1 || shape->jsiz<1 || cachesf<0 || cachesf>INT_MAX ||
+     (double)shape->isiz*shape->jsiz>128.0*1024*1024/9)return -1;
+  memset(&c,0,sizeof(c));c.operation=TIME_CONFIG;c.reads=2;
+  c.idim=pst->idim;c.jdim=pst->jdim;c.ri=shape->idim;c.rj=shape->jdim;
+  c.nx=shape->isiz;c.ny=shape->jsiz;c.undef=shape->undef;
+  c.z1=c.z2=1;c.e=1;c.cachesf=(int)cachesf;c.cache_bytes=(double)cachesf*f->cachesize;
+  for(d=0;d<5;d++) {
+    c.lo[d]=shape->dimmin[d];c.hi[d]=shape->dimmax[d];
+    c.dmin[d]=pst->dmin[d];c.dmax[d]=pst->dmax[d];
+  }
+#if TIME_POSIX
+  if(f->dnam[0]=='/')snprintf(c.path,sizeof(c.path),"%s",f->dnam);
+  else {
+    char cwd[TIME_TEXT];int length;
+    if(!getcwd(cwd,sizeof(cwd)))return -1;
+    length=snprintf(c.path,sizeof(c.path),"%s/%s",cwd,f->dnam);
+    if(length<0 || length>=(int)sizeof(c.path))return -1;
+  }
+#else
+  return -1;
+#endif
+  snprintf(c.expression,sizeof(c.expression),"%s",expr);
   return time_parallel(&c,t0,t0+(n-1)*incr,incr,values,mask);
 }
 
