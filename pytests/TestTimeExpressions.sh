@@ -167,12 +167,12 @@ for expr in ('2*sum(f,z=1,z=4)','pow(mean(f,z=1,z=4),2)',
 # Additional allowed outer area reductions use the same complete evaluator.
 for fn in ('aave','amean','asum','atot'):
     expr=fn+'(f,x=1,x=8,y=1,y=6)'
-    command=zt+'define answer='+expr+'\nd answer\n'+('d '+expr+'\n' if fn in ('aave','amean') else '')
-    text=run(ctls[0],command);assert len(groups(text))==(2 if fn in ('aave','amean') else 1),expr
+    command=zt+'define answer='+expr+'\nd answer\n'+('d '+expr+'\n' if fn in ('aave','amean','asum') else '')
+    text=run(ctls[0],command);assert len(groups(text))==(2 if fn in ('aave','amean','asum') else 1),expr
     compare(parse(text),parse(run(ctls[0],command,1,True)))
 
 # Unsupported native DISPLAY environments must not become valid only with workers.
-for expr in ('asum(f,x=1,x=8,y=1,y=6)','atot(f,x=1,x=8,y=1,y=6)',
+for expr in ('atot(f,x=1,x=8,y=1,y=6)',
              'sin(aave(f,x=1,x=8,y=1,y=6))','2*zint(f)'):
     text=run(ctls[0],zt.replace('set z 1 4','set z 1')+'d '+expr+'\n',error=True)
     assert not groups(text),expr

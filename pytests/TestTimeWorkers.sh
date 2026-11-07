@@ -78,6 +78,11 @@ cases=[('ave(f,x=1,x=256)',profile),
        ('amean(f,x=1.25,x=255.6,y=2.4,y=250.7)',profile),
        ('amean(maskout(f,(f>4500)-0.5),x=1,x=256,y=1,y=256)',profile),
        ('amean(surface,x=1,x=256,y=1,y=256)',profile),
+       ('asum(f,x=1,x=256,y=1,y=256)',profile),
+       ('asum(f,x=1.25,x=255.6,y=2.4,y=250.7)',profile),
+       ('asum(maskout(f,(f>4500)-0.5),x=1,x=256,y=1,y=256)',profile),
+       ('asum(surface,x=1,x=256,y=1,y=256)',profile),
+       ('asum(qvsat(150+f/200,100000*rho),x=1,x=16,y=1,y=12)',profile),
        ('zint(f*rho)','set x 1 8\nset y 1 8\nset z 1\nset t 1 32\n')]
 for ctl in ctls:
     for expression,setup in cases:
@@ -86,7 +91,7 @@ for ctl in ctls:
         for n in (2,4,8):
             text=run(ctl,command,n);assert groups(text),(ctl,expression,'no workers')
             compare(parse(text),reference)
-        if expression.startswith(('ave(','aave(','amean(')):
+        if expression.startswith(('ave(','aave(','amean(','asum(')):
             direct=run(ctl,setup+'d '+expression)
             compare(parse(direct),reference)
     print('Time workers values/display passed:',ctl.name,flush=True)
@@ -94,9 +99,16 @@ for ctl in ctls:
 # AMEAN also displays Z alone (serial assembly), and T alone (time workers).
 for setup in ('set x 1\nset y 1\nset z 1 4\nset t 3\n',
               'set x 1\nset y 1\nset z 2\nset t 1 32\n'):
-    expr='amean(f,x=1,x=256,y=1,y=256)'
+    expr='asum(f,x=1,x=256,y=1,y=256)'
     reference=parse(run(ctls[0],setup+'define answer='+expr+'\nd answer',1,True))
     compare(parse(run(ctls[0],setup+'d '+expr)),reference)
+
+cyclic=root/'cyclic.ctl'
+cyclic.write_text(ctls[0].read_text().replace('xdef 256 linear 10 .1','xdef 256 linear -179.296875 1.40625'))
+expr='asum(qvsat(150+f/200,100000*rho),lon=0,lon=180,lat=-50,lat=-10)'
+command=profile+'define answer='+expr+'\nd answer\nd '+expr
+text=run(cyclic,command);assert len(groups(text))==2
+compare(parse(text),parse(run(cyclic,command,1,True)))
 
 # Missing middle template time retains each function's established mask rules.
 piece=root/'slice16.h5';saved=root/'slice16.saved';piece.rename(saved)
@@ -129,7 +141,12 @@ run(ctls[0],profile+'define answer='+expr+'\nset gxout shaded\nd answer\nprintim
     ' x640 y480\nclear canvas\nd '+expr+'\nprintim '+str(b)+' x640 y480\n')
 assert a.read_bytes()==b.read_bytes(),'AMEAN DEFINE/DISPLAY graphics differ'
 
-heavy='aave('+ '+'.join(['sin(f)']*32)+',x=1,x=256,y=1,y=256)'
+expr='asum(f,x=1,x=256,y=1,y=256)'
+run(ctls[0],profile+'define answer='+expr+'\nset gxout shaded\nd answer\nprintim '+str(a)+
+    ' x640 y480\nclear canvas\nd '+expr+'\nprintim '+str(b)+' x640 y480\n')
+assert a.read_bytes()==b.read_bytes(),'ASUM DEFINE/DISPLAY graphics differ'
+
+heavy='asum('+ '+'.join(['sin(f)']*32)+',x=1,x=256,y=1,y=256)'
 def terminal(cancel=False,fail=False,off=False):
     e=dict(env,GA_PROGRESS='off' if off else '.000001',GA_TIME_WORKERS='auto',LANG='C',LC_ALL='C',LC_TERMINAL='iTerm2')
     e.pop('TMUX',None)
@@ -152,7 +169,7 @@ def terminal(cancel=False,fail=False,off=False):
     try:
         pump(.5)
         for s in (f'open {ctls[0]}','set threads 4','set x 1','set y 1','set z 1 4','set t 1 32'):command(s)
-        begin=len(output);os.write(fd,('define answer='+heavy+'\r').encode());end=time.monotonic()+30;acted=False
+        begin=len(output);os.write(fd,('d '+heavy+'\r').encode());end=time.monotonic()+30;acted=False
         while time.monotonic()<end:
             pump(.02);current=output[begin:].decode('utf-8','replace')
             g=groups(current)
@@ -161,8 +178,8 @@ def terminal(cancel=False,fail=False,off=False):
             if 'ga->' in current:break
         else:raise AssertionError('worker command did not return to prompt')
         if cancel or fail:assert acted,'test did not reach active workers'
-        if not cancel and not fail:assert 'Define memory allocation size' in current,current[-1000:]
-        if fail:assert 'DEFINE error' in current,current[-1000:]
+        if not cancel and not fail:assert 'DISPLAY error' not in current,current[-1000:]
+        if fail:assert 'DISPLAY error' in current,current[-1000:]
         command('set threads 1');command('set t 1');command('set z 1');command('d aave(f,x=1,x=256,y=1,y=256)')
         command('quit');pump(.1);os.waitpid(pid,0)
         text=output.decode('utf-8','replace');assert_dead(text)

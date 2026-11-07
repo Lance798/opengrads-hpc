@@ -1429,6 +1429,27 @@ The driver is `tmp/new-machine-baseline/saturation_stage9.py`. This is a
 separate T=1:256 saturation sweep, rather than a rerun of the earlier
 T=2145:2400 arithmetic workload.
 
+### ASUM direct DISPLAY time workers (stage 10)
+
+ASUM now uses the common output-time profile workers for direct DISPLAY,
+including T, Z and Z/T output. DEFINE already used these workers. The spatial
+sum and fractional-boundary weights retain their existing evaluation order.
+ATOT and expressions outside an area reduction keep their earlier DISPLAY paths.
+
+The expanded TimeWorkers suite compares 42368 finite values exactly, including
+fractional boundaries, cyclic longitude, masks and nonlinear inputs. All fifteen
+regression suites, ASan/UBSan and OpenMP/POSIX-disabled compile checks pass.
+Direct DISPLAY cancellation, progress, killed-worker recovery and pool cleanup
+also pass.
+
+On the production descriptor, ASUM(QVSAT(...),lon=0,lon=180,lat=-20,lat=20)
+with X=1, Y=1, Z=1:44 and T=1:last (4757 times) dispatches 128 workers.
+All 209308 values and masks match the frozen `376136c` DEFINE result exactly.
+The new DISPLAY command takes 39.58 s including startup and text output; this
+is a correctness check, not a controlled before/after performance comparison.
+Logs and exported references are under
+`tmp/acceleration-stages/stage10-asum/`.
+
 ### Mixed synthetic workload
 
 Run the supplied benchmark after building `grads` and `libgxdummy.la`:

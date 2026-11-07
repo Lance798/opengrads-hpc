@@ -578,7 +578,8 @@ static int time_display_reduces_axis(const char *expr,int z,int t) {
 
 static int time_profile_expression(const char *expr) {
   return !strncmp(expr,"ave(",4) || !strncmp(expr,"mean(",5) ||
-         !strncmp(expr,"aave(",5) || !strncmp(expr,"amean(",6) || !strncmp(expr,"zint(",5);
+         !strncmp(expr,"aave(",5) || !strncmp(expr,"amean(",6) ||
+         !strncmp(expr,"asum(",5) || !strncmp(expr,"zint(",5);
 }
 
 /* DISPLAY uses the same per-time evaluator, with a temporary Z/T grid.
@@ -595,7 +596,8 @@ gaint ga_time_display(char *expr,struct gastat *pst,struct gacmn *pcm) {
   generic=!time_profile_expression(expr);
   if(generic &&
      time_display_reduces_axis(expr,pcm->vdim[2],pcm->vdim[3]))return -1;
-  if(pst->idim==2 && pst->jdim<0 && strncmp(expr,"aave(",5) && strncmp(expr,"amean(",6))return -1;
+  if(pst->idim==2 && pst->jdim<0 && strncmp(expr,"aave(",5) &&
+     strncmp(expr,"amean(",6) && strncmp(expr,"asum(",5))return -1;
   z1=(int)floor(f->ab2gr[2](f->abvals[2],pst->dmin[2])+0.001);
   z2=(int)ceil(f->ab2gr[2](f->abvals[2],pst->dmax[2])-0.001);
   if(!pcm->vdim[2])z1=z2=(int)round(f->ab2gr[2](f->abvals[2],pst->dmin[2]));
