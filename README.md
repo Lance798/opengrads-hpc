@@ -14,7 +14,9 @@ Reading output written by a multi-rank MPI job does not require MPI here.
 Releases are versioned independently of GrADS: archives are named
 `opengrads-hpc-<version>`, while `grads` still reports the GrADS baseline it
 matches (`2.2.1.oga.1`). Each archive carries a `VERSION` file with both. See
-[release documentation](docs/RELEASES.md).
+[release documentation](docs/RELEASES.md). Startup displays the distribution version;
+`./opengrads --version` reports both versions without loading GrADS or its
+runtime libraries. The display follows the version metadata automatically.
 
 Licensed under **GPL-2.0-only**, inherited from GrADS. Using it and building it
 carry no obligations; redistributing the BP5-enabled binaries has one

@@ -42,6 +42,8 @@ install -D -m 0755 "$repo_root/libexec/grads-termview" \
   "$bundle_root/libexec/grads-termview"
 install -m 0755 "$repo_root/libexec/opengrads-update" \
   "$bundle_root/libexec/opengrads-update"
+install -m 0755 "$repo_root/libexec/opengrads-version" \
+  "$bundle_root/libexec/opengrads-version"
 install -m 0644 "$repo_root/etc/udpt-local" "$bundle_root/etc/udpt-local"
 cp -a "$repo_root/cola/data/." "$bundle_root/cola/data/"
 cp -a "$repo_root/lib/scripts/." "$bundle_root/lib/scripts/"
@@ -432,6 +434,12 @@ GA_TEST_HDF5_LIBS="$(sed -n 's/^HDF5_LDFLAGS *= *//p' "$build_root/src/Makefile"
 OPENGRADS_BUILD_ROOT="$bundle_root/build" \
 OPENGRADS_LAUNCHER="$bundle_root/opengrads" \
   "$repo_root/pytests/TestTimeLoader.sh"
+
+version_output="$(env -i PATH=/usr/bin:/bin "$bundle_root/opengrads" --version)"
+if [[ "$version_output" != "$(cat "$bundle_root/VERSION")" ]]; then
+  printf 'Packaged --version does not match VERSION metadata:\n%s\n' "$version_output" >&2
+  exit 1
+fi
 
 tar -C "$output_root" -czf "$output_root/$archive_base.tar.gz" "$archive_base"
 (

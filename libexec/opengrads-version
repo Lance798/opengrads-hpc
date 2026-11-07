@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Distribution identity comes from release metadata, independently of GrADS.
+set -euo pipefail
+root="${1:?usage: opengrads-version ROOT [--version | --banner]}"
+mode="${2:---version}"
+distribution=""; baseline=""
+if [[ -r "$root/VERSION" ]]; then
+  while read -r name value remainder || [[ -n "${name:-}" ]]; do
+    if [[ "$name" == opengrads-hpc ]]; then distribution="$value"; fi
+    if [[ "$name" == GrADS && "$value" == base ]]; then baseline="$remainder"; fi
+  done < "$root/VERSION"
+fi
+if [[ -z "$distribution" && -r "$root/release/VERSION" ]]; then
+  read -r distribution < "$root/release/VERSION" || true
+fi
+if [[ -z "$baseline" && -r "$root/cola/src/VERSION" ]]; then
+  read -r baseline < "$root/cola/src/VERSION" || true
+fi
+distribution="${distribution:-unknown}"
+baseline="${baseline:-unknown}"
+case "$mode" in
+  --version) printf 'opengrads-hpc %s\nGrADS base %s\n' "$distribution" "$baseline" ;;
+  --banner) printf 'opengrads-hpc %s (GrADS %s)\n' "$distribution" "$baseline" ;;
+  *) printf 'Unknown version display mode: %s\n' "$mode" >&2; exit 2 ;;
+esac

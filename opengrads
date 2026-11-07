@@ -5,6 +5,11 @@ set -euo pipefail
 
 repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
+# Version lookup works before a build or runtime libraries are available.
+if [[ "${1:-}" == --version ]]; then
+  exec bash "$repo_root/libexec/opengrads-version" "$repo_root"
+fi
+
 # A release archive updates itself with "opengrads --update", and says at
 # start-up, in a terminal, when a newer release is out (once a day it asks,
 # in the background; OPENGRADS_UPDATE_CHECK=0 turns that off).
@@ -305,6 +310,10 @@ if [[ "$#" -eq 0 ]]; then
   else
     set -- -l
   fi
+fi
+
+if [[ -r "$repo_root/libexec/opengrads-version" ]]; then
+  bash "$repo_root/libexec/opengrads-version" "$repo_root" --banner
 fi
 
 color_args=()
