@@ -40,6 +40,12 @@ The GrADS baseline remains `2.2.1.oga.1`.
 
 ### Fixed in 1.0.14
 
+- Packaged Linux time workers reuse the bundled loader and its library path
+  when the host glibc is too old. They no longer mistake the loader for the
+  GrADS executable when restarting workers. Native and packaged loader paths
+  have dedicated numerical, graphics, cancellation and recovery regressions.
+- Linux release builds preserve the additional HDF5 linker search path on
+  Debian/Ubuntu instead of overwriting it with the private dependency prefix.
 - HDF5 bulk reads preserve native-rank memory selections, surface/profile
   broadcasts, packed values and scalar or single-element numeric attributes.
 - Spatial reductions with a remaining T/E result axis no longer call a

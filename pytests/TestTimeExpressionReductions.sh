@@ -4,8 +4,13 @@ set -euo pipefail
 repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/opengrads-time-expression-reduction.XXXXXX")"
 trap 'rm -rf -- "$test_root"' EXIT
-read -r -a hflags <<< "$(pkg-config --cflags hdf5)"
-read -r -a hlibs <<< "$(pkg-config --libs hdf5)"
+if [[ -n "${GA_TEST_HDF5_LIBS:-}" ]]; then
+  read -r -a hflags <<< "${GA_TEST_HDF5_CFLAGS:-}"
+  read -r -a hlibs <<< "$GA_TEST_HDF5_LIBS"
+else
+  read -r -a hflags <<< "$(pkg-config --cflags hdf5)"
+  read -r -a hlibs <<< "$(pkg-config --libs hdf5)"
+fi
 "${CC:-cc}" -std=gnu99 -O2 -DZS_HDF5 -DNX=64 -DNY=64 -DNT=320 \
   "${hflags[@]}" "$repo_root/pytests/zslice_writer.c" "${hlibs[@]}" -lm -o "$test_root/writer"
 "$test_root/writer" "$test_root" zint
@@ -41,7 +46,7 @@ C
 python3 -u - "$repo_root" "$test_root" <<'PY'
 import math,os,pty,re,select,signal,subprocess,sys,time
 from pathlib import Path
-repo,root=map(Path,sys.argv[1:]);env=dict(os.environ,GA_TIME_TRACE='1',GA_PROGRESS='off',OPENGRADS_COLOR='0')
+repo,root=map(Path,sys.argv[1:]);launcher=os.environ.get('OPENGRADS_LAUNCHER',str(repo/'opengrads'));env=dict(os.environ,GA_TIME_TRACE='1',GA_PROGRESS='off',OPENGRADS_COLOR='0')
 header=('undef -9999\nxdef 64 linear 10 .1\nydef 64 linear -60 .25\n'
         'zdef 4 levels 50 150 400 1000\ntdef 320 linear 00z01jan2000 1hr\n'
         'vars 4\nf 4 {dims} F\ng 4 {dims} G\nsurface 0 {surface} Surface\nrho 4 z Density\nendvars\n')
@@ -79,7 +84,7 @@ def groups(text):return re.findall(r'Time workers: workers=(\d+) inner=1 .*?pids
 def run(ctl,commands,n=4,off=False,missing=False,mem_kib=None):
     e=dict(env,GA_TIME_WORKERS='off' if off else 'auto')
     if mem_kib is not None:e.update(LD_PRELOAD=str(root/'slow.so'),GA_TEST_MEM_KIB=str(mem_kib))
-    p=subprocess.run([str(repo/'opengrads'),'-blu','-d','gxdummy','-h','Cairo'],
+    p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','Cairo'],
         input=f'open {ctl}\nset threads {n}\nset cachesf 2\nset gxout print\nset prnopts %.17g 32 1\n'+commands+'\nquit\n',
         text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
         env=e,timeout=180)
@@ -203,7 +208,7 @@ def terminal(cancel=False,fail=False,off=False,display=False):
            LD_PRELOAD=str(root/'slow.so'),LANG='C',LC_ALL='C',LC_TERMINAL='iTerm2')
     e.pop('TMUX',None)
     pid,fd=pty.fork()
-    if pid==0:os.execve(str(repo/'opengrads'),[str(repo/'opengrads'),'-bl','-d','gxdummy','-h','Cairo'],e)
+    if pid==0:os.execve(launcher,[launcher,'-bl','-d','gxdummy','-h','Cairo'],e)
     output=bytearray()
     def pump(seconds):
         end=time.monotonic()+seconds

@@ -315,7 +315,11 @@ fi
 # Start through the bundled loader only where the host glibc is too old to
 # run the archive at all. Preferring the host glibc keeps glibc's NSS working,
 # which network name resolution and therefore OPeNDAP depend on.
+unset GA_TIME_LOADER GA_TIME_LIBRARY_PATH || true
 if (( ${need_bundled_glibc:-0} )); then
+  # Workers must reuse this loader and its private library search path.
+  export GA_TIME_LOADER="$repo_root/glibc/$loader_name"
+  export GA_TIME_LIBRARY_PATH="$bundled_library_path"
   exec "$repo_root/glibc/$loader_name" \
     --library-path "$bundled_library_path" \
     "$grads_binary" "${color_args[@]}" "$@"
