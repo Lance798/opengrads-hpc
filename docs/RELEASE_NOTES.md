@@ -6,6 +6,10 @@ The GrADS baseline remains `2.2.1.oga.1`.
 
 ### Added in 1.0.14
 
+- **Distribution version at startup and `opengrads --version`.** The launchers
+  read the source or archive version metadata automatically, including after
+  an update. The CLI reports the distribution and GrADS baseline without
+  requiring a completed build or loading runtime libraries.
 - **Whole-expression HDF5 time workers.** Supported native fields, arithmetic,
   powers, trigonometric functions, masks, `esat` and `qvsat` can be evaluated
   at different output times in persistent worker processes. Each worker uses

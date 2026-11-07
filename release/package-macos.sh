@@ -37,6 +37,7 @@ install -m 0755 "$build_root/src/grads" "$bundle_root/bin/grads"
 # The terminal display starts this in the tmux pane it draws into.
 install -m 0755 "$repo_root/libexec/grads-termview" "$bundle_root/libexec/grads-termview"
 install -m 0755 "$repo_root/libexec/opengrads-update" "$bundle_root/libexec/opengrads-update"
+install -m 0755 "$repo_root/libexec/opengrads-version" "$bundle_root/libexec/opengrads-version"
 
 # The X displays (Cairo, the default, and X11) open a window through
 # XQuartz. They are plug-ins, loaded only when asked for, so the archive does
@@ -393,6 +394,12 @@ else
 fi
 
 mkdir -p "$output_root"
+version_output="$(env -i PATH=/usr/bin:/bin "$bundle_root/opengrads" --version)"
+if [[ "$version_output" != "$(cat "$bundle_root/VERSION")" ]]; then
+  printf 'Packaged --version does not match VERSION metadata:\n%s\n' "$version_output" >&2
+  exit 1
+fi
+
 tar -C "$output_root" -czf "$output_root/$archive_base.tar.gz" "$archive_base"
 (
   cd "$output_root"

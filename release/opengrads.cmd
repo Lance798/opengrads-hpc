@@ -1,6 +1,11 @@
 @echo off
 setlocal
 set "OPENGRADS_ROOT=%~dp0"
+if /I "%~1"=="--version" (
+  type "%OPENGRADS_ROOT%VERSION"
+  exit /b
+)
+for /f "tokens=1,2" %%A in ('type "%OPENGRADS_ROOT%VERSION"') do if "%%A"=="opengrads-hpc" echo %%A %%B
 set "PATH=%OPENGRADS_ROOT%lib;%OPENGRADS_ROOT%plugins;%PATH%"
 set "GA_ROOT=%OPENGRADS_ROOT%plugins"
 set "GAUDPT=%OPENGRADS_ROOT%etc\udpt"

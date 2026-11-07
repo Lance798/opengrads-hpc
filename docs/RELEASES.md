@@ -180,6 +180,13 @@ Archives are named for the distribution, not for GrADS:
   a bare `1.0.0` there would make the banner read "GrADS Version 1.0.0", and
   GrADS 1.x genuinely existed.
 
+The launcher prints the distribution version at startup. `./opengrads --version`
+prints both identities and exits before loading GrADS, runtime libraries or the
+update checker. A source checkout reads `release/VERSION` and
+`cola/src/VERSION`; an archive reads its own `VERSION`. Bumping the distribution
+metadata therefore updates both startup and `--version` output automatically.
+`pytests/TestVersion.sh` checks this with changed metadata and no GrADS binary.
+
 Every archive carries a `VERSION` file recording both. To cut a release, bump
 `release/VERSION`, update `docs/RELEASE_NOTES.md`, commit, then tag `vX.Y.Z`.
 
