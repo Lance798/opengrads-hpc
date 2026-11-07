@@ -989,6 +989,7 @@ Note:  function prototype for garead is now in gaio.c
 */
 
 void setcachesf (long);
+long getcachesf (void);
 gaint gaggrd (struct gagrid *);
 gaint gagrow (gadouble *, char *, gaint *);
 long gafcor (gaint, gaint, gaint, gaint);

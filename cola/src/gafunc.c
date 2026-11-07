@@ -3457,7 +3457,7 @@ gadouble alo, ahi, alen, wlo=0, whi=0;
 gadouble d2r, wt, wt1, abs;
 gaint mos, mns, wflag=0;
 gaint i, rc, siz, dim, d, d1, d2, dim2, ilin, incr, bndflg, normerr;
-gaint k, nstep, chunk, ib, ie, ndone;
+gaint k, nstep, chunk, ib, ie, ndone, evaluate=0;
 char *ch,*fnam,*sumu,*cntu,*valu;
 struct gavar *direct,*other=NULL;
 struct gagrid readgrid,readother;
@@ -3864,6 +3864,8 @@ struct gagrid *sect=NULL;
   }
   direct = (dim==3) ? ave_plain_var(pfc->argpnt[0],pst,pgr1) : NULL;
   if (dim==3 && !direct) direct=ave_sum_vars(pfc->argpnt[0],pst,pgr1,&other);
+  evaluate = dim==3 && (d2-d1)/incr+1>=32 &&
+             ga_time_can_evaluate(pfc->argpnt[0],pst);
   /* Short means and binary means are faster without extra batch buffers. */
   if (direct && !pfi->adios2flg && (!pfi->ncflg || (d2-d)/incr+1<8)) direct=NULL;
   if (direct) {
@@ -3879,26 +3881,26 @@ struct gagrid *sect=NULL;
     }
   }
   chunk = 1;
-  if (direct) {
+  if (direct || evaluate) {
     chunk = (gaint)(ga_time_batch_bytes(pfi) / ((gadouble)siz*(sizeof(gadouble)+1)));
     if (other) chunk/=2;
     if (chunk>256) chunk = 256;
-    if (chunk<2) direct = NULL;
+    if (chunk<2) { direct=NULL;evaluate=0; }
   }
-  if (direct) {
+  if (direct || evaluate) {
     steps  = (gadouble *)galloc(sizeof(gadouble)*(size_t)siz*(size_t)chunk,"avesteps");
     stepsu = (char *)galloc((size_t)siz*(size_t)chunk,"avestepsu");
     wts    = (gadouble *)galloc(sizeof(gadouble)*(size_t)chunk,"avewts");
-    if (!steps || !stepsu || !wts) direct = NULL;
+    if (!steps || !stepsu || !wts) { direct=NULL;evaluate=0; }
     if (other) {
       stepsb=galloc(sizeof(gadouble)*(size_t)siz*(size_t)chunk,"avestepsb");
       stepsbu=galloc((size_t)siz*(size_t)chunk,"avestepsbu");
-      if (!stepsb || !stepsbu) direct=NULL;
+      if (!stepsb || !stepsbu) { direct=NULL;evaluate=0; }
     }
   }
   for (d=d; d<=d2 && !rc; d+=incr) {
     /* times outside the file go the usual way, which warns about them */
-    if (direct && d>=1 && d<=pfi->dnum[3]) {
+    if ((direct || evaluate) && d>=1 && d<=pfi->dnum[3]) {
       if (gaqsig()) {                  /* Ctrl-C; gaexpr notices it itself */
         rc = 1;
         break;
@@ -3906,17 +3908,24 @@ struct gagrid *sect=NULL;
       nstep = (d2-d)/incr + 1;
       if (nstep>(pfi->dnum[3]-d)/incr+1) nstep = (pfi->dnum[3]-d)/incr+1;
       if (nstep>chunk) nstep = chunk;
-      if (other && !pfi->adios2flg && !ga_time_can_read(pfi)) {
-        /* Keep template files open while reading both fields at a time. */
-        rc=0;
-        for (k=0;k<nstep && !rc;k++) {
-          size_t at=(size_t)k*siz;
-          rc=gagrdsteps(&readgrid,d+k*incr,1,incr,steps+at,stepsu+at);
-          if (!rc) rc=gagrdsteps(&readother,d+k*incr,1,incr,stepsb+at,stepsbu+at);
+      rc=-1;
+      if (direct) {
+        if (other && !pfi->adios2flg && !ga_time_can_read(pfi)) {
+          /* Keep template files open while reading both fields at a time. */
+          rc=0;
+          for (k=0;k<nstep && !rc;k++) {
+            size_t at=(size_t)k*siz;
+            rc=gagrdsteps(&readgrid,d+k*incr,1,incr,steps+at,stepsu+at);
+            if (!rc) rc=gagrdsteps(&readother,d+k*incr,1,incr,stepsb+at,stepsbu+at);
+          }
+        } else {
+          rc=gagrdsteps(&readgrid,d,nstep,incr,steps,stepsu);
+          if (!rc && other) rc=gagrdsteps(&readother,d,nstep,incr,stepsb,stepsbu);
         }
-      } else {
-        rc=gagrdsteps(&readgrid,d,nstep,incr,steps,stepsu);
-        if (!rc && other) rc=gagrdsteps(&readother,d,nstep,incr,stepsb,stepsbu);
+      }
+      if (rc<0 && evaluate) {
+        direct=NULL;other=NULL; /* whole expression already combines fields */
+        rc=ga_time_evaluatesteps(pfc->argpnt[0],pst,pgr1,d,nstep,incr,steps,stepsu);
       }
       if (rc==0) {
         for (k=0; k<nstep; k++) {
@@ -3958,7 +3967,7 @@ struct gagrid *sect=NULL;
       }
       if (rc>0) break;
       rc = 0;
-      direct = NULL;       /* not a request it reads; go a time at a time */
+      direct=NULL;evaluate=0; /* unsupported batch: ordinary evaluator */
     }
     /* Get weight for this grid */
     wt = 1.0;
