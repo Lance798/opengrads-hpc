@@ -73,6 +73,14 @@ With the local development launcher, environment controls can be passed as:
 ./dev exec env GA_TIME_WORKERS=off ./opengrads -l
 ```
 
+Linux archives that need their bundled glibc restart time workers through the
+same loader and private library search path as the parent. Normal builds keep
+their ordinary executable restart. The release build and Linux packager run
+`TestTimeLoader.sh`, including the packaged launcher's old-host branch, to
+check both input/output workers, numerical/graphics agreement and failure
+recovery. This does not export the bundled libc through `LD_LIBRARY_PATH` to
+ordinary shell subprocesses.
+
 Each per-time result is limited to 128 MiB (values plus masks). Worker
 estimates cap concurrency using available memory and an 8 GiB ceiling. These
 caps govern worker workspace; DEFINE must still store its complete final
@@ -194,7 +202,7 @@ The production build and combined regression command used for this stage:
 
 ```bash
 ./dev build
-./dev test TimeExpressionReductions TimeExpressions OpenMP ReductionIO BinaryHalo H5Decode ZInt \
+./dev test TimeLoader TimeExpressionReductions TimeExpressions OpenMP ReductionIO BinaryHalo H5Decode ZInt \
   TimeWorkers TimeMeanWorkers MaskThreshold AveSection Progress Undo \
   DefineNames Saturation ClearCanvas
 ```

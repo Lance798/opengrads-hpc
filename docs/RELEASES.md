@@ -269,6 +269,24 @@ where XQuartz is installed, draws with them on its `Xvfb`. The terminal
 display draws a picture to a file and as an inline image, and is checked to
 be the launcher's choice with `OPENGRADS_TERM=1`.
 
+## Linux time-worker loader verification
+
+The Linux builder and packager run `pytests/TestTimeLoader.sh`. The build
+check starts workers through an explicit ELF loader. The package check runs
+the actual archive launcher while simulating an older host glibc, which forces
+the bundled-loader branch. Both checks cover input/output time workers,
+numerical masks, graphics, progress, cancellation and worker failure recovery.
+HDF5 fixture compilation can reuse the build's configured flags on systems
+such as EL8 that do not supply an HDF5 pkg-config file.
+
+The private ADIOS2, Blosc2, ncurses and Readline dependencies are built from
+the pinned sources. HDF5, NetCDF, UDUNITS and graphics development packages
+come from the build platform; their required runtime libraries are collected
+into the archive. A release build therefore needs those development packages,
+but an installed archive does not need the development environment. HDF5
+versions older than 2.0 retain native ZINT decoding; HDF5 time workers remain
+available when their normal eligibility checks pass.
+
 ## GitHub Actions and publication gate
 
 `.github/workflows/release.yml` builds and tests all three native archives on

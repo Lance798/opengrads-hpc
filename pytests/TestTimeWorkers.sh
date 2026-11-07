@@ -5,8 +5,13 @@ set -euo pipefail
 repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 test_root="$(mktemp -d /tmp/opengrads-time-workers.XXXXXX)"
 trap 'rm -rf -- "$test_root"' EXIT
-read -r -a hflags <<< "$(pkg-config --cflags hdf5)"
-read -r -a hlibs <<< "$(pkg-config --libs hdf5)"
+if [[ -n "${GA_TEST_HDF5_LIBS:-}" ]]; then
+  read -r -a hflags <<< "${GA_TEST_HDF5_CFLAGS:-}"
+  read -r -a hlibs <<< "$GA_TEST_HDF5_LIBS"
+else
+  read -r -a hflags <<< "$(pkg-config --cflags hdf5)"
+  read -r -a hlibs <<< "$(pkg-config --libs hdf5)"
+fi
 "${CC:-cc}" -std=gnu99 -O2 -DZS_HDF5 -DNX=256 -DNY=256 -DNT=32 \
   "${hflags[@]}" "$repo_root/pytests/zslice_writer.c" "${hlibs[@]}" -lm -o "$test_root/writer"
 "$test_root/writer" "$test_root" zint

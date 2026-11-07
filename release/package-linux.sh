@@ -425,6 +425,14 @@ env -i HOME="${HOME:-/tmp}" PATH=/usr/bin:/bin \
   OPENGRADS_LAUNCHER="$bundle_root/opengrads" \
   "$repo_root/pytests/TestBP5Compression.sh" --read-fixtures "$compression_root"
 
+# Exercise actual packaged time workers through the bundled loader, including
+# the old-host startup branch that development binaries do not normally use.
+GA_TEST_HDF5_CFLAGS="$(sed -n 's/^HDF5_CFLAGS *= *//p' "$build_root/src/Makefile")" \
+GA_TEST_HDF5_LIBS="$(sed -n 's/^HDF5_LDFLAGS *= *//p' "$build_root/src/Makefile") $(sed -n 's/^HDF5_LIBS *= *//p' "$build_root/src/Makefile")" \
+OPENGRADS_BUILD_ROOT="$bundle_root/build" \
+OPENGRADS_LAUNCHER="$bundle_root/opengrads" \
+  "$repo_root/pytests/TestTimeLoader.sh"
+
 tar -C "$output_root" -czf "$output_root/$archive_base.tar.gz" "$archive_base"
 (
   cd "$output_root"

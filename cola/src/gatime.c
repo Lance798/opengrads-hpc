@@ -55,6 +55,7 @@ struct time_config {
 struct time_job { int operation,t; };
 struct time_reply { int rc,t; uint64_t size; };
 static char time_executable[TIME_TEXT];
+static char time_loader[TIME_TEXT],time_library_path[TIME_TEXT];
 static int time_child;
 
 /* Linux's free-page count excludes reclaimable file cache. Use the kernel's
@@ -258,6 +259,8 @@ void ga_time_shutdown(void) {
 static int time_spawn(int n) {
   posix_spawn_file_actions_t actions;posix_spawnattr_t attr;
   char *argv[]={time_executable,"-bl","-d","gxdummy","-h","gxdummy","-j","1","--time-worker",NULL};
+  char *loader_argv[]={time_loader,"--library-path",time_library_path,time_executable,
+    "-bl","-d","gxdummy","-h","gxdummy","-j","1","--time-worker",NULL};
   DIR *dir;struct dirent *entry;int pair[2],i,fd,rc,old,j,k,total; sigset_t empty;
   char **worker_env,*prefixes[]={"OMP_PROC_BIND=","OMP_NUM_THREADS=","GA_NUM_THREADS=","GOMP_CPU_AFFINITY=","GA_TIME_AFFINITY=","GA_PROGRESS=",NULL};
   char affinity[TIME_TEXT]="GA_TIME_AFFINITY=";
@@ -312,7 +315,8 @@ static int time_spawn(int n) {
     sigemptyset(&empty);posix_spawnattr_setsigmask(&attr,&empty);
     posix_spawnattr_setpgroup(&attr,0);
     posix_spawnattr_setflags(&attr,POSIX_SPAWN_SETPGROUP|POSIX_SPAWN_SETSIGMASK);
-    rc=posix_spawn(&slots[i].pid,time_executable,&actions,&attr,argv,worker_env);
+    rc=posix_spawn(&slots[i].pid,time_loader[0] ? time_loader : time_executable,
+                   &actions,&attr,time_loader[0] ? loader_argv : argv,worker_env);
     posix_spawn_file_actions_destroy(&actions);posix_spawnattr_destroy(&attr);
     close(pair[1]);
     if(rc) { close(pair[0]);goto error; }
@@ -423,11 +427,24 @@ error:
 
 void ga_time_init(const char *executable) {
   static int registered;
+  const char *loader=getenv("GA_TIME_LOADER"),*libraries=getenv("GA_TIME_LIBRARY_PATH");
+  time_executable[0]=time_loader[0]=time_library_path[0]=0;
+  /* An explicitly invoked Linux loader owns /proc/self/exe. The release
+     launcher supplies its matched loader/library path; argv[0] names GrADS.
+     Re-exec that same combination so older hosts never use their own loader
+     against the bundled libc. Invalid/incomplete context disables the pool. */
+  if(loader || libraries) {
+    if(loader && *loader && libraries && strlen(libraries)<sizeof(time_library_path) &&
+       realpath(loader,time_loader) && realpath(executable,time_executable))
+      snprintf(time_library_path,sizeof(time_library_path),"%s",libraries);
+    else time_executable[0]=time_loader[0]=0;
+  } else {
 #ifdef __linux__
-  ssize_t n=readlink("/proc/self/exe",time_executable,sizeof(time_executable)-1);
-  if(n>0)time_executable[n]=0;else
+    ssize_t n=readlink("/proc/self/exe",time_executable,sizeof(time_executable)-1);
+    if(n>0)time_executable[n]=0;else
 #endif
-  if(!realpath(executable,time_executable))time_executable[0]=0;
+    if(!realpath(executable,time_executable))time_executable[0]=0;
+  }
   if(!registered) { atexit(ga_time_shutdown);registered=1; }
 }
 
