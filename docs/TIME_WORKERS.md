@@ -42,11 +42,25 @@ minimum dataset-work threshold. Defined inputs, file/dimension qualifiers,
 plug-ins and unsupported functions keep their existing evaluator. Constants
 alone do not start workers. New compound DISPLAY expressions that reduce a
 displayed Z/T axis retain the ordinary evaluator; the established outer
-AVE/MEAN/AAVE/AMEAN/ZINT profile paths retain their earlier behavior.
+AVE/MEAN/AAVE/AMEAN/ASUM/ZINT profile paths retain their per-time behavior.
 
-In particular, ASUM/ATOT can use workers in DEFINE, whose evaluator fixes
-Z/T for each result. Their direct DISPLAY still requires the native fixed-axis
-environment. Wrapped area reductions or ZINT in DISPLAY also retain their
+ASUM now also supports direct T/Z-T profile DISPLAY at fixed X/Y, including
+fractional bounds, masks and cyclic longitude regions. DEFINE and DISPLAY
+use the same per-time evaluator; the existing grid weights and denominator-free
+sum are preserved. For example:
+
+```text
+set x 1
+set y 1
+set z 1 44
+set t 1 last
+define c=asum(qvsat(th*pibar,100000*pow(pibar,1004/287)),lon=0,lon=180,lat=-20,lat=20)
+display c
+display asum(qvsat(th*pibar,100000*pow(pibar,1004/287)),lon=0,lon=180,lat=-20,lat=20)
+```
+
+ATOT can use workers in DEFINE, but its direct DISPLAY still requires the
+native fixed-axis environment. Wrapped area reductions or ZINT in DISPLAY retain their
 native restrictions; this stage does not turn an invalid native environment
 into a valid one only at higher CPU counts. Existing outer AAVE/AMEAN/ZINT
 profile DISPLAY remains supported.
