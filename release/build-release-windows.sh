@@ -58,5 +58,6 @@ export OPENGRADS_RUNTIME_LIBRARY_PATH="$MINGW_PREFIX/bin"
 "$repo_root/pytests/TestBP5.sh"
 "$repo_root/pytests/TestSDFOpen.sh"
 "$repo_root/pytests/TestOpenMP.sh"
+"$repo_root/pytests/TestVersion.sh"
 
 "$repo_root/release/package-windows.sh" "$build_root" "$output_root"

@@ -180,8 +180,39 @@ Archives are named for the distribution, not for GrADS:
   a bare `1.0.0` there would make the banner read "GrADS Version 1.0.0", and
   GrADS 1.x genuinely existed.
 
+The launcher prints the distribution version at startup. `./opengrads --version`
+prints both identities and exits before loading GrADS, runtime libraries or the
+update checker. A source checkout reads `release/VERSION` and
+`cola/src/VERSION`; an archive reads its own `VERSION`. Bumping the distribution
+metadata therefore updates both startup and `--version` output automatically.
+`pytests/TestVersion.sh` checks this with changed metadata and no GrADS binary.
+
 Every archive carries a `VERSION` file recording both. To cut a release, bump
 `release/VERSION`, update `docs/RELEASE_NOTES.md`, commit, then tag `vX.Y.Z`.
+
+## Preparing 1.0.14 through a pull request
+
+The acceleration branch prepares distribution version `1.0.14` and its release
+notes. Push the branch and open a pull request against the upstream `main`.
+Merging the pull request does not itself publish a release: the existing
+workflow runs on a version-tag push or manual dispatch, and manual dispatch
+builds candidates without creating a GitHub Release.
+
+After merging, the maintainer can tag the merged upstream commit:
+
+```bash
+git switch main
+git pull --ff-only upstream main
+git tag -a v1.0.14 -m "opengrads-hpc 1.0.14"
+git push upstream v1.0.14
+```
+
+Here `upstream` means the remote for the repository receiving the pull request;
+use its actual remote name if different. The tagged commit must contain
+`release/VERSION` set to `1.0.14`. The workflow builds and tests Linux x86_64,
+Linux aarch64 and macOS arm64 archives. Publication additionally requires the
+existing `BINARY_REDISTRIBUTION_APPROVED=true` repository variable described
+below. The GrADS baseline in `cola/configure.ac` remains `2.2.1.oga.1`.
 
 ## Maintainer one-command build
 
@@ -244,6 +275,24 @@ both X displays with no X server, which they must reach before failing, and,
 where XQuartz is installed, draws with them on its `Xvfb`. The terminal
 display draws a picture to a file and as an inline image, and is checked to
 be the launcher's choice with `OPENGRADS_TERM=1`.
+
+## Linux time-worker loader verification
+
+The Linux builder and packager run `pytests/TestTimeLoader.sh`. The build
+check starts workers through an explicit ELF loader. The package check runs
+the actual archive launcher while simulating an older host glibc, which forces
+the bundled-loader branch. Both checks cover input/output time workers,
+numerical masks, graphics, progress, cancellation and worker failure recovery.
+HDF5 fixture compilation can reuse the build's configured flags on systems
+such as EL8 that do not supply an HDF5 pkg-config file.
+
+The private ADIOS2, Blosc2, ncurses and Readline dependencies are built from
+the pinned sources. HDF5, NetCDF, UDUNITS and graphics development packages
+come from the build platform; their required runtime libraries are collected
+into the archive. A release build therefore needs those development packages,
+but an installed archive does not need the development environment. HDF5
+versions older than 2.0 retain native ZINT decoding; HDF5 time workers remain
+available when their normal eligibility checks pass.
 
 ## GitHub Actions and publication gate
 

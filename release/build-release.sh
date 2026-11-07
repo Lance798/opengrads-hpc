@@ -35,6 +35,7 @@ unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH SUPPLIBS \
   CFLAGS CXXFLAGS CPPFLAGS LDFLAGS PKG_CONFIG_PATH
 export PATH="$deps_root/bin:$PATH"
 export CPPFLAGS="-I$deps_root/include"
+export LDFLAGS="-L$deps_root/lib -Wl,-rpath,$deps_root/lib"
 # RHEL-family packages put the UDUNITS headers in a subdirectory, unlike
 # Debian which installs them straight into /usr/include.
 if [[ -r /usr/include/udunits2/udunits.h ]]; then
@@ -49,7 +50,6 @@ if [[ ! -r /usr/include/hdf5.h && -r /usr/include/hdf5/serial/hdf5.h ]]; then
     export LDFLAGS="${LDFLAGS:+$LDFLAGS }-L$hdf5_libdir -Wl,-rpath,$hdf5_libdir"
   fi
 fi
-export LDFLAGS="-L$deps_root/lib -Wl,-rpath,$deps_root/lib"
 export PKG_CONFIG_PATH="$deps_root/lib/pkgconfig:$deps_root/share/pkgconfig"
 export LD_LIBRARY_PATH="$adios2_root/lib:$adios2_root/lib64:$deps_root/lib:$deps_root/lib64"
 
@@ -73,6 +73,7 @@ OPENGRADS_ADIOS2_ROOT="$adios2_root" OPENGRADS_DEPS_ROOT="$deps_root" \
   "$repo_root/pytests/TestBP5Compression.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestSDFOpen.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestOpenMP.sh"
+OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestVersion.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestAveSection.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestUndo.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestPrompt.sh"
@@ -83,8 +84,12 @@ OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
 OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
   "$repo_root/pytests/TestZInt.sh"
 OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
+  "$repo_root/pytests/TestReductionIO.sh"
+OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
   "$repo_root/pytests/TestSaturation.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestDefineNames.sh"
+
+OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestTimeLoader.sh"
 
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestProgress.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestAxisScale.sh"

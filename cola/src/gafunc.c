@@ -23,6 +23,7 @@
 #include "grads.h"
 #include "gahelp.h"
 #include "gaomp.h"
+#include "gatime.h"
 
 #if OPENGRADS == 1
 #include "gaudx.h"
@@ -1880,6 +1881,24 @@ gaint rc;
    return (rc);
 }
 
+/* Bare defined variables can be reduced through a private read-only view.
+   The view is never returned to the evaluator, whose operators mutate grids. */
+static struct gafile *reduction_defined(char *expression, struct gastat *pst) {
+  char name[17],*p=expression;
+  gaint n=0;
+  while (*p==' ') p++;
+  while ((*p>='a' && *p<='z') || (*p>='0' && *p<='9') || *p=='_') {
+    if (n==16) return NULL;
+    name[n++]=*p++;
+  }
+  name[n]=0; while (*p==' ') p++;
+  return n && !*p ? getdfn(name,pst) : NULL;
+}
+
+static char doaave_stride(struct gagrid *, gadouble, gadouble, gadouble, gadouble,
+                           gaint, size_t, gadouble *);
+static gaint aave_defined(char *,struct gastat *,gaint,gadouble *,char *);
+
 gaint aave (struct gafunc *pfc, struct gastat *pst, int sel) {
 gadouble (*iconv) (gadouble *, gadouble);
 gadouble (*jconv) (gadouble *, gadouble);
@@ -1950,8 +1969,10 @@ char *ch,*fnam,resu;
   pst->idim = 0;
   pst->jdim = 1;
 
-  /* Get the grid */
+  /* Defined arrays stay read-only and do not need an intermediate XY copy. */
+  if (!aave_defined(pfc->argpnt[0],pst,sel,&res,&resu)) goto area_result;
 
+  /* Get the grid */
   rc = gaexpr(pfc->argpnt[0],pst);
   if (rc) return (rc);
   if (pst->type!=1) {
@@ -1963,6 +1984,7 @@ char *ch,*fnam,resu;
   /* Average over the grid  */
   resu = doaave(pgr,pst->dmin[0],pst->dmax[0],pst->dmin[1],pst->dmax[1],sel,&res);
   gafree (pst);
+area_result:
   pgr = gagrvl(res);
   pgr->umin = resu;
   pst->type = 1;
@@ -2373,33 +2395,15 @@ err1:
 
 /* Function that actually does area average over a grid */
 
-char doaave(struct gagrid *pgr, gadouble dmin0, gadouble dmax0,
-		gadouble dmin1, gadouble dmax1, gaint sel, gadouble *result) {
-gadouble (*iconv) (gadouble *, gadouble);
-gadouble (*jconv) (gadouble *, gadouble);
-gadouble *ivals, *jvals, *gr, *xw=NULL, *yw=NULL;
-gadouble d2r,sum,w1,w2=0,y1,x1,abs,alo,ahi,alen,wt,cellwt;
-gaint i,j,n,size;
-char *gru,sumu=0;
-size_t sz;
-
-  d2r = M_PI/180.0;
-  iconv = pgr->igrab;
-  jconv = pgr->jgrab;
-  ivals = pgr->ivals;
-  jvals = pgr->jvals;
-  sum = 0.0;
-  wt = 0.0;
-  gr  = pgr->grid;
-  gru = pgr->umask;
-
-  /* Coordinate weights are independent of the data values.  Calculate
-     them once, then reduce the grid in parallel. */
-  sz = pgr->isiz*sizeof(gadouble);
-  xw = (gadouble *)galloc(sz,"aavexw");
-  sz = pgr->jsiz*sizeof(gadouble);
-  yw = (gadouble *)galloc(sz,"aaveyw");
-  if (xw!=NULL && yw!=NULL) {
+/* Shared coordinate weights for plane and streamed profile reductions. */
+static void aave_weights(struct gagrid *pgr, gadouble dmin0, gadouble dmax0,
+                          gadouble dmin1, gadouble dmax1, gaint sel,
+                          gadouble *xw, gadouble *yw) {
+  gadouble (*iconv)(gadouble *,gadouble)=pgr->igrab;
+  gadouble (*jconv)(gadouble *,gadouble)=pgr->jgrab;
+  gadouble *ivals=pgr->ivals,*jvals=pgr->jvals;
+  gadouble x1,y1,alo,ahi,alen,w1,w2=0,d2r=M_PI/180.0;
+  gaint i,j;
     for (i=0; i<pgr->isiz; i++) {
       x1 = (gadouble)(i+pgr->dimmin[0]);
       alo = iconv(ivals, x1-0.5);
@@ -2439,19 +2443,69 @@ size_t sz;
       yw[j] = w1;
     }
 
+}
+
+static void aave_row(struct gagrid *grid, size_t base, const gadouble *xw,
+                       gadouble yw, gaint sel, gadouble *sum, gadouble *weight) {
+  gadouble rowsum=0,rowwt=0,cellwt;
+  gaint i;
+#if USEOPENMP == 1
+#pragma omp simd reduction(+:rowsum,rowwt) private(cellwt)
+#endif
+  for (i=0;i<grid->isiz;i++) {
+    if (grid->umask[base+i]) {
+      cellwt=xw[i]*yw;
+      if (sel==4) rowsum+=grid->grid[base+i];
+      else rowsum+=grid->grid[base+i]*cellwt;
+      rowwt+=cellwt;
+    }
+  }
+  *sum=rowsum; *weight=rowwt;
+}
+
+char doaave(struct gagrid *grid, gadouble x1, gadouble x2, gadouble y1,
+              gadouble y2, gaint sel, gadouble *result) {
+  return doaave_stride(grid,x1,x2,y1,y2,sel,(size_t)grid->isiz,result);
+}
+
+static char doaave_stride(struct gagrid *pgr, gadouble dmin0, gadouble dmax0,
+                          gadouble dmin1, gadouble dmax1, gaint sel,
+                          size_t stride, gadouble *result) {
+gadouble (*iconv) (gadouble *, gadouble);
+gadouble (*jconv) (gadouble *, gadouble);
+gadouble *ivals, *jvals, *gr, *xw=NULL, *yw=NULL;
+gadouble d2r,sum,w1,w2=0,y1,x1,abs,alo,ahi,alen,wt,cellwt;
+gaint i,j,n,size;
+char *gru,sumu=0;
+size_t sz;
+
+  d2r = M_PI/180.0;
+  iconv = pgr->igrab;
+  jconv = pgr->jgrab;
+  ivals = pgr->ivals;
+  jvals = pgr->jvals;
+  sum = 0.0;
+  wt = 0.0;
+  gr  = pgr->grid;
+  gru = pgr->umask;
+
+  /* Coordinate weights are independent of the data values.  Calculate
+     them once, then reduce the grid in parallel. */
+  sz = pgr->isiz*sizeof(gadouble);
+  xw = (gadouble *)galloc(sz,"aavexw");
+  sz = pgr->jsiz*sizeof(gadouble);
+  yw = (gadouble *)galloc(sz,"aaveyw");
+  if (xw!=NULL && yw!=NULL) {
+    aave_weights(pgr,dmin0,dmax0,dmin1,dmax1,sel,xw,yw);
+
     size = pgr->isiz*pgr->jsiz;
 #if USEOPENMP == 1
-#pragma omp parallel for schedule(static) reduction(+:sum,wt) private(i,j,cellwt) if(ga_omp_parallelize(size))
+#pragma omp parallel for schedule(static) reduction(+:sum,wt) private(i,cellwt) if(ga_omp_parallelize(size))
 #endif
-    for (n=0; n<size; n++) {
-      if (gru[n] != 0) {
-        i = n % pgr->isiz;
-        j = n / pgr->isiz;
-        cellwt = xw[i]*yw[j];
-        if (sel==4) sum += gr[n];
-        else sum += gr[n]*cellwt;
-        wt += cellwt;
-      }
+    for (j=0; j<pgr->jsiz; j++) {
+      gadouble rowsum=0,rowwt=0;
+      aave_row(pgr,(size_t)j*stride,xw,yw[j],sel,&rowsum,&rowwt);
+      sum+=rowsum; wt+=rowwt;
     }
     gree(xw,"aavexw");
     gree(yw,"aaveyw");
@@ -2470,6 +2524,7 @@ size_t sz;
   if (yw!=NULL) gree(yw,"aaveyw");
 
   for (j=0; j<pgr->jsiz; j++) {
+    gr=pgr->grid+(size_t)j*stride; gru=pgr->umask+(size_t)j*stride;
     y1 = (gadouble)(j+pgr->dimmin[1]);
     abs = jconv(jvals, y1);
     alo = jconv(jvals, y1-0.5);
@@ -2548,6 +2603,116 @@ size_t sz;
   }
   *result = sum;
   return (sumu);
+}
+
+
+/* Return 1 for an entirely missing view, -1 for a layout needing the
+   evaluator, or 0 with a clipped XY view and the source's row stride. */
+static gaint defined_area_view(struct gafile *file, struct gastat *pst,
+                                struct gagrid *view, size_t *stride) {
+  gaint d,lo[2],hi[2];
+  gadouble v,a,b,nearest;
+  size_t offset=0,multiplier=1,index[5];
+  if (!file || file->type!=4 || file->climo || file->dnum[0]<2 || file->dnum[1]<2) return -1;
+  for (d=0;d<2;d++) {
+    a=floor(file->ab2gr[d](file->abvals[d],pst->dmin[d])+0.0001);
+    b=ceil(file->ab2gr[d](file->abvals[d],pst->dmax[d])-0.0001);
+    if (!isfinite(a) || !isfinite(b) || b<=a) return -1;
+    if (a<file->dimoff[d]+1) a=file->dimoff[d]+1;
+    if (b>file->dimoff[d]+file->dnum[d]) b=file->dimoff[d]+file->dnum[d];
+    if (a>b) return 1;
+    lo[d]=(gaint)a; hi[d]=(gaint)b;
+    index[d]=(size_t)(lo[d]-file->dimoff[d]-1);
+  }
+  for (d=2;d<5;d++) {
+    index[d]=0;
+    if (file->dnum[d]==1) continue;
+    v=d==3 ? t2gr(file->abvals[3],&pst->tmin) : file->ab2gr[d](file->abvals[d],pst->dmin[d]);
+    nearest=round(v);
+    if (!isfinite(v) || dequal(v,nearest,1e-8)) return -1;
+    if (nearest<file->dimoff[d]+1 || nearest>file->dimoff[d]+file->dnum[d]) return 1;
+    index[d]=(size_t)(nearest-file->dimoff[d]-1);
+  }
+  for (d=0;d<5;d++) { offset+=index[d]*multiplier; multiplier*=file->dnum[d]; }
+  memset(view,0,sizeof(*view));
+  view->pfile=file; view->undef=file->undef;
+  view->idim=0; view->jdim=1;
+  view->isiz=hi[0]-lo[0]+1; view->jsiz=hi[1]-lo[1]+1;
+  view->dimmin[0]=lo[0]; view->dimmax[0]=hi[0];
+  view->dimmin[1]=lo[1]; view->dimmax[1]=hi[1];
+  view->igrab=file->gr2ab[0]; view->ivals=file->grvals[0];
+  view->jgrab=file->gr2ab[1]; view->jvals=file->grvals[1];
+  view->grid=file->rbuf+offset; view->umask=file->ubuf+offset;
+  *stride=(size_t)file->dnum[0]; return 0;
+}
+
+static gaint aave_defined(char *expression, struct gastat *pst, gaint sel,
+                           gadouble *result, char *mask) {
+  struct gafile *file=reduction_defined(expression,pst);
+  struct gagrid view;
+  size_t stride;
+  gaint rc=defined_area_view(file,pst,&view,&stride);
+  if (rc<0) return -1;
+  if (rc) { *result=file->undef; *mask=0; return 0; }
+  *mask=doaave_stride(&view,pst->dmin[0],pst->dmax[0],pst->dmin[1],pst->dmax[1],sel,stride,result);
+  return 0;
+}
+
+/* Reuse weights and distribute independent Z planes, without copying any
+   defined-array values or calling the parser/allocator on worker threads. */
+static gaint aave_defined_span(struct gafunc *call, struct gastat *pst, gaint axis,
+                                  gaint first, gaint last, gadouble *out, char *mask, gadouble undef) {
+  struct gafile *file=reduction_defined(call->argpnt[0],pst);
+  struct gastat sample=*pst;
+  struct gagrid *views=NULL;
+  gadouble *xw=NULL,*yw=NULL,bounds[4],value,sum,weight;
+  gaint nz=last-first+1,k,j,i,dim,wflag=0,rc=-1,model=-1;
+  size_t stride=0,one_stride;
+  if (!file || call->argnum!=5) return -1;
+  for (i=0;i<4;i++) {
+    if (!dimprs(call->argpnt[i+1],pst,pst->pfid,&dim,bounds+i,1,&wflag) || dim!=i/2) return -1;
+    if (!wflag) bounds[i]+=(i%2 ? 0.5 : -0.5);
+  }
+  for (i=0;i<2;i++) {
+    sample.dmin[i]=pst->pfid->gr2ab[i](pst->pfid->grvals[i],bounds[2*i]);
+    sample.dmax[i]=pst->pfid->gr2ab[i](pst->pfid->grvals[i],bounds[2*i+1]);
+  }
+  views=galloc((size_t)nz*sizeof(*views),"definedviews");
+  if (!views) return -1;
+  memset(views,0,(size_t)nz*sizeof(*views));
+  for (k=0;k<nz;k++) {
+    if (axis==2) sample.dmin[2]=sample.dmax[2]=pst->pfid->gr2ab[2](pst->pfid->grvals[2],first+k);
+    else { gr2t(pst->pfid->grvals[3],first+k,&sample.tmin); sample.tmax=sample.tmin; }
+    i=defined_area_view(file,&sample,views+k,&one_stride);
+    if (i<0) goto done;
+    if (i) continue;
+    if (model<0) { model=k; stride=one_stride; }
+    else if (views[k].isiz!=views[model].isiz || views[k].jsiz!=views[model].jsiz || one_stride!=stride) goto done;
+  }
+  if (model>=0) {
+    xw=galloc((size_t)views[model].isiz*sizeof(*xw),"definedxw");
+    yw=galloc((size_t)views[model].jsiz*sizeof(*yw),"definedyw");
+    if (!xw || !yw) goto done;
+    aave_weights(views+model,sample.dmin[0],sample.dmax[0],sample.dmin[1],sample.dmax[1],1,xw,yw);
+  }
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(j,value,sum,weight) \
+    if(model>=0 && nz>1 && ga_omp_parallelize((double)nz*views[model].isiz*views[model].jsiz>INT_MAX ? INT_MAX : nz*views[model].isiz*views[model].jsiz))
+#endif
+  for (k=0;k<nz;k++) {
+    sum=weight=0;
+    if (views[k].grid) for (j=0;j<views[k].jsiz;j++) {
+      gadouble rowweight;
+      aave_row(views+k,(size_t)j*stride,xw,yw[j],1,&value,&rowweight);
+      sum+=value; weight+=rowweight;
+    }
+    mask[k]=weight>0; out[k]=mask[k] ? sum/weight : undef;
+  }
+  rc=gaqsig() ? 1 : 0;
+done:
+  if (views) gree(views,"definedviews");
+  if (xw) gree(xw,"definedxw"); if (yw) gree(yw,"definedyw");
+  return rc;
 }
 
 
@@ -3042,61 +3207,71 @@ static struct gavar *ave_plain_var (char *expr, struct gastat *pst,
   pvar = pfi->pvar1;
   for (i=0; i<pfi->vnum && !cmpwrd(name,pvar->abbrv); i++) pvar++;
   if (i>=pfi->vnum) return NULL;
-  if (pgr->pvar!=pvar || pgr->pfile!=pfi || pgr->toff) return NULL;
+  if (pgr && (pgr->pvar!=pvar || pgr->pfile!=pfi || pgr->toff)) return NULL;
   return pvar;
 }
 
-/* An average over x, y or z of a bare variable whose result varies in
-   one dimension at most (a profile, a section's line, a point): every
-   position it averages over is read at once, as one grid in which the
-   averaged dimension varies too, rather than a read for each position.
-   Read one at a time, a profile averaged over x and y is a read of a
-   column for every point of the plane, each of which costs a file format
-   such as BP5 the whole block it lies in. Returns that grid, or NULL to
-   read a position at a time; its values are the ones those reads give.
-   pgr1 is the grid read for the first position. */
-#define AVE_SECTION_MAX 33554432.0     /* values in one such read, 256 MB */
-static struct gagrid *ave_section (struct gafunc *pfc, struct gastat *pst,
-                                   struct gafile *pfi, gaint dim, gaint d1, gaint d2,
-                                   struct gagrid *pgr1) {
-  struct gagrid *sec;
-  gadouble (*conv) (gadouble *, gadouble);
-  gadouble smin, smax;
-  gaint sidim, sjdim, r, rc;
+/* Recognize only a sum of two unmodified, equally shaped file fields.
+   Keep the addition inside each time's mask: ave(a+b) is not in general
+   ave(a)+ave(b). Other expressions retain the ordinary evaluator. */
+static struct gavar *ave_sum_vars(char *expr, struct gastat *pst,
+                                  struct gagrid *grid, struct gavar **other) {
+  char terms[2][128],*plus=strchr(expr,'+');
+  struct gavar *a,*b;
+  size_t n;
+  gaint d;
+  if (!plus || strchr(plus+1,'+') || strlen(expr)>=sizeof(terms[0]) ||
+      grid->pfile!=pst->pfid || grid->toff) return NULL;
+  n=plus-expr; memcpy(terms[0],expr,n); terms[0][n]=0;
+  strcpy(terms[1],plus+1);
+  a=ave_plain_var(terms[0],pst,NULL); b=ave_plain_var(terms[1],pst,NULL);
+  if (!a || !b || a->levels!=b->levels || a->nh5vardims!=b->nh5vardims || a->nvardims!=b->nvardims) return NULL;
+  for (d=0;d<a->nh5vardims || d<a->nvardims;d++) if (a->units[d]!=b->units[d]) return NULL;
+  *other=b;
+  return a;
+}
 
-  if (dim>2 || d2<=d1 || pgr1->jdim>=0) return NULL;
-  if ((gadouble)(d2-d1+1)*pgr1->isiz > AVE_SECTION_MAX) return NULL;
-  if (ave_plain_var(pfc->argpnt[0],pst,pgr1)==NULL) return NULL;
-  r = pgr1->idim;
-  if (r==dim) return NULL;
-  sidim = pst->idim;
-  sjdim = pst->jdim;
-  smin = pst->dmin[dim];
-  smax = pst->dmax[dim];
-  conv = pfi->gr2ab[dim];
-  pst->dmin[dim] = conv(pfi->grvals[dim],(gadouble)d1);
-  pst->dmax[dim] = conv(pfi->grvals[dim],(gadouble)d2);
-  if (r<0)        { pst->idim = dim; pst->jdim = -1; }
-  else if (r<dim) { pst->idim = r;   pst->jdim = dim; }
-  else            { pst->idim = dim; pst->jdim = r; }
-  rc = gaexpr(pfc->argpnt[0],pst);
-  pst->idim = sidim;
-  pst->jdim = sjdim;
-  pst->dmin[dim] = smin;
-  pst->dmax[dim] = smax;
-  if (rc) return NULL;
-  if (pst->type!=1) {
-    gafree(pst);
-    return NULL;
+#define AVE_SECTION_MAX 33554432.0     /* values in one read, 256 MiB */
+
+/* Plan a complete section before evaluating its first positions. The
+   section supplies the result's metadata too: no duplicate native reads
+   are needed just to discover its shape. */
+static struct gagrid *ave_section(struct gafunc *pfc, struct gastat *pst,
+                                  struct gafile *file, gaint dim, gaint first, gaint last) {
+  struct gastat sample=*pst;
+  struct gagrid *sec;
+  struct gafile *source=file;
+  gaint r=pst->idim,rc,k;
+  gadouble length=1,lo,hi;
+  /* Time and ensemble axes do not use spatial ab2gr/gr2ab callbacks.
+     Keep those output axes on the position-at-a-time evaluator. */
+  if (dim>2 || r>2 || last<=first || pst->jdim>=0 || r==dim) return NULL;
+  if (!ave_plain_var(pfc->argpnt[0],pst,NULL)) {
+    source=reduction_defined(pfc->argpnt[0],pst);
+    if (!source || source->climo || source->dnum[dim]<=1 || (r>=0 && source->dnum[r]<=1)) return NULL;
+    /* Average limits/weights use the default file. Only accept a defined
+       section whose averaged coordinates agree at every requested point. */
+    for (k=first;k<=last;k++) if (file->gr2ab[dim](file->grvals[dim],k)!=
+         source->gr2ab[dim](source->grvals[dim],k)) return NULL;
   }
-  sec = pst->result.pgr;
-  /* it holds every position, and the rest is laid out as the first grid */
-  if (sec->dimmin[dim]!=d1 || sec->dimmax[dim]!=d2 ||
-      (r>=0 && (sec->dimmin[r]!=pgr1->dimmin[r] || sec->dimmax[r]!=pgr1->dimmax[r])) ||
-      sec->isiz*sec->jsiz != (d2-d1+1)*pgr1->isiz*pgr1->jsiz ||
-      (r<0 ? sec->idim!=dim : (sec->idim!=(r<dim ? r : dim) || sec->jdim!=(r<dim ? dim : r)))) {
-    gagfre(sec);
-    return NULL;
+  if (r>=0) {
+    lo=floor(source->ab2gr[r](source->abvals[r],pst->dmin[r])+0.0001);
+    hi=ceil(source->ab2gr[r](source->abvals[r],pst->dmax[r])-0.0001);
+    length=hi-lo+1;
+  }
+  if (length<1 || (last-first+1)*length>AVE_SECTION_MAX) return NULL;
+  sample.dmin[dim]=file->gr2ab[dim](file->grvals[dim],first);
+  sample.dmax[dim]=file->gr2ab[dim](file->grvals[dim],last);
+  if (r<0) { sample.idim=dim; sample.jdim=-1; }
+  else { sample.idim=r<dim ? r : dim; sample.jdim=r<dim ? dim : r; }
+  rc=gaexpr(pfc->argpnt[0],&sample);
+  if (rc) return NULL;
+  if (sample.type!=1) { gafree(&sample); return NULL; }
+  sec=sample.result.pgr;
+  if (sec->alocf || sec->dimmin[dim]!=first || sec->dimmax[dim]!=last ||
+      sec->isiz*sec->jsiz!=(last-first+1)*length ||
+      sec->idim!=sample.idim || sec->jdim!=sample.jdim) {
+    gagfre(sec); return NULL;
   }
   return sec;
 }
@@ -3113,6 +3288,152 @@ static void ave_section_at (struct gagrid *sec, gaint dim, gaint k, gaint siz,
     val[i] = sec->grid[o];
     valu[i] = sec->umask[o];
   }
+}
+
+/* An owned output grid sliced from an immutable input section. */
+static struct gagrid *ave_section_grid(struct gagrid *sec, gaint dim, gaint at) {
+  struct gagrid *grid=galloc(sizeof(*grid),"avesectiongrid");
+  gaint r=sec->idim==dim ? sec->jdim : sec->idim;
+  if (!grid) return NULL;
+  *grid=*sec;
+  grid->idim=r; grid->jdim=-1; grid->jsiz=1;
+  grid->isiz=r<0 ? 1 : sec->idim==r ? sec->isiz : sec->jsiz;
+  grid->dimmin[dim]=grid->dimmax[dim]=sec->dimmin[dim]+at;
+  if (r==sec->jdim) {
+    grid->igrab=sec->jgrab; grid->iabgr=sec->jabgr;
+    grid->ivals=sec->jvals; grid->iavals=sec->javals; grid->ilinr=sec->jlinr;
+  }
+  if (r<0) { grid->grid=&grid->rmin; grid->umask=&grid->umin; }
+  else {
+    grid->grid=galloc((size_t)grid->isiz*sizeof(*grid->grid),"avesectionvalues");
+    grid->umask=galloc((size_t)grid->isiz,"avesectionmask");
+    if (!grid->grid || !grid->umask) { gagfre(grid); return NULL; }
+  }
+  ave_section_at(sec,dim,at,grid->isiz,grid->grid,grid->umask);
+  return grid;
+}
+
+/* Spatial weights follow the evaluator's cell edges and clipping order. */
+static gadouble ave_spatial_weight(struct gafile *file, gaint dim, gaint d,
+                                    gaint sel, gaint bounded, gadouble wlo, gadouble whi) {
+  gadouble alo=file->gr2ab[dim](file->grvals[dim],d-0.5);
+  gadouble ahi=file->gr2ab[dim](file->grvals[dim],d+0.5),alen=fabs(ahi-alo);
+  if (bounded) {
+    gadouble low=whi<wlo ? whi : wlo,high=whi<wlo ? wlo : whi;
+    if (alo<low) alo=low; if (alo>high) alo=high;
+    if (ahi<low) ahi=low; if (ahi>high) ahi=high;
+  }
+  if (dim==1) {
+    if (alo>90) alo=90; if (ahi>90) ahi=90;
+    if (alo< -90) alo= -90; if (ahi< -90) ahi= -90;
+    if (sel==1) return fabs(sin(ahi*(M_PI/180))-sin(alo*(M_PI/180)));
+    if (sel==2) return fabs(ahi-alo);
+  } else if (sel<=2) return ahi-alo;
+  if (sel==3) return alen>FUZZ_SCALE ? fabs(ahi-alo)/alen : 0;
+  return 1;
+}
+
+/* One region for the whole resident section. Every result point retains
+   the evaluator's position-by-position addition and min/max tie order. */
+static gaint ave_fold_section(struct gagrid *sec, struct gagrid *sum, struct gagrid *cnt,
+                               struct gafile *file, gaint dim, gaint first, gaint last,
+                               gaint sel, gaint bounded, gadouble wlo, gadouble whi) {
+  gadouble *weights;
+  gaint i,k,n=last-first+1,size=sum->isiz*sum->jsiz;
+  size_t pos;
+  if (n<1) return 0;
+  weights=galloc((size_t)n*sizeof(*weights),"avesectionweights");
+  if (!weights) return -1;
+  for (k=0;k<n;k++) weights[k]=ave_spatial_weight(file,dim,first+k,sel,bounded,wlo,whi);
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(k,pos) \
+    if(ga_omp_parallelize((double)size*n>INT_MAX ? INT_MAX : size*n))
+#endif
+  for (i=0;i<size;i++) {
+    for (k=0;k<n;k++) {
+      size_t at=(size_t)(first+k-sec->dimmin[dim]);
+      pos=sec->jdim<0 ? at : sec->idim==dim ? (size_t)i*sec->isiz+at : at*sec->isiz+i;
+      ave_accumulate(sel,first+k,weights[k],&sum->grid[i],&sum->umask[i],
+                     &cnt->grid[i],&cnt->umask[i],sec->grid[pos],sec->umask[pos]);
+    }
+  }
+  gree(weights,"avesectionweights");
+  return gaqsig() ? 1 : 0;
+}
+
+/* A bounded XYZ slab for a vertical reduction of a plain file variable.
+   Each output column keeps its original level-by-level addition order.
+   Reads are serial; independent columns run on the calculation threads. */
+static gaint ave_volume(struct gafunc *pfc, struct gastat *pst, struct gafile *file,
+                         struct gagrid *sum, struct gagrid *cnt, gaint first, gaint last,
+                         gaint sel, gaint bounded, gadouble wlo, gadouble whi) {
+  struct gagrid tile=*sum;
+  struct gavar *var=ave_plain_var(pfc->argpnt[0],pst,sum);
+  gadouble *values=NULL,*weights=NULL,alo,ahi,alen,value;
+  char *mask=NULL;
+  gaint nx,ny,tx,ty,x,y,i,j,k,rc=-1,nz=last-first+1,begun=0;
+  size_t plane,n,pos,dst;
+  if ((!file->adios2flg && file->ncflg!=3) || !var || sel>4 || first<1 || last>var->levels || sum->idim>1 || sum->jdim>1 ||
+      file->ppflag || file->idxflg || sum->toff ||
+      sum->dimmin[0]<1 || sum->dimmax[0]>file->dnum[0] ||
+      sum->dimmin[1]<1 || sum->dimmax[1]>file->dnum[1] ||
+      sum->dimmin[3]<1 || sum->dimmax[3]>file->dnum[3] ||
+      sum->dimmin[4]<1 || sum->dimmax[4]>file->dnum[4]) return -1;
+  nx=sum->dimmax[0]-sum->dimmin[0]+1; ny=sum->dimmax[1]-sum->dimmin[1]+1;
+  tx=file->adios2flg && nx>512 ? 512 : nx; ty=ny<256 ? ny : 256;
+  /* At most 128 MiB of values/masks, plus the backend's native buffer. */
+  while ((double)tx*ty*nz>128.0*1024*1024/(sizeof(*values)+1) && ty>1) ty=(ty+1)/2;
+  while ((double)tx*ty*nz>128.0*1024*1024/(sizeof(*values)+1) && tx>1) tx=(tx+1)/2;
+  n=(size_t)tx*ty*nz;
+  if (n>128*1024*1024/(sizeof(*values)+1)) return -1;
+  values=galloc(n*sizeof(*values),"avevolume"); mask=galloc(n,"avevolumemask");
+  weights=galloc((size_t)nz*sizeof(*weights),"avevolumeweights");
+  if (!values || !mask || !weights) goto done;
+  for (k=first;k<=last;k++) {
+    alo=file->gr2ab[2](file->grvals[2],k-0.5);
+    ahi=file->gr2ab[2](file->grvals[2],k+0.5); alen=fabs(ahi-alo);
+    if (bounded) {
+      gadouble low=whi<wlo ? whi : wlo,high=whi<wlo ? wlo : whi;
+      if (alo<low) alo=low; if (alo>high) alo=high;
+      if (ahi<low) ahi=low; if (ahi>high) ahi=high;
+    }
+    weights[k-first]=sel<=2 ? ahi-alo : sel==3 ? (alen>FUZZ_SCALE ? fabs(ahi-alo)/alen : 0) : 1;
+  }
+  for (y=0;y<ny;y+=ty) for (x=0;x<nx;x+=tx) {
+    gaint width=nx-x<tx ? nx-x : tx,height=ny-y<ty ? ny-y : ty;
+    tile.dimmin[0]=sum->dimmin[0]+x; tile.dimmax[0]=tile.dimmin[0]+width-1;
+    tile.dimmin[1]=sum->dimmin[1]+y; tile.dimmax[1]=tile.dimmin[1]+height-1;
+    tile.pvar=var; plane=(size_t)width*height;
+    rc=gagrdvolume(&tile,first,last,values,mask);
+    if (rc) { if (begun || rc>0) rc=1; goto done; }
+    begun=1;
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(i,j,k,pos,dst,value) \
+    if(ga_omp_parallelize(plane*(size_t)nz>INT_MAX ? INT_MAX : (gaint)(plane*nz)))
+#endif
+    for (n=0;n<plane;n+=256) {
+      size_t q,end=n+256<plane ? n+256 : plane,indices[256];
+      for (q=n;q<end;q++) {
+        i=x+q%width; j=y+q/width;
+        indices[q-n]=sum->idim==0 ? (size_t)j*nx+i : sum->idim==1 ? j : 0;
+      }
+      for (k=0;k<nz;k++) {
+        for (q=n;q<end;q++) {
+          dst=indices[q-n]; pos=(size_t)k*plane+q; value=values[pos];
+          ave_accumulate(sel,first+k,weights[k],&sum->grid[dst],&sum->umask[dst],
+                         &cnt->grid[dst],&cnt->umask[dst],value,mask[pos]);
+        }
+      }
+    }
+    if (gaqsig()) { rc=1; goto done; }
+  }
+  pst->dmin[2]=pst->dmax[2]=file->gr2ab[2](file->grvals[2],last);
+  rc=0;
+done:
+  if (values) gree(values,"avevolume");
+  if (mask) gree(mask,"avevolumemask");
+  if (weights) gree(weights,"avevolumeweights");
+  return rc;
 }
 
 static gaint ave_run (struct gafunc *, struct gastat *, gaint);
@@ -3136,11 +3457,12 @@ gadouble alo, ahi, alen, wlo=0, whi=0;
 gadouble d2r, wt, wt1, abs;
 gaint mos, mns, wflag=0;
 gaint i, rc, siz, dim, d, d1, d2, dim2, ilin, incr, bndflg, normerr;
-gaint k, nstep, chunk, ib, ie, ndone;
+gaint k, nstep, chunk, ib, ie, ndone, evaluate=0;
 char *ch,*fnam,*sumu,*cntu,*valu;
-struct gavar *direct;
-gadouble *steps=NULL, *wts=NULL, *secv=NULL;
-char *stepsu=NULL, *secu=NULL;
+struct gavar *direct,*other=NULL;
+struct gagrid readgrid,readother;
+gadouble *steps=NULL, *wts=NULL, *secv=NULL,*stepsb=NULL;
+char *stepsu=NULL, *secu=NULL,*stepsbu=NULL;
 struct gagrid *sect=NULL;
 
   d2r = M_PI/180;
@@ -3333,8 +3655,13 @@ struct gagrid *sect=NULL;
     }
   }
 
-  /* Get first grid */
-  rc = gaexpr(pfc->argpnt[0],pst);
+  /* Read a simple spatial section before its first two output grids. */
+  sect=ave_section(pfc,pst,pfi,dim,d1,d2);
+  if (sect) {
+    pst->result.pgr=ave_section_grid(sect,dim,0);
+    if (!pst->result.pgr) { gagfre(sect); return 1; }
+    pst->type=1; rc=0;
+  } else rc=gaexpr(pfc->argpnt[0],pst);
   if (rc) return (rc);
   if (pst->type == 0) {
     gafree (pst);
@@ -3424,7 +3751,11 @@ struct gagrid *sect=NULL;
     }
   }
 
-  rc = gaexpr(pfc->argpnt[0],pst);    /* Get 2nd grid */
+  if (sect) {
+    pst->result.pgr=ave_section_grid(sect,dim,d-d1);
+    if (!pst->result.pgr) { gagfre(pgr1); gagfre(sect); return 1; }
+    pst->type=1; rc=0;
+  } else rc=gaexpr(pfc->argpnt[0],pst);    /* Get 2nd grid */
   if (rc) {
     gagfre(pgr1);
     return (rc);
@@ -3518,8 +3849,29 @@ struct gagrid *sect=NULL;
      else, or a format without such a reader, goes a time at a time. */
   d+=incr;
   rc = 0;
+  if (sect && d<=d2) {
+    rc=ave_fold_section(sect,pgr1,pgr2,pfi,dim,d,d2,sel,bndflg,wlo,whi);
+    if (rc>=0) {
+      pst->dmin[dim]=pst->dmax[dim]=pfi->gr2ab[dim](pfi->grvals[dim],d2);
+      gaprogstep(d2-d1+1); goto average_done;
+    }
+    rc=0;
+  }
+  if (dim==2 && d<=d2 && !sect) {
+    rc=ave_volume(pfc,pst,pfi,pgr1,pgr2,d,d2,sel,bndflg,wlo,whi);
+    if (rc>=0) { gaprogstep(d2-d1+1); goto average_done; }
+    rc=0;
+  }
   direct = (dim==3) ? ave_plain_var(pfc->argpnt[0],pst,pgr1) : NULL;
-  if (d<=d2) sect = ave_section(pfc,pst,pfi,dim,d1,d2,pgr1);
+  if (dim==3 && !direct) direct=ave_sum_vars(pfc->argpnt[0],pst,pgr1,&other);
+  evaluate = dim==3 && (d2-d1)/incr+1>=32 &&
+             ga_time_can_evaluate(pfc->argpnt[0],pst);
+  /* Short means and binary means are faster without extra batch buffers. */
+  if (direct && !pfi->adios2flg && (!pfi->ncflg || (d2-d)/incr+1<8)) direct=NULL;
+  if (direct) {
+    readgrid=*pgr1; readgrid.pvar=direct;
+    readother=*pgr1; readother.pvar=other;
+  }
   if (sect) {
     secv = (gadouble *)galloc(sizeof(gadouble)*(size_t)siz,"avesecv");
     secu = (char *)galloc((size_t)siz,"avesecu");
@@ -3529,20 +3881,26 @@ struct gagrid *sect=NULL;
     }
   }
   chunk = 1;
-  if (direct) {
-    chunk = (gaint)((64.0*1024.0*1024.0) / ((gadouble)siz*(sizeof(gadouble)+1)));
+  if (direct || evaluate) {
+    chunk = (gaint)(ga_time_batch_bytes(pfi) / ((gadouble)siz*(sizeof(gadouble)+1)));
+    if (other) chunk/=2;
     if (chunk>256) chunk = 256;
-    if (chunk<2) direct = NULL;
+    if (chunk<2) { direct=NULL;evaluate=0; }
   }
-  if (direct) {
+  if (direct || evaluate) {
     steps  = (gadouble *)galloc(sizeof(gadouble)*(size_t)siz*(size_t)chunk,"avesteps");
     stepsu = (char *)galloc((size_t)siz*(size_t)chunk,"avestepsu");
     wts    = (gadouble *)galloc(sizeof(gadouble)*(size_t)chunk,"avewts");
-    if (!steps || !stepsu || !wts) direct = NULL;
+    if (!steps || !stepsu || !wts) { direct=NULL;evaluate=0; }
+    if (other) {
+      stepsb=galloc(sizeof(gadouble)*(size_t)siz*(size_t)chunk,"avestepsb");
+      stepsbu=galloc((size_t)siz*(size_t)chunk,"avestepsbu");
+      if (!stepsb || !stepsbu) { direct=NULL;evaluate=0; }
+    }
   }
   for (d=d; d<=d2 && !rc; d+=incr) {
     /* times outside the file go the usual way, which warns about them */
-    if (direct && d>=1 && d<=pfi->dnum[3]) {
+    if ((direct || evaluate) && d>=1 && d<=pfi->dnum[3]) {
       if (gaqsig()) {                  /* Ctrl-C; gaexpr notices it itself */
         rc = 1;
         break;
@@ -3550,7 +3908,25 @@ struct gagrid *sect=NULL;
       nstep = (d2-d)/incr + 1;
       if (nstep>(pfi->dnum[3]-d)/incr+1) nstep = (pfi->dnum[3]-d)/incr+1;
       if (nstep>chunk) nstep = chunk;
-      rc = gagrdsteps(pgr1, d, nstep, incr, steps, stepsu);
+      rc=-1;
+      if (direct) {
+        if (other && !pfi->adios2flg && !ga_time_can_read(pfi)) {
+          /* Keep template files open while reading both fields at a time. */
+          rc=0;
+          for (k=0;k<nstep && !rc;k++) {
+            size_t at=(size_t)k*siz;
+            rc=gagrdsteps(&readgrid,d+k*incr,1,incr,steps+at,stepsu+at);
+            if (!rc) rc=gagrdsteps(&readother,d+k*incr,1,incr,stepsb+at,stepsbu+at);
+          }
+        } else {
+          rc=gagrdsteps(&readgrid,d,nstep,incr,steps,stepsu);
+          if (!rc && other) rc=gagrdsteps(&readother,d,nstep,incr,stepsb,stepsbu);
+        }
+      }
+      if (rc<0 && evaluate) {
+        direct=NULL;other=NULL; /* whole expression already combines fields */
+        rc=ga_time_evaluatesteps(pfc->argpnt[0],pst,pgr1,d,nstep,incr,steps,stepsu);
+      }
       if (rc==0) {
         for (k=0; k<nstep; k++) {
           wts[k] = bndflg ? ave_tbndwt(gr1,gr2,d+k*incr) : 1.0;
@@ -3570,8 +3946,15 @@ struct gagrid *sect=NULL;
           ie = ib+AVE_TILE < siz ? ib+AVE_TILE : siz;
           for (k=0; k<nstep; k++) {
             for (i=ib; i<ie; i++) {
+              size_t pos=(size_t)k*siz+i;
+              gadouble value=steps[pos];
+              char valid=stepsu[pos];
+              if (other) {
+                valid=valid && stepsbu[pos];
+                if (valid) value+=stepsb[pos];
+              }
               ave_accumulate(sel, d+k*incr, wts[k], &sum[i], &sumu[i], &cnt[i], &cntu[i],
-                             steps[(size_t)k*siz+i], stepsu[(size_t)k*siz+i]);
+                             value,valid);
             }
           }
         }
@@ -3584,7 +3967,7 @@ struct gagrid *sect=NULL;
       }
       if (rc>0) break;
       rc = 0;
-      direct = NULL;       /* not a request it reads; go a time at a time */
+      direct=NULL;evaluate=0; /* unsupported batch: ordinary evaluator */
     }
     /* Get weight for this grid */
     wt = 1.0;
@@ -3685,8 +4068,11 @@ struct gagrid *sect=NULL;
     }
   }
 
+average_done:
   if (steps)  gree(steps,"avesteps");
   if (stepsu) gree(stepsu,"avestepsu");
+  if (stepsb) gree(stepsb,"avestepsb");
+  if (stepsbu) gree(stepsbu,"avestepsbu");
   if (wts)    gree(wts,"avewts");
   if (sect)   gagfre(sect);
   if (secv)   gree(secv,"avesecv");
@@ -3742,6 +4128,239 @@ err3:
   snprintf(pout,1255,"Error from %s: Invalid time increment argument\n",fnam);
   gaprnt(0,pout);
   return (1);
+}
+
+
+/* Recognize only a complete, simple reduction call. Everything else keeps
+   the evaluator, including expressions outside the call and nested calls. */
+static gaint reduction_call(char *expression, char *name, struct gafunc *call) {
+  char *p=strchr(expression,'('),*q,*out=call->buff;
+  size_t n;
+  if (!p || (n=(size_t)(p-expression))>8 || !n || strlen(p+1)>=sizeof(call->buff)) return 0;
+  memcpy(name,expression,n); name[n]=0;
+  call->argnum=1; call->argpnt[0]=out;
+  for (q=p+1;*q && *q!=')';q++) {
+    if (*q=='(') return 0;
+    if (*q==',') {
+      if (call->argnum>=20) return 0;
+      *out++=0; call->argpnt[call->argnum++]=out;
+    } else *out++=*q;
+  }
+  if (*q!=')' || q[1]) return 0;
+  *out=0; return 1;
+}
+
+/* Fill one time/member of a DEFINE across Z. The destination belongs to
+   DEFINE and is never exposed as a mutable view to the expression parser.
+   Return -1 for the established level-at-a-time path, 0 on success. */
+gaint gadefseries(char *expression, struct gastat *pst, gaint z1, gaint z2,
+                   struct gagrid *shape, gadouble *out, char *outmask, gadouble undef) {
+  struct gafunc call;
+  struct gastat sample=*pst;
+  struct gafile *file=pst->pfid;
+  struct gavar *var;
+  struct gagrid *plane=NULL,tile;
+  char name[9],*mask=NULL;
+  gadouble bounds[4],*values=NULL,*xw=NULL,*yw=NULL,*sums=NULL,*counts=NULL,gr;
+  gaint dim,wflag=0,rc=-1,k,x,y,i,j,nz=z2-z1+1,tx,ty,nx,ny,lx,ly,ox,oy;
+  size_t n,pos,pp;
+  if (z2<=z1 || z1<1 || !reduction_call(expression,name,&call)) return -1;
+  if (!strcmp(name,"aave") && shape->idim<0 && reduction_defined(call.argpnt[0],pst))
+    return aave_defined_span(&call,pst,2,z1,z2,out,outmask,undef);
+  var=ave_plain_var(call.argpnt[0],pst,NULL);
+  if (!var) {
+    struct gafile *defined=reduction_defined(call.argpnt[0],pst);
+    if (!defined || defined->dnum[2]<2 || z1<=defined->dimoff[2] ||
+        z2>defined->dimoff[2]+defined->dnum[2]) return -1;
+  } else if (z2>var->levels) return -1;
+  if (!strcmp(name,"ave") && shape->idim<0 && call.argnum>=3 && call.argnum<=4) {
+    if (!dimprs(call.argpnt[1],pst,file,&dim,&gr,1,&wflag) || dim>1) return -1;
+    sample.idim=2; sample.jdim=-1;
+    sample.dmin[2]=file->gr2ab[2](file->grvals[2],z1);
+    sample.dmax[2]=file->gr2ab[2](file->grvals[2],z2);
+    rc=gaexpr(expression,&sample);
+    if (rc) return rc;
+    if (sample.type!=1) { gafree(&sample); return 1; }
+    plane=sample.result.pgr;
+    if (plane->idim!=2 || plane->jdim>=0 || plane->isiz!=nz || plane->dimmin[2]!=z1) {
+      gafree(&sample); return 1;
+    }
+    for (k=0;k<nz;k++) { outmask[k]=plane->umask[k]; out[k]=outmask[k] ? plane->grid[k] : undef; }
+    gafree(&sample); return 0;
+  }
+  if (!var || (!file->adios2flg && file->ncflg) || strcmp(name,"aave") || call.argnum!=5 ||
+      shape->idim>=0 || file->ppflag || file->idxflg) return -1;
+  for (i=0;i<4;i++) {
+    if (!dimprs(call.argpnt[i+1],pst,file,&dim,bounds+i,1,&wflag) || dim!=i/2) return -1;
+    if (!wflag) bounds[i]+=(i%2 ? 0.5 : -0.5);
+  }
+  for (i=0;i<2;i++) {
+    sample.dmin[i]=file->gr2ab[i](file->grvals[i],bounds[2*i]);
+    sample.dmax[i]=file->gr2ab[i](file->grvals[i],bounds[2*i+1]);
+  }
+  sample.idim=0; sample.jdim=1;
+  if (gaexpr("lon",&sample)) return 1;
+  if (sample.type!=1) { gafree(&sample); return -1; }
+  plane=sample.result.pgr; tile=*plane; tile.pvar=var;
+  nx=plane->isiz; ny=plane->jsiz;
+  if ((file->wrap && (plane->dimmin[0]<1 || plane->dimmax[0]>file->dnum[0])) ||
+      plane->dimmin[3]<1 || plane->dimmax[3]>file->dnum[3] ||
+      plane->dimmin[4]<1 || plane->dimmax[4]>file->dnum[4]) goto done;
+  xw=galloc((size_t)nx*sizeof(*xw),"seriesxw"); yw=galloc((size_t)ny*sizeof(*yw),"seriesyw");
+  sums=galloc((size_t)nz*sizeof(*sums),"seriessum"); counts=galloc((size_t)nz*sizeof(*counts),"seriescount");
+  if (!xw || !yw || !sums || !counts) goto done;
+  aave_weights(plane,sample.dmin[0],sample.dmax[0],sample.dmin[1],sample.dmax[1],1,xw,yw);
+  for (k=0;k<nz;k++) { sums[k]=counts[k]=0; }
+  lx=plane->dimmin[0]<1 ? 1 : plane->dimmin[0];
+  ly=plane->dimmin[1]<1 ? 1 : plane->dimmin[1];
+  nx=plane->dimmax[0]>file->dnum[0] ? file->dnum[0] : plane->dimmax[0];
+  ny=plane->dimmax[1]>file->dnum[1] ? file->dnum[1] : plane->dimmax[1];
+  tx=nx-lx+1; if (file->adios2flg && tx>512) tx=512;
+  ty=ny-ly+1; if (ty>256) ty=256;
+  if (tx<1 || ty<1) { rc=-1; goto done; }
+  while ((double)tx*ty*nz>128.0*1024*1024/(sizeof(*values)+1) && ty>1) ty=(ty+1)/2;
+  while ((double)tx*ty*nz>128.0*1024*1024/(sizeof(*values)+1) && tx>1) tx=(tx+1)/2;
+  n=(size_t)tx*ty*nz;
+  if (n>128*1024*1024/(sizeof(*values)+1)) goto done;
+  values=galloc(n*sizeof(*values),"seriesvalues"); mask=galloc(n,"seriesmask");
+  if (!values || !mask) goto done;
+  for (y=ly;y<=ny;y+=ty) for (x=lx;x<=nx;x+=tx) {
+    gaint width=nx-x+1<tx ? nx-x+1 : tx,height=ny-y+1<ty ? ny-y+1 : ty;
+    tile.dimmin[0]=x; tile.dimmax[0]=x+width-1;
+    tile.dimmin[1]=y; tile.dimmax[1]=y+height-1;
+    pp=(size_t)width*height;
+    rc=gagrdvolume(&tile,z1,z2,values,mask);
+    if (rc) { if (x!=lx || y!=ly || rc>0) rc=1; goto done; }
+    ox=x-plane->dimmin[0]; oy=y-plane->dimmin[1];
+    /* Independent levels own their sums, with a fixed row/cell order.
+       Thread count therefore does not change this reduction's grouping. */
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(j,i,pos) \
+    if(nz>1 && ga_omp_parallelize(pp*(size_t)nz>INT_MAX ? INT_MAX : (gaint)(pp*nz)))
+#endif
+    for (k=0;k<nz;k++) {
+      gadouble sum=0,weight=0;
+      for (j=0;j<height;j++) {
+        gadouble rowsum=0,rowweight=0;
+#if USEOPENMP == 1
+#pragma omp simd reduction(+:rowsum,rowweight)
+#endif
+        for (i=0;i<width;i++) {
+          pos=(size_t)k*pp+(size_t)j*width+i;
+          if (mask[pos]) {
+            gadouble w=xw[ox+i]*yw[oy+j];
+            rowsum+=values[pos]*w; rowweight+=w;
+          }
+        }
+        sum+=rowsum; weight+=rowweight;
+      }
+      sums[k]+=sum; counts[k]+=weight;
+    }
+    if (gaqsig()) { rc=1; goto done; }
+  }
+  for (k=0;k<nz;k++) { outmask[k]=counts[k]>0; out[k]=outmask[k] ? sums[k]/counts[k] : undef; }
+  rc=0;
+done:
+  if (plane) gagfre(plane);
+  if (xw) gree(xw,"seriesxw"); if (yw) gree(yw,"seriesyw");
+  if (sums) gree(sums,"seriessum"); if (counts) gree(counts,"seriescount");
+  if (values) gree(values,"seriesvalues"); if (mask) gree(mask,"seriesmask");
+  return rc;
+}
+
+
+/* Area means at several times: one serial I/O producer, bounded batches,
+   and independent per-time reductions. No shared parser/file state is
+   touched by worker threads. Only a complete simple AAVE call is eligible. */
+gaint gadeftimeseries(char *expression, struct gastat *pst, gaint first, gaint last,
+                       struct gagrid *shape, gadouble *out, char *outmask,
+                       gadouble undef, gaint reuse, gaint progress) {
+  struct gafunc call;
+  struct gafile *file=pst->pfid;
+  struct gavar *var;
+  struct gastat sample=*pst;
+  struct gagrid *plane=NULL,read;
+  char name[9],*mask=NULL;
+  gadouble bounds[4],*values=NULL,*xw=NULL,*yw=NULL;
+  size_t size,n;
+  gaint i,dim,wflag=0,rc=-1,chunk,t,count,k,j;
+  if (last<=first || shape->idim>=0 || !reduction_call(expression,name,&call) ||
+      strcmp(name,"aave") || call.argnum!=5) return -1;
+  if (reduction_defined(call.argpnt[0],pst))
+    return aave_defined_span(&call,pst,3,first,last,out,outmask,undef);
+  var=ave_plain_var(call.argpnt[0],pst,NULL);
+  if (!var || file->ppflag || file->idxflg || first<1 || last>file->dnum[3]) return -1;
+  /* Serial NetCDF/HDF5 readers benefit only when enough independent times
+     amortize the producer workspace and keep several workers busy. */
+  if (!file->adios2flg && file->ncflg &&
+      (last-first+1<8 || ga_omp_get_threads()<4)) return -1;
+  for (i=0;i<4;i++) {
+    if (!dimprs(call.argpnt[i+1],pst,file,&dim,bounds+i,1,&wflag) || dim!=i/2) return -1;
+    if (!wflag) bounds[i]+=(i%2 ? 0.5 : -0.5);
+  }
+  for (i=0;i<2;i++) {
+    sample.dmin[i]=file->gr2ab[i](file->grvals[i],bounds[2*i]);
+    sample.dmax[i]=file->gr2ab[i](file->grvals[i],bounds[2*i+1]);
+  }
+  sample.idim=0; sample.jdim=1;
+  if (gaexpr("lon",&sample)) return 1;
+  if (sample.type!=1) { gafree(&sample); return -1; }
+  plane=sample.result.pgr; read=*plane; read.pvar=var;
+  if ((file->wrap && (read.dimmin[0]<1 || read.dimmax[0]>file->dnum[0])) ||
+      read.dimmin[4]<1 || read.dimmax[4]>file->dnum[4]) goto done;
+  for (i=0;i<2;i++) {
+    if (read.dimmin[i]<1) read.dimmin[i]=1;
+    if (read.dimmax[i]>file->dnum[i]) read.dimmax[i]=file->dnum[i];
+    if (read.dimmin[i]>read.dimmax[i]) goto done;
+  }
+  read.isiz=read.dimmax[0]-read.dimmin[0]+1;
+  read.jsiz=read.dimmax[1]-read.dimmin[1]+1;
+  size=(size_t)read.isiz*read.jsiz;
+  chunk=(gaint)(64.0*1024*1024/((double)size*(sizeof(*values)+1)));
+  if (chunk>256) chunk=256;
+  /* Serial readers need only enough planes to keep workers occupied. */
+  if (!file->adios2flg) {
+    gaint target=ga_omp_get_threads()==1 ? 1 : 4*ga_omp_get_threads();
+    if (chunk>target) chunk=target;
+  }
+  if (chunk>last-first+1-reuse) chunk=last-first+1-reuse;
+  if (chunk<1) goto done;
+  n=(size_t)chunk*size;
+  values=galloc(n*sizeof(*values),"areatimes"); mask=galloc(n,"areatimemasks");
+  xw=galloc((size_t)read.isiz*sizeof(*xw),"areatimexw");
+  yw=galloc((size_t)read.jsiz*sizeof(*yw),"areatimeyw");
+  if (!values || !mask || !xw || !yw) goto done;
+  aave_weights(&read,sample.dmin[0],sample.dmax[0],sample.dmin[1],sample.dmax[1],1,xw,yw);
+  if (reuse) { outmask[0]=shape->umask[0]; out[0]=outmask[0] ? shape->grid[0] : undef; }
+  for (t=first+reuse;t<=last;t+=count) {
+    count=last-t+1<chunk ? last-t+1 : chunk;
+    if (gaqsig()) { rc=1; goto done; }
+    rc=gagrdsteps(&read,t,count,1,values,mask);
+    if (rc) goto done;
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(j) \
+    if(count>1 && ga_omp_parallelize((double)size*count>INT_MAX ? INT_MAX : (gaint)(size*count)))
+#endif
+    for (k=0;k<count;k++) {
+      struct gagrid view=read;
+      gadouble sum=0,weight=0;
+      view.grid=values+(size_t)k*size; view.umask=mask+(size_t)k*size;
+      for (j=0;j<read.jsiz;j++) {
+        gadouble rowsum,rowweight;
+        aave_row(&view,(size_t)j*read.isiz,xw,yw[j],1,&rowsum,&rowweight);
+        sum+=rowsum; weight+=rowweight;
+      }
+      outmask[t-first+k]=weight>0;
+      out[t-first+k]=weight>0 ? sum/weight : undef;
+    }
+    gaprogstep(progress+t-first+count);
+  }
+  rc=gaqsig() ? 1 : 0;
+done:
+  if (plane) gagfre(plane);
+  if (values) gree(values,"areatimes"); if (mask) gree(mask,"areatimemasks");
+  if (xw) gree(xw,"areatimexw"); if (yw) gree(yw,"areatimeyw");
+  return rc;
 }
 
 
@@ -4960,13 +5579,31 @@ static gaint zint_run(struct gafunc *pfc, struct gastat *pst) {
     sample=*pst; sample.idim=sample.jdim=-1;
     sample.dmin[0]=sample.dmax[0]=pf->gr2ab[0](pf->grvals[0],1);
     sample.dmin[1]=sample.dmax[1]=pf->gr2ab[1](pf->grvals[1],1);
-    for (k=0;k<nz;k++) {
-      sample.dmin[2]=sample.dmax[2]=file->gr2ab[2](file->grvals[2],k+1);
+    if(pf->ncflg==3 && !pf->ppflag && !pf->idxflg && !pf->climo) {
+      /* Native HDF5 profile coordinates were checked against the source
+         above. Read the complete vector once, with the same unpack/mask
+         rules as the scalar reader, then retain the original Z order. */
+      sample.idim=2;
+      sample.dmin[2]=file->gr2ab[2](file->grvals[2],1);
+      sample.dmax[2]=file->gr2ab[2](file->grvals[2],nz);
       if (gaexpr(profile,&sample)) goto cleanup;
       if (sample.type!=1) { gafree(&sample); goto invalid; }
       plane=sample.result.pgr;
-      factor[k]=plane->umask[0] && isfinite(plane->grid[0]) ? plane->grid[0] : NAN;
+      if(plane->idim!=2 || plane->jdim>=0 || plane->isiz!=nz ||
+         plane->dimmin[2]!=1 || plane->dimmax[2]!=nz)goto invalid;
+      for(k=0;k<nz;k++)
+        factor[k]=plane->umask[k] && isfinite(plane->grid[k]) ? plane->grid[k] : NAN;
       gagfre(plane); plane=NULL;
+      if(getenv("GA_ZINT_TRACE"))gaprnt(2,"ZINT I/O: bulk HDF5 density profile\n");
+    } else {
+      for (k=0;k<nz;k++) {
+        sample.dmin[2]=sample.dmax[2]=file->gr2ab[2](file->grvals[2],k+1);
+        if (gaexpr(profile,&sample)) goto cleanup;
+        if (sample.type!=1) { gafree(&sample); goto invalid; }
+        plane=sample.result.pgr;
+        factor[k]=plane->umask[0] && isfinite(plane->grid[0]) ? plane->grid[0] : NAN;
+        gagfre(plane); plane=NULL;
+      }
     }
   }
   if (var && var->levels>0 && !file->ppflag && !file->idxflg &&
@@ -5597,6 +6234,48 @@ err2:
   return(1);
 }
 
+/* Reuse a native input for the common maskout(f,(f>cut)-0.5) form.
+   Comparisons in GrADS return +/-1; subtracting 0.5 retains exactly the
+   true cells. Unknown syntax and different fields keep the evaluator. */
+static gaint mask_threshold(struct gafunc *pfc,struct gastat *pst) {
+  struct gagrid *grid=pst->result.pgr;
+  char *field=pfc->argpnt[0],*p=pfc->argpnt[1],*end;
+  size_t length,n,i;
+  gadouble cutoff,shift;
+  gaint inclusive=0;
+  if(!ave_plain_var(field,pst,grid))return 0;
+  while(*field==' ')field++;
+  length=strlen(field);while(length && field[length-1]==' ')length--;
+  while(*p==' ')p++;
+  if(*p++!='(')return 0;
+  while(*p==' ')p++;
+  if(strncmp(p,field,length))return 0;
+  p+=length;while(*p==' ')p++;
+  if(*p++!='>')return 0;
+  if(*p=='=') { inclusive=1;p++; }
+  while(*p==' ')p++;
+  end=p;if(*end=='-')end++;
+  if(*end<'0' || *end>'9')return 0;
+  p=getdbl(p,&cutoff);if(!p || !isfinite(cutoff))return 0;
+  while(*p==' ')p++;
+  if(*p++!=')')return 0;
+  while(*p==' ')p++;
+  if(*p++!='-')return 0;
+  while(*p==' ')p++;
+  if(*p<'0' || *p>'9')return 0;
+  p=getdbl(p,&shift);if(!p || shift!=0.5)return 0;
+  while(*p==' ')p++;
+  if(*p)return 0;
+  n=(size_t)grid->isiz*grid->jsiz;
+#if USEOPENMP == 1
+#pragma omp parallel for simd schedule(static) if(ga_omp_parallelize(n>INT_MAX ? INT_MAX : (gaint)n))
+#endif
+  for(i=0;i<n;i++)if(grid->umask[i] &&
+       !(inclusive ? grid->grid[i]>=cutoff : grid->grid[i]>cutoff))grid->umask[i]=0;
+  if(getenv("GA_MASK_TRACE"))gaprnt(2,"MASKOUT I/O: reused native input for threshold\n");
+  return 1;
+}
+
 gaint ffmask (struct gafunc *pfc, struct gastat *pst) {
 struct gastat pst2;
 struct gastn *stn;
@@ -5612,6 +6291,8 @@ gaint rc,cnt,flag,i;
 
   rc = gaexpr(pfc->argpnt[0],pst);
   if (rc) return (rc);
+
+  if(pst->type==1 && mask_threshold(pfc,pst))return 0;
 
   if (pst->type!=0 || *(pfc->argpnt[1])!='\'') {
 

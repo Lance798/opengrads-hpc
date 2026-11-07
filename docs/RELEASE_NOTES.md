@@ -1,3 +1,80 @@
+## opengrads-hpc 1.0.14
+
+This release improves CPU/OpenMP performance for large reductions and adds
+isolated HDF5 time workers for supported DEFINE and DISPLAY expressions.
+The GrADS baseline remains `2.2.1.oga.1`.
+
+### Added in 1.0.14
+
+- **Distribution version at startup and `opengrads --version`.** The launchers
+  read the source or archive version metadata automatically, including after
+  an update. The CLI reports the distribution and GrADS baseline without
+  requiring a completed build or loading runtime libraries.
+- **Whole-expression HDF5 time workers.** Supported native fields, arithmetic,
+  powers, trigonometric functions, masks, `esat` and `qvsat` can be evaluated
+  at different output times in persistent worker processes. Each worker uses
+  one calculation thread; the main process owns DEFINE results, progress,
+  cancellation and graphics. Eligible direct T/Z-T profile DISPLAY also
+  uses this pool, including outer AAVE, AMEAN and ASUM. XY animations retain
+  their existing path. See [TIME_WORKERS.md](TIME_WORKERS.md).
+- **Input-time expression workers for SUM and other reductions.** HDF5
+  `sum(expr,t=...,t=...)` can dispatch complete input expressions even when
+  the output has only one time. The shared producer also serves AVE, MEAN,
+  SUMG, MIN, MAX, MINLOC and MAXLOC. Initialization, chronological
+  accumulation, fractional weights, masks and location tie rules retain
+  their existing behavior; DEFINE and direct DISPLAY are supported.
+- **Bounded CPU and memory scheduling.** `set threads N` supplies the total
+  calculation CPU budget. Time workers are capped at 128 and further bounded
+  by input count, batch size and available-memory estimates. Unsupported
+  requests retain their earlier evaluator. Failed or cancelled workers
+  discard incomplete results and preserve an existing DEFINE.
+
+### Improved in 1.0.14
+
+- **Fewer repeated reads and decompressions.** Spatial slabs, defined-array
+  views, shared coordinate weights, bounded time batches and contiguous
+  binary boundary reads improve eligible reductions across BP5, HDF5,
+  NetCDF and binary data. A strict same-field threshold MASKOUT can reuse
+  its input instead of reading it twice.
+- **Native HDF5 ZINT.** Vertical density factors can be read as a profile.
+  With HDF5 2.0 or later, supported native float/double chunk layouts and
+  shuffle/deflate/Fletcher32 filters can use bounded OpenMP decompression
+  within a single time. Checksums remain verified; other library versions,
+  filters and layouts retain the native reader.
+
+### Fixed in 1.0.14
+
+- Packaged Linux time workers reuse the bundled loader and its library path
+  when the host glibc is too old. They no longer mistake the loader for the
+  GrADS executable when restarting workers. Native and packaged loader paths
+  have dedicated numerical, graphics, cancellation and recovery regressions.
+- Linux release builds preserve the additional HDF5 linker search path on
+  Debian/Ubuntu instead of overwriting it with the private dependency prefix.
+- HDF5 bulk reads preserve native-rank memory selections, surface/profile
+  broadcasts, packed values and scalar or single-element numeric attributes.
+- Spatial reductions with a remaining T/E result axis no longer call a
+  spatial-only coordinate converter.
+- Linux worker memory estimates include reclaimable file cache through
+  `MemAvailable`, while retaining conservative concurrency and batch limits.
+
+### Scope and verification
+
+Whole-expression time workers currently require native fields of the default
+HDF5 descriptor and supported syntax. NetCDF and BP5 retain their existing
+OpenMP and batch-reader acceleration; this release does not enable their
+whole-expression time workers. Defined inputs, file/dimension qualifiers,
+plug-ins and unsupported dimension combinations retain their earlier paths.
+More workers do not guarantee lower latency, and DEFINE still allocates its
+complete output separately from worker memory estimates.
+
+Sixteen regression suites and ASan/UBSan checks passed on the development
+Linux host, including masks, broadcasts, cyclic boundaries, packed/template
+inputs, progress, cancellation, worker failure/recovery and graphics. The
+production SUM sweep matched 7,407,008 output positions exactly against the
+preceding one-CPU evaluator. Performance measurements and their warm-cache,
+workload and hardware limits are recorded in [PERFORMANCE.md](PERFORMANCE.md);
+they are not universal speedups or a direct benchmark against 1.0.13.
+
 ## opengrads-hpc 1.0.13
 
 GrADS for modern simulation output: an ADIOS2/BP5 reader, OpenMP-threaded

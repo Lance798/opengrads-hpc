@@ -5,6 +5,10 @@ set -euo pipefail
 
 bundle_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
+if [[ "${1:-}" == --version ]]; then
+  exec bash "$bundle_root/libexec/opengrads-version" "$bundle_root"
+fi
+
 # The archive updates itself with "opengrads --update", and says at start-up,
 # in a terminal, when a newer release is out (once a day it asks, in the
 # background; OPENGRADS_UPDATE_CHECK=0 turns that off).
@@ -109,5 +113,9 @@ if (( ! have_display )); then
   fi
 fi
 (( have_print )) || args+=(-h Cairo)
+
+if [[ -r "$bundle_root/libexec/opengrads-version" ]]; then
+  bash "$bundle_root/libexec/opengrads-version" "$bundle_root" --banner
+fi
 
 exec "$bundle_root/bin/grads" "${args[@]}"

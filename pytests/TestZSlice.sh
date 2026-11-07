@@ -98,7 +98,7 @@ def same(actual, wanted, text):
 config=run('q config')
 formats=[('dat','slice.dat',''),('dat-template','slice%tm1.dat','')]
 if (root/'slice.nc').exists() and 'netcdf' in config:
-    formats += [('nc','slice.nc','netcdf'),('nc4','slice4.nc','netcdf'),
+    formats += [('nc','slice.nc','netcdf'),('nc4','slice_compressed.nc','netcdf'),
                 ('nc-template','slice%tm1.nc','netcdf')]
 if (root/'slice.h5').exists() and 'hdf5' in config:
     formats += [('h5','slice.h5','hdf5_grid'),('h5-template','slice%tm1.h5','hdf5_grid')]

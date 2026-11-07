@@ -6,15 +6,17 @@ descriptors, commands, and `.gs` scripts — while adding an ADIOS2/BP5 reader,
 OpenMP-threaded calculations, and self-contained releases for Linux and
 macOS.
 
-**"HPC" means the ADIOS2/BP5 engine plus OpenMP threading on a single node.**
-There is no MPI or GPU support and none is planned; ADIOS2 is deliberately
-built with `ADIOS2_USE_MPI=OFF`. Data written by a multi-rank MPI job is read
-serially.
+**"HPC" means single-node CPU acceleration through ADIOS2/BP5, OpenMP
+threading and isolated HDF5 time workers.** There is no MPI or GPU support and
+none is planned; ADIOS2 is deliberately built with `ADIOS2_USE_MPI=OFF`.
+Reading output written by a multi-rank MPI job does not require MPI here.
 
 Releases are versioned independently of GrADS: archives are named
 `opengrads-hpc-<version>`, while `grads` still reports the GrADS baseline it
 matches (`2.2.1.oga.1`). Each archive carries a `VERSION` file with both. See
-[release documentation](docs/RELEASES.md).
+[release documentation](docs/RELEASES.md). Startup displays the distribution version;
+`./opengrads --version` reports both versions without loading GrADS or its
+runtime libraries. The display follows the version metadata automatically.
 
 Licensed under **GPL-2.0-only**, inherited from GrADS. Using it and building it
 carry no obligations; redistributing the BP5-enabled binaries has one
@@ -46,6 +48,13 @@ libraries are available.
   `GA_NUM_THREADS=N`. A long `ave`, `sum`, `tloop`, `define` and the like
   shows a progress line with the time left. See
   [performance notes](docs/PERFORMANCE.md).
+
+- **HDF5 time workers.** Supported DEFINE and T/Z-T profile DISPLAY expressions
+  can evaluate different times in isolated processes. Time SUM/MEAN reductions
+  can also dispatch complete input expressions and accumulate them in time
+  order. `set threads N` controls the CPU budget; worker count and buffers are
+  bounded. NetCDF and BP5 retain their existing OpenMP and reader paths. See
+  [time-worker support and limits](docs/TIME_WORKERS.md).
 
 - **Restored self-describing-file access.** Release builds require NetCDF and
   UDUNITS support, so `sdfopen` and `xdfopen` remain available for compatible
@@ -121,6 +130,7 @@ Use `q config` to see whether this build includes `adios2-bp5`, `openmp`,
 - [Height-coordinate column integrals and column water vapor](docs/ZINT.md)
 - [Saturation vapor pressure and mixing ratio](docs/SATURATION.md)
 - [OpenMP controls and benchmark notes](docs/PERFORMANCE.md)
+- [HDF5 time workers: expressions, support and limits](docs/TIME_WORKERS.md)
 - [Architecture and development roadmap](docs/ARCHITECTURE.md)
 
 ## Legacy OpenGrADS documentation

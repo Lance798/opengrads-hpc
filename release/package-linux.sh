@@ -42,6 +42,8 @@ install -D -m 0755 "$repo_root/libexec/grads-termview" \
   "$bundle_root/libexec/grads-termview"
 install -m 0755 "$repo_root/libexec/opengrads-update" \
   "$bundle_root/libexec/opengrads-update"
+install -m 0755 "$repo_root/libexec/opengrads-version" \
+  "$bundle_root/libexec/opengrads-version"
 install -m 0644 "$repo_root/etc/udpt-local" "$bundle_root/etc/udpt-local"
 cp -a "$repo_root/cola/data/." "$bundle_root/cola/data/"
 cp -a "$repo_root/lib/scripts/." "$bundle_root/lib/scripts/"
@@ -424,6 +426,20 @@ OPENGRADS_ADIOS2_ROOT="$adios2_root" OPENGRADS_DEPS_ROOT="$deps_root" \
 env -i HOME="${HOME:-/tmp}" PATH=/usr/bin:/bin \
   OPENGRADS_LAUNCHER="$bundle_root/opengrads" \
   "$repo_root/pytests/TestBP5Compression.sh" --read-fixtures "$compression_root"
+
+# Exercise actual packaged time workers through the bundled loader, including
+# the old-host startup branch that development binaries do not normally use.
+GA_TEST_HDF5_CFLAGS="$(sed -n 's/^HDF5_CFLAGS *= *//p' "$build_root/src/Makefile")" \
+GA_TEST_HDF5_LIBS="$(sed -n 's/^HDF5_LDFLAGS *= *//p' "$build_root/src/Makefile") $(sed -n 's/^HDF5_LIBS *= *//p' "$build_root/src/Makefile")" \
+OPENGRADS_BUILD_ROOT="$bundle_root/build" \
+OPENGRADS_LAUNCHER="$bundle_root/opengrads" \
+  "$repo_root/pytests/TestTimeLoader.sh"
+
+version_output="$(env -i PATH=/usr/bin:/bin "$bundle_root/opengrads" --version)"
+if [[ "$version_output" != "$(cat "$bundle_root/VERSION")" ]]; then
+  printf 'Packaged --version does not match VERSION metadata:\n%s\n' "$version_output" >&2
+  exit 1
+fi
 
 tar -C "$output_root" -czf "$output_root/$archive_base.tar.gz" "$archive_base"
 (

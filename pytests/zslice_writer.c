@@ -12,12 +12,21 @@
 #ifdef ZS_HDF5
 #include <hdf5.h>
 #endif
+#ifndef NX
 #define NX 16
+#endif
+#ifndef NY
 #define NY 8
+#endif
 #define NZ 4
+#ifndef NT
 #define NT 2
+#endif
 static float f[NT][NZ][NY][NX], indexmap[NT][NY][NX], surface[NT][NY][NX];
 static double g[NT][NZ][NY][NX];
+#ifdef ZS_HDF5
+static short packed[NT][NZ][NY][NX];
+#endif
 static void check(int condition, const char *message) {
   if (!condition) { fprintf(stderr,"zslice_writer: %s\n",message); exit(1); }
 }
@@ -33,6 +42,10 @@ int main(int argc, char **argv) {
     for (z=0;z<NZ;z++) {
       f[t][z][y][x]=(float)(1000*t+100*(z+1)+10*y+x);
       g[t][z][y][x]=(double)f[t][z][y][x]+0.125;
+#ifdef ZS_HDF5
+      packed[t][z][y][x]=(short)((t*700+z*100+10*y+x)%5000-2500);
+      if (!x && !y) packed[t][z][y][x]=-32768;
+#endif
     }
   }
   for (t=0;t<NT;t++) {
@@ -40,6 +53,8 @@ int main(int argc, char **argv) {
     indexmap[t][0][2]=1.5f; indexmap[t][0][3]=-9999;
     indexmap[t][0][4]=NAN; indexmap[t][0][5]=INFINITY;
     f[t][0][2][4]=-9999;
+    if (NT>2 && t%2) f[t][0][2][4]=(float)(1000*t+124);
+    if (NT>2 && t%3==1) g[t][1][3][5]=-9999;
   }
   if (argc==3) for (t=0;t<NT;t++) for (z=0;z<NZ;z++) {
     f[t][z][0][0]=-9999; g[t][z][0][0]=-9999;
@@ -72,12 +87,12 @@ int main(int argc, char **argv) {
 #ifdef ZS_NETCDF
   {
     int mode;
-    for (mode=0;mode<4;mode++) {
+    for (mode=0;mode<NT+2;mode++) {
       int file, dims[4], fvar,gvar,kvar,svar;
       int source=mode>=2 ? mode-2 : 0;
       const float fill=-9999;
       if (mode>=2) snprintf(path,sizeof(path),"%s/slice%d.nc",argv[1],source);
-      else snprintf(path,sizeof(path),"%s/slice%s.nc",argv[1],mode ? "4" : "");
+      else snprintf(path,sizeof(path),"%s/slice%s.nc",argv[1],mode ? "_compressed" : "");
       check(nc_create(path,NC_CLOBBER|(mode ? NC_NETCDF4 : 0),&file)==NC_NOERR,"create NetCDF");
       check(nc_def_dim(file,"t",mode>=2 ? 1 : NT,dims)==NC_NOERR,"NetCDF time");
       check(nc_def_dim(file,"z",NZ,dims+1)==NC_NOERR,"NetCDF z");
@@ -105,29 +120,58 @@ int main(int argc, char **argv) {
 #ifdef ZS_HDF5
   {
     hid_t file;
-    hsize_t dims[4]={NT,NZ,NY,NX}, kdims[3]={NT,NY,NX}, chunks[4]={1,2,4,8};
+    hsize_t dims[4]={NT,NZ,NY,NX}, kdims[3]={NT,NY,NX}, chunks[4]={1,2,NY/2,NX/2};
     hsize_t rdim[1]={NZ};
     const double rho[NZ]={1.2,1.1,1.0,0.9};
-    const char *names[5]={"f","g","kmap","surface","rho"};
+    const char *names[6]={"f","g","kmap","surface","rho","packed"};
     int v,piece;
     for (piece=-1;piece<NT;piece++) {
-    const void *data[5]={piece<0 ? (const void *)f : f[piece],
+    const void *data[6]={piece<0 ? (const void *)f : f[piece],
                         piece<0 ? (const void *)g : g[piece],
                         piece<0 ? (const void *)indexmap : indexmap[piece],
-                        piece<0 ? (const void *)surface : surface[piece],rho};
+                        piece<0 ? (const void *)surface : surface[piece],rho,
+                        piece<0 ? (const void *)packed : packed[piece]};
     if (piece<0) snprintf(path,sizeof(path),"%s/slice.h5",argv[1]);
     else snprintf(path,sizeof(path),"%s/slice%d.h5",argv[1],piece);
     file=H5Fcreate(path,H5F_ACC_TRUNC,H5P_DEFAULT,H5P_DEFAULT); check(file>=0,"create HDF5");
-    for (v=0;v<5;v++) {
+    for (v=0;v<6;v++) {
       int offset=piece<0 ? 0 : 1;
-      int rank=v<2 ? 4-offset : v<4 ? 3-offset : 1;
-      hid_t space=H5Screate_simple(rank,v<2 ? dims+offset : v<4 ? kdims+offset : rdim,NULL);
+      int volume=v<2 || v==5;
+      int rank=volume ? 4-offset : v<4 ? 3-offset : 1;
+      hid_t space=H5Screate_simple(rank,volume ? dims+offset : v<4 ? kdims+offset : rdim,NULL);
       hid_t prop=H5Pcreate(H5P_DATASET_CREATE), var;
-      hid_t type=v==1 || v==4 ? H5T_NATIVE_DOUBLE : H5T_NATIVE_FLOAT;
-      if (v<2) { check(H5Pset_chunk(prop,rank,chunks+offset)>=0,"HDF5 chunks"); check(H5Pset_deflate(prop,3)>=0,"HDF5 compression"); }
+      hid_t type=v==5 ? H5T_NATIVE_SHORT : v==1 || v==4 ? H5T_NATIVE_DOUBLE : H5T_NATIVE_FLOAT;
+      if (volume) { check(H5Pset_chunk(prop,rank,chunks+offset)>=0,"HDF5 chunks"); check(H5Pset_deflate(prop,3)>=0,"HDF5 compression"); }
       var=H5Dcreate2(file,names[v],type,space,H5P_DEFAULT,prop,H5P_DEFAULT); check(var>=0,"HDF5 variable");
       check(H5Dwrite(var,type,H5S_ALL,H5S_ALL,H5P_DEFAULT,data[v])>=0,"HDF5 write");
+      if (v==5) {
+        hsize_t one=1,two=2;
+        hid_t scalar=piece<0 ? H5Screate(H5S_SCALAR) : H5Screate_simple(1,&one,NULL),attr,vector;
+        short missing=-32768;
+        double scale=0.125,add=10,badscale[2]={0.125,0.25};
+        attr=H5Acreate2(var,"_FillValue",H5T_NATIVE_SHORT,scalar,H5P_DEFAULT,H5P_DEFAULT);
+        check(attr>=0 && H5Awrite(attr,H5T_NATIVE_SHORT,&missing)>=0,"HDF5 packed fill"); H5Aclose(attr);
+        attr=H5Acreate2(var,"scale_factor",H5T_NATIVE_DOUBLE,scalar,H5P_DEFAULT,H5P_DEFAULT);
+        check(attr>=0 && H5Awrite(attr,H5T_NATIVE_DOUBLE,&scale)>=0,"HDF5 packed scale"); H5Aclose(attr);
+        attr=H5Acreate2(var,"add_offset",H5T_NATIVE_DOUBLE,scalar,H5P_DEFAULT,H5P_DEFAULT);
+        check(attr>=0 && H5Awrite(attr,H5T_NATIVE_DOUBLE,&add)>=0,"HDF5 packed offset"); H5Aclose(attr);
+        H5Sclose(scalar);
+        vector=H5Screate_simple(1,&two,NULL);
+        attr=H5Acreate2(var,"bad_scale",H5T_NATIVE_DOUBLE,vector,H5P_DEFAULT,H5P_DEFAULT);
+        check(attr>=0 && H5Awrite(attr,H5T_NATIVE_DOUBLE,badscale)>=0,"HDF5 vector attribute");
+        H5Aclose(attr); H5Sclose(vector);
+      }
       H5Dclose(var); H5Pclose(prop); H5Sclose(space);
+    }
+    {
+      const double profiles[2][NZ]={{1.2,-9999,NAN,0.9},{NAN,INFINITY,-9999,-INFINITY}};
+      const char *profile_names[2]={"rho_missing","rho_invalid"};
+      for(v=0;v<2;v++) {
+        hid_t space=H5Screate_simple(1,rdim,NULL);
+        hid_t var=H5Dcreate2(file,profile_names[v],H5T_NATIVE_DOUBLE,space,H5P_DEFAULT,H5P_DEFAULT,H5P_DEFAULT);
+        check(var>=0 && H5Dwrite(var,H5T_NATIVE_DOUBLE,H5S_ALL,H5S_ALL,H5P_DEFAULT,profiles[v])>=0,"HDF5 missing density profile");
+        H5Dclose(var);H5Sclose(space);
+      }
     }
     check(H5Fclose(file)>=0,"HDF5 close");
     }
@@ -143,7 +187,7 @@ int main(int argc, char **argv) {
 #else
     for (compressed=0;compressed<1;compressed++) {
 #endif
-      const size_t shape[3]={NZ,NY,NX}, start[3]={0,0,0}, count[3]={2,NY,8};
+      const size_t shape[3]={NZ,NY,NX}, start[3]={0,0,0}, count[3]={2,NY,NX/2};
       const size_t rshape[1]={NZ}, rstart[1]={0};
       const double rho[NZ]={1.2,1.1,1.0,0.9};
       adios2_io *io=adios2_declare_io(adios,compressed ? "zstd" : "raw");
@@ -169,10 +213,10 @@ int main(int argc, char **argv) {
         adios2_step_status status;
         int bz,bx;
         check(adios2_begin_step(engine,adios2_step_mode_append,0,&status)==adios2_error_none && status==adios2_step_status_ok,"BP5 step");
-        for (bz=0;bz<NZ;bz+=2) for (bx=0;bx<NX;bx+=8) {
+        for (bz=0;bz<NZ;bz+=2) for (bx=0;bx<NX;bx+=NX/2) {
           size_t selection[3]={(size_t)bz,0,(size_t)bx};
-          float fb[2][NY][8]; double gb[2][NY][8];
-          for (z=0;z<2;z++) for (y=0;y<NY;y++) for (x=0;x<8;x++) {
+          float fb[2][NY][NX/2]; double gb[2][NY][NX/2];
+          for (z=0;z<2;z++) for (y=0;y<NY;y++) for (x=0;x<NX/2;x++) {
             fb[z][y][x]=f[t][z+bz][y][x+bx]; gb[z][y][x]=g[t][z+bz][y][x+bx]; }
           check(adios2_set_selection(fv,3,selection,count)==adios2_error_none,"BP5 f selection");
           check(adios2_set_selection(gv,3,selection,count)==adios2_error_none,"BP5 g selection");

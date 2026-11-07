@@ -29,6 +29,7 @@
 #include <stdlib.h>
 
 #include "gaomp.h"
+#include "gatime.h"
 
 #ifndef USEOPENMP
 #define USEOPENMP 0
@@ -73,6 +74,7 @@ void ga_omp_init(void) {
 gaint ga_omp_set_threads(gaint threads) {
   ga_omp_init();
   if (threads < 1) return 1;
+  if (threads!=ga_omp_threads) ga_time_shutdown();
 #if USEOPENMP == 1
   ga_omp_threads = threads;
   omp_set_num_threads(ga_omp_threads);
