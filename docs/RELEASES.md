@@ -183,6 +183,30 @@ Archives are named for the distribution, not for GrADS:
 Every archive carries a `VERSION` file recording both. To cut a release, bump
 `release/VERSION`, update `docs/RELEASE_NOTES.md`, commit, then tag `vX.Y.Z`.
 
+## Preparing 1.0.14 through a pull request
+
+The acceleration branch prepares distribution version `1.0.14` and its release
+notes. Push the branch and open a pull request against the upstream `main`.
+Merging the pull request does not itself publish a release: the existing
+workflow runs on a version-tag push or manual dispatch, and manual dispatch
+builds candidates without creating a GitHub Release.
+
+After merging, the maintainer can tag the merged upstream commit:
+
+```bash
+git switch main
+git pull --ff-only upstream main
+git tag -a v1.0.14 -m "opengrads-hpc 1.0.14"
+git push upstream v1.0.14
+```
+
+Here `upstream` means the remote for the repository receiving the pull request;
+use its actual remote name if different. The tagged commit must contain
+`release/VERSION` set to `1.0.14`. The workflow builds and tests Linux x86_64,
+Linux aarch64 and macOS arm64 archives. Publication additionally requires the
+existing `BINARY_REDISTRIBUTION_APPROVED=true` repository variable described
+below. The GrADS baseline in `cola/configure.ac` remains `2.2.1.oga.1`.
+
 ## Maintainer one-command build
 
 On Linux, install a compiler, CMake, curl, standard Autotools, and the Cairo,
