@@ -282,6 +282,7 @@ gaint gasdfopen (char *args, struct gacmn *pcm) {
 
   /* set a flag for detecting sdf file type: HDF or NetCDF */
   pfi->ncflg = 1;             /* NetCDF */
+  pfi->sdfopener = 1;
 #if USEHDF==1
   rc = Hishdf(pathname);
   if (rc==1) pfi->ncflg = 2;  /* HDF-SDS */
@@ -370,6 +371,7 @@ gaint gaxdfopen (char *args, struct gacmn *pcm) {
   pfi->dnam[len]='\0';
   pfi->tmplat = 0 ;     /* may be reset when parsing xdf descriptor */
   pfi->ncflg = 1;       /* may be reset when parsing dtype in descriptor */
+  pfi->sdfopener = 2;
 
   /* get metadata from the descriptor file */
   rc = gadxdf(pfi, &parms) ;

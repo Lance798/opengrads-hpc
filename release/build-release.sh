@@ -90,6 +90,7 @@ OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestDefineNames.sh"
 
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestTimeLoader.sh"
+OPENGRADS_BUILD_ROOT="$build_root" bash "$repo_root/pytests/TestNetCDFTimeWorkers.sh"
 
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestProgress.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestAxisScale.sh"

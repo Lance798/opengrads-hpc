@@ -1,12 +1,12 @@
 # Time workers and general expressions
 
-`set threads N` is the total calculation CPU budget. Eligible HDF5 commands
+`set threads N` is the total calculation CPU budget. Eligible NetCDF/HDF5 commands
 can use up to N isolated worker processes, one calculation thread per worker,
 to evaluate different output times. Workers execute the complete expression
 with the existing evaluator. The main process retains result ordering,
 progress, cancellation, the defined-variable registry and all graphics.
 
-For example, after opening an HDF5 descriptor:
+For example, after opening a NetCDF or HDF5 descriptor:
 
 ```text
 set threads 64
@@ -37,7 +37,7 @@ CPU-budget change. `GA_TIME_TRACE=1` reports the actual workers and their PIDs;
 `GA_TIME_WORKERS=off` disables the pool.
 
 General-expression output-time workers currently require at least 32 times,
-native fields of the default HDF5 descriptor, supported syntax and a result
+native fields of the default NetCDF/HDF5 descriptor, supported syntax and a result
 shape that agrees at every time. DEFINE additionally retains its existing
 minimum dataset-work threshold. Defined inputs, file/dimension qualifiers,
 plug-ins and unsupported functions keep their existing evaluator. Constants
@@ -116,7 +116,7 @@ absolute spatial reductions and cyclic longitude retain the ordinary evaluator
 inside each worker. Keeping the outer T fixed produces one time-summed map;
 `set t 1 256` instead requests repeated output-time evaluations of that sum.
 
-The first two input times retain the original initialization. Eligible HDF5
+The first two input times retain the original initialization. Eligible NetCDF/HDF5
 reductions with at least 32 requested input times then use batches of up to
 256 grids, bounded by the existing 64 MiB--1 GiB target and available memory.
 The active worker count also depends on batch length and workspace estimates;
@@ -179,7 +179,79 @@ The audit removed an unregistered `atan` entry from the worker allowlist;
 this does not remove a callable built-in. No additional untested functions
 are enabled by this stage.
 
-## Validation and deferred cases
+## NetCDF support and template activation
+
+Classic NetCDF and compressed NetCDF-4 use the same isolated processes,
+function allowlist, scheduling, memory caps and recovery as HDF5. Workers
+reopen their own dataset using the original `open`, `sdfopen` or `xdfopen`
+method. NetCDF handles and library state are never shared between workers.
+
+`OPTIONS template` with time substitutions such as `%tm6.nc` is supported;
+each worker resolves its assigned time to a file. Templates are not required:
+a single NC file containing multiple times can use the same workers. Merely
+opening a template does not start processes. A command must request eligible
+time work, use at least two calculation threads and satisfy the existing
+work/memory thresholds. Output-time DEFINE/DISPLAY requires at least 32
+times; DEFINE also requires the existing minimum dataset-work estimate.
+Native input-time reads retain their batching/work thresholds, while whole
+input expressions require at least 32 requested times. These rules are shared
+with HDF5. Short commands and `GA_TIME_WORKERS=off` keep ordinary evaluation.
+
+All 26 functions listed above are supported for both formats under the same
+expression/environment restrictions. This does not extend worker eligibility
+to every GrADS built-in. Session-defined inputs such as `define rho=rho.2`,
+file-qualified operands and plug-ins retain their ordinary evaluator.
+For the user's reference-density CWV series, DEFINE fixes time per evaluation:
+
+```text
+open /path/to/thermodynamic.ctl
+open /path/to/bar.ctl
+set x 1
+set y 1
+set z 1 75
+set t 1
+define rho=rho.2
+set z 1
+set t 1 last
+define c=aave(zint(rho*qv),x=1,x=384,y=1,y=384)
+display c
+```
+
+This defined-density expression stays local. Expressions built entirely from
+native fields in the default NC descriptor, such as
+`aave(zint(qv),x=1,x=384,y=1,y=384)`, can use workers; integrating QV alone
+does not calculate CWV. Native NC profiles with absent X/Y/T axes are
+broadcast from their actual shape, including missing masks and unpacking.
+
+`TestNetCDFTimeWorkers.sh` runs the four existing time-worker suites against
+both classic and compressed NetCDF-4, including regular/template/reversed
+files, all supported functions, packed data, missing template times, progress,
+cancellation, failed workers, pool reuse, memory caps and identical graphics.
+The expression suite also checks SDFOPEN/XDFOPEN restart and analytic profile
+broadcasts. Point the tests at the build and NetCDF development installation:
+
+```bash
+OPENGRADS_BUILD_ROOT=/path/to/build \
+OPENGRADS_TEST_NETCDF_ROOT=/path/to/netcdf \
+  bash pytests/TestNetCDFTimeWorkers.sh
+OPENGRADS_BUILD_ROOT=/path/to/build \
+  bash pytests/TestNetCDFTimeWorkersReal.sh \
+  /path/to/icluster_f10_b030/gs_ctl_files/thermodynamic.ctl
+```
+
+The real-data test reads the original files without modifying them. It checks
+all 26 allowed functions, all eight input-time reduction selectors, full
+384x384 ZINT/area reduction across 75 levels and 32 times, all 361 template
+times with `set t 1 last`, and the user's
+session-defined density fallback against one-thread evaluation.
+
+On the supplied `icluster_f10_b030` template dataset, 44,850 compared values
+had identical masks and zero maximum absolute difference. One local
+run of the full-area ZINT/area DEFINE plus DISPLAY case took 8.55 seconds with
+one thread and 3.43 seconds with four workers. This is a validation sample,
+not a general scaling guarantee; storage and cache state affect timings.
+
+## Existing HDF5 regression coverage
 
 `TestTimeExpressions.sh` compares DEFINE and direct T/Z-T DISPLAY with the
 ordinary one-thread evaluator. It covers regular/template/reversed HDF5,

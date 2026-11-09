@@ -5,27 +5,30 @@ set -euo pipefail
 repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 test_root="$(mktemp -d /tmp/opengrads-time-expressions.XXXXXX)"
 trap 'rm -rf -- "$test_root"' EXIT
-read -r -a hflags <<< "$(pkg-config --cflags hdf5)"
-read -r -a hlibs <<< "$(pkg-config --libs hdf5)"
-"${CC:-cc}" -std=gnu99 -O2 -DZS_HDF5 -DNX=256 -DNY=256 -DNT=32 \
+source "$repo_root/pytests/time_worker_format.sh"
+"${CC:-cc}" -std=gnu99 -O2 "$writer_define" -DNX=256 -DNY=256 -DNT=32 \
   "${hflags[@]}" "$repo_root/pytests/zslice_writer.c" "${hlibs[@]}" -lm -o "$test_root/writer"
 "$test_root/writer" "$test_root" zint
 python3 -u - "$repo_root" "$test_root" <<'PY'
 import errno,math,os,pty,re,select,signal,subprocess,sys,time
 from pathlib import Path
-repo,root=map(Path,sys.argv[1:]);launcher=str(repo/'opengrads')
+repo,root=map(Path,sys.argv[1:]);launcher=os.environ.get('OPENGRADS_LAUNCHER',str(repo/'opengrads'))
 env=dict(os.environ,OPENGRADS_BUILD_ROOT=os.environ.get('OPENGRADS_BUILD_ROOT',str(repo/'build')),
          OPENGRADS_COLOR='0',GA_TIME_TRACE='1',GA_PROGRESS='off')
 header=('undef -9999\nxdef 256 linear 10 .1\nydef 256 linear -60 .25\n'
         'zdef 4 levels 50 150 400 1000\ntdef 32 linear 00z01jan2000 1hr\n'
         'vars 4\nf 4 {dims} F\ng 4 {dims} G\nsurface 0 {surface} Surface\nrho 4 z Density\nendvars\n')
+fixture_format=os.environ.get('GA_TEST_TIME_FORMAT','h5')
+extension='h5' if fixture_format=='h5' else 'nc'
+dtype='hdf5_grid' if extension=='h5' else 'netcdf'
+regular='slice'+('_compressed' if fixture_format=='nc4' else '')+'.'+extension
 ctls=[]
 for template,reverse in ((False,False),(True,False),(False,True)):
     name=('template' if template else 'regular')+('-reverse' if reverse else '')
     ctl=root/(name+'.ctl');ctls.append(ctl)
-    ctl.write_text('dset ^'+('slice%tm1.h5' if template else 'slice.h5')+'\ndtype hdf5_grid\n'+
+    ctl.write_text('dset ^'+('slice%tm1.'+extension if template else regular)+'\ndtype '+dtype+'\n'+
         ('options '+('template ' if template else '')+('yrev zrev' if reverse else '')+'\n' if template or reverse else '')+
-        header.format(dims='z,y,x' if template else 't,z,y,x',surface='y,x' if template else 't,y,x'))
+        header.format(dims='z,y,x' if template and extension=='h5' else 't,z,y,x',surface='y,x' if template and extension=='h5' else 't,y,x'))
 
 def parse(text):
     lines=iter(text.splitlines());grids=[]
@@ -58,9 +61,9 @@ def assert_dead(text):
             try:os.kill(pid,0)
             except ProcessLookupError:continue
             raise AssertionError(('worker survived',pid))
-def run(ctl,commands,n=4,off=False,missing=False,error=False):
+def run(ctl,commands,n=4,off=False,missing=False,error=False,opener='open'):
     e=dict(env,GA_TIME_WORKERS='off' if off else 'auto')
-    text=f'open {ctl}\nset threads {n}\nset gxout print\nset prnopts %.17g 32 1\n'+commands+'\nquit\n'
+    text=f'{opener} {ctl}\nset threads {n}\nset gxout print\nset prnopts %.17g 32 1\n'+commands+'\nquit\n'
     p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','Cairo'],input=text,text=True,
         stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=e,timeout=180)
     # A missing template produces HDF5 diagnostics but remains a successful
@@ -74,6 +77,21 @@ def run(ctl,commands,n=4,off=False,missing=False,error=False):
 
 xy='set x 1 8\nset y 1 6\nset z 1 4\nset t 1 32\n'
 zt='set x 5\nset y 3\nset z 1 4\nset t 1 32\n'
+# Independent profile values catch uninitialized native-axis broadcast buffers.
+compare(parse(run(ctls[0],zt+'d rho\n')),[[1.2,1.1,1.0,0.9]*32])
+compare(parse(run(ctls[0],'set x 1 8\nset y 3\nset z 1 4\nset t 1\nd rho\n')),
+        [[v for v in (1.2,1.1,1.0,0.9) for _ in range(8)]])
+compare(parse(run(ctls[0],'set x 1 8\nset y 3\nset z 2\nset t 1 32\nd rho\n')),
+        [[1.1]*(8*32)])
+if extension=='nc':
+    xdf=root/'selfdescribing.xdf';xdf.write_text('dset ^'+regular+'\n')
+    for opener,path in (('sdfopen',root/regular),('xdfopen',xdf)):
+        command=zt+'define answer=f+g\nd answer\nd f+g\n'
+        text=run(path,command,opener=opener);assert len(groups(text))==2,(opener,text[-4000:])
+        compare(parse(text),parse(run(path,command,1,True,opener=opener)))
+        command='set x 1 64\nset y 1 64\nset z 2\nset t 1\nd sum(f+g,t=1,t=32)\nd sum(f,t=1,t=32)\n'
+        text=run(path,command,opener=opener);assert groups(text),opener
+        compare(parse(text),parse(run(path,command,1,True,opener=opener)))
 core=['f','surface','rho','surface+rho','f+g','f-g','f*g','f/g','2-f','2/f','-(f-g)',
       '(f+g)*0.5-surface/rho','f/(f-f)','pow(1000-f,0.5)','mag(f,g)',
       'sqrt(f*f+g*g)','maskout(f,(f>2000)-0.5)',
@@ -128,7 +146,7 @@ for setup in ('set x 6\nset y 4\nset z 2\nset t 1 32\n',
         text=run(ctls[0],setup+'d pow(f-g,2)+surface/rho\n')
         assert groups(text);compare(parse(text),reference)
 packed=root/'packed.ctl'
-packed.write_text('dset ^slice.h5\ndtype hdf5_grid\nunpack scale_factor add_offset\nundef -32768 _FillValue\n'+
+packed.write_text('dset ^'+regular+'\ndtype '+dtype+'\nunpack scale_factor add_offset\nundef -32768 _FillValue\n'+
     header[:header.index('vars 4')].split('undef -9999\n')[1]+
     'vars 1\npacked 4 t,z,y,x Packed\nendvars\n')
 command=xy+'define answer=(packed+3)/2\n'+''.join('set z '+str(k)+'\nd answer\n' for k in range(1,5))
@@ -136,7 +154,7 @@ text=run(packed,command);assert groups(text)
 compare(parse(text),parse(run(packed,command,1,True)))
 
 # A missing template time must retain per-operand masks, including CONST.
-piece=root/'slice16.h5';saved=root/'slice16.saved';piece.rename(saved)
+piece=root/('slice16.'+extension);saved=root/'slice16.saved';piece.rename(saved)
 command=zt+'define answer=f+g\nd answer\nd const(f,0)+g\nd esat(150+f/200)\nd qvsat(150+f/200,100000)\n'
 compare(parse(run(ctls[1],command,missing=True)),parse(run(ctls[1],command,1,True,missing=True)))
 saved.rename(piece)

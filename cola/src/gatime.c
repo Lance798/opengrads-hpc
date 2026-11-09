@@ -48,7 +48,7 @@ extern char **environ;
 #define TIME_JOB 0x47544a31
 struct time_config {
   int operation,z1,z2,e,idim,jdim,ri,rj,nx,ny,lo[5],hi[5],reads;
-  int cachesf;
+  int cachesf,opener;
   double dmin[5],dmax[5],undef,cache_bytes;
   char path[TIME_TEXT],expression[TIME_TEXT];
 };
@@ -123,10 +123,15 @@ static int time_expression(char *expr, struct gastat *pst) {
   return field;
 }
 
+/* Each process owns its NetCDF/HDF5 handles and library state. */
+static int time_file(struct gafile *f) {
+  return f && f->type==1 && (f->ncflg==1 || f->ncflg==3) &&
+         !f->ppflag && !f->idxflg && !f->climo;
+}
+
 static int time_supported(char *expr, struct gastat *pst) {
   struct gafile *f=pst->pfid;
-  return !time_child && f && f->type==1 && f->ncflg==3 && !f->ppflag &&
-         !f->idxflg && !f->climo && strlen(expr)<TIME_TEXT &&
+  return !time_child && time_file(f) && strlen(expr)<TIME_TEXT &&
          !strchr(f->dnam,'\n') && time_expression(expr,pst);
 }
 
@@ -462,7 +467,12 @@ gaint ga_time_worker(struct gacmn *pcm,int fd) {
       if(!memchr(c.path,0,sizeof(c.path)) || !memchr(c.expression,0,sizeof(c.expression)) ||
          c.z1<1 || c.z2<c.z1 || c.nx<1 || c.ny<1)break;
       pcm->cachesf=c.cachesf;setcachesf(pcm->cachesf);
-      if(gaopen(c.path,pcm))break;
+      if(c.opener==0) { if(gaopen(c.path,pcm))break; }
+#if USENETCDF==1
+      else if(c.opener==1) { if(gasdfopen(c.path,pcm))break; }
+      else if(c.opener==2) { if(gaxdfopen(c.path,pcm))break; }
+#endif
+      else break;
       setcachesf(pcm->cachesf);
       pst=getpst(pcm);if(!pst)break;model=*pst;gree(pst,"timepst");pst=NULL;
       for(d=0;d<5;d++) { model.dmin[d]=c.dmin[d];model.dmax[d]=c.dmax[d]; }
@@ -504,7 +514,7 @@ gaint ga_time_can_read(struct gafile *file) {
   const char *v=getenv("GA_TIME_WORKERS");
   return !time_child && time_executable[0] && ga_omp_get_threads()>1 &&
     !(v && (!strcmp(v,"off") || !strcmp(v,"0"))) && file &&
-    file->type==1 && file->ncflg==3 && !file->ppflag && !file->idxflg && !file->climo;
+    time_file(file);
 #else
   (void)file;return 0;
 #endif
@@ -533,6 +543,7 @@ gaint ga_time_readsteps(struct gagrid *grid,gaint t0,gaint n,gaint incr,
      (double)grid->isiz*grid->jsiz>128.0*1024*1024/9 ||
      strchr(file->dnam,'\n'))return -1;
   memset(&c,0,sizeof(c));c.operation=TIME_CONFIG;c.reads=1;
+  c.opener=file->sdfopener;
   c.idim=c.ri=grid->idim;c.jdim=c.rj=grid->jdim;
   c.nx=grid->isiz;c.ny=grid->jsiz;c.undef=grid->undef;
   c.z1=c.z2=grid->pvar->levels ? grid->dimmin[2] : 1;
@@ -586,6 +597,7 @@ gaint ga_time_evaluatesteps(char *expr,struct gastat *pst,struct gagrid *shape,
      shape->isiz<1 || shape->jsiz<1 || cachesf<0 || cachesf>INT_MAX ||
      (double)shape->isiz*shape->jsiz>128.0*1024*1024/9)return -1;
   memset(&c,0,sizeof(c));c.operation=TIME_CONFIG;c.reads=2;
+  c.opener=f->sdfopener;
   c.idim=pst->idim;c.jdim=pst->jdim;c.ri=shape->idim;c.rj=shape->jdim;
   c.nx=shape->isiz;c.ny=shape->jsiz;c.undef=shape->undef;
   c.z1=c.z2=1;c.e=1;c.cachesf=(int)cachesf;c.cache_bytes=(double)cachesf*f->cachesize;
@@ -612,6 +624,7 @@ static int time_configure(struct time_config *c,char *expr,struct gacmn *pcm,
                           struct gastat *pst,int z1,int z2,int e,struct gagrid *shape) {
   int d;
   memset(c,0,sizeof(*c));c->operation=TIME_CONFIG;c->z1=z1;c->z2=z2;c->e=e;
+  c->opener=pst->pfid->sdfopener;
   c->idim=pcm->vdim[0] ? 0 : pcm->vdim[1] ? 1 : -1;
   c->jdim=pcm->vdim[0] && pcm->vdim[1] ? 1 : -1;
   c->ri=shape->idim;c->rj=shape->jdim;c->nx=shape->isiz;c->ny=shape->jsiz;c->undef=pcm->undef;
