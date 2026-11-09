@@ -32,6 +32,7 @@ if [[ ! -r "$build_root/src/.libs/libgxdTerm.$plugin_ext" ]]; then
 fi
 
 test_root="$(mktemp -d /tmp/opengrads-term-test.XXXXXX)"
+socket_root=""
 background_pids=()
 cleanup()
 {
@@ -41,13 +42,19 @@ cleanup()
     kill "$pid" 2>/dev/null || true
   done
   # Failed Python drivers can leave their private tmux server detached.
-  for socket in "$test_root"/*.sock; do
+  for socket in "${socket_root:-$test_root}"/*.sock; do
     [[ -S "$socket" ]] || continue
     "${TEST_TMUX:-tmux}" -S "$socket" kill-server >/dev/null 2>&1 || true
   done
   rm -rf -- "$test_root"
+  if [[ -n "$socket_root" ]]; then rm -rf -- "$socket_root"; fi
 }
 trap cleanup EXIT
+
+# Unix socket paths are short (104/108 bytes). Keep just the sockets in
+# system /tmp even when development images and fixtures use a deep TMPDIR.
+socket_root="$(/usr/bin/mktemp -d /tmp/opengrads-term-sockets.XXXXXX)"
+export TEST_TMUX_SOCKET_DIR="$socket_root"
 
 fail()
 {
@@ -640,7 +647,7 @@ env.update(settings)
 if os.sep in tmux:
     env['PATH'] = os.path.dirname(os.path.abspath(tmux)) + os.pathsep + env['PATH']
 size = struct.pack('HHHH', ROWS, COLS, COLS * CW, ROWS * CH)
-tm = [tmux, '-S', root + '/kind.sock', '-f', '/dev/null']
+tm = [tmux, '-S', os.path.join(os.environ['TEST_TMUX_SOCKET_DIR'], 'kind.sock'), '-f', '/dev/null']
 if where == 'direct':
     pid, fd = pty.fork()
     if pid == 0:
@@ -897,7 +904,7 @@ cat > "$test_root/intmux.py" <<'PYTHON'
 import os, pty, fcntl, termios, struct, subprocess, time, select, re, sys, base64
 launcher, ctl, root, viewer, build, tmux, how = sys.argv[1:8]
 control = how == 'control'
-sock = root + '/tmux-' + how + '.sock'
+sock = os.path.join(os.environ['TEST_TMUX_SOCKET_DIR'], 'tmux-' + how + '.sock')
 env = dict(os.environ, TERM='xterm-256color', OPENGRADS_COLOR='0',
            OPENGRADS_BUILD_ROOT=build, GA_TERM_VIEWER=viewer,
            GA_TERM_LOG=root + '/term-' + how + '.log')
@@ -1044,7 +1051,7 @@ done
 cat > "$test_root/hidden.py" <<'PYTHON'
 import os, pty, fcntl, termios, struct, subprocess, time, select, sys
 launcher, ctl, root, viewer, build, tmux = sys.argv[1:7]
-sock = root + '/tmux-hidden.sock'
+sock = os.path.join(os.environ['TEST_TMUX_SOCKET_DIR'], 'tmux-hidden.sock')
 env = dict(os.environ, TERM='xterm-256color', OPENGRADS_COLOR='0', OPENGRADS_BUILD_ROOT=build,
            GA_TERM_VIEWER=viewer, GA_TERM_LOG=root + '/term-hidden.log', GA_TERM_PROTOCOL='iterm2')
 if os.sep in tmux:

@@ -113,6 +113,7 @@ GA_TERM_PROTOCOL=iterm2 ./dev/run ./opengrads -l -d Term
 ```
 
 `GA_TERM_PROTOCOL` 維持預設 auto，明確設定只覆寫圖片協定。Inline 圖片的單元測試現在自行指定模擬的 iTerm2 環境，並清理測試遺留的 tmux server。
+測試的 Unix sockets 另放在短的系統暫存目錄，避免深層 checkout 的路徑長度超過系統上限；圖片與大型 fixtures 仍使用專案暫存區。
 
 ## 6. 效能證據：各階段保留各自基準
 

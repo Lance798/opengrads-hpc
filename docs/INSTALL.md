@@ -100,6 +100,8 @@ is older. Legacy `/tmp` test templates are redirected into the checkout
 `tmp/` directory. Host HDF5 headers are exposed through a local pkg-config
 file on RHEL installations that lack one. HDF5 2-specific raw decoding tests
 are skipped when the host provides an earlier HDF5 release.
+Terminal-test sockets alone use a short system `/tmp` directory so deep
+checkout paths do not exceed Unix socket path limits.
 
 To make a runnable Linux release from this environment:
 
