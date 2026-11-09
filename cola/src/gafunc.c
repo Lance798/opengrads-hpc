@@ -780,7 +780,7 @@ char *valu;
 
 gaint ffif (struct gafunc *pfc, struct gastat *pst) {
 struct gastat pst2,pst3;
-struct gagrid *mypgr,*pgr1,*pgrres1,*pgrres2,*pgrres3;
+struct gagrid *mypgr=NULL,*pgr1,*pgrres1,*pgrres2,*pgrres3;
 gaint rc,i,savaloc;
 
   if (pfc->argnum!=3) {
@@ -830,18 +830,23 @@ gaint rc,i,savaloc;
   mypgr->alocf = 0;
   pgr1->alocf = 0;   /* don't let scaling info get freed until we are ready */
 
-  if (mypgr->idim != -1 && mypgr->jdim != -1) {
+  /* Both branch operations modify their inputs. A one-dimensional condition
+     needs its own values/masks too; scalar pointers must refer to the copy's
+     embedded storage rather than the original condition. */
+  if (mypgr->idim != -1) {
+    mypgr->grid = NULL;
+    mypgr->umask = NULL;
     mypgr->grid = galloc(sizeof(gadouble)*mypgr->isiz*mypgr->jsiz,"ffif1");
     if (mypgr->grid==NULL) goto err1;
     mypgr->umask = galloc(sizeof(char)*mypgr->isiz*mypgr->jsiz,"ffif2");
-    if (mypgr->umask==NULL) {
-      gree (mypgr->grid,"ffif1");
-      goto err1;
-    }
+    if (mypgr->umask==NULL) goto err1;
     for (i=0; i<mypgr->isiz*mypgr->jsiz; i++) {
       *(mypgr->grid+i) = *(pgr1->grid+i);
       *(mypgr->umask+i) = *(pgr1->umask+i);
     }
+  } else {
+    mypgr->grid = &mypgr->rmin;
+    mypgr->umask = &mypgr->umin;
   }
 
   /* Don't let gagrop free anything  */
@@ -881,6 +886,14 @@ gaint rc,i,savaloc;
   return (rc);
 
   err1:
+    if (mypgr) {
+      pgr1->alocf = savaloc;
+      if (mypgr->idim>=0) {
+        if (mypgr->grid) gree(mypgr->grid,"ffif1");
+        if (mypgr->umask) gree(mypgr->umask,"ffif2");
+      }
+      gree(mypgr,"ffif3");
+    }
     gafree(pst);
     gafree(&pst2);
     gafree(&pst3);
