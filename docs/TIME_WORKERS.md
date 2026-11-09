@@ -67,11 +67,11 @@ native restrictions; this stage does not turn an invalid native environment
 into a valid one only at higher CPU counts. Existing outer AAVE/AMEAN/ZINT
 profile DISPLAY remains supported.
 
-With the local development launcher, environment controls can be passed as:
+Pass diagnostic environment controls to the launcher as:
 
 ```bash
-./dev/run env GA_TIME_TRACE=1 ./opengrads -l
-./dev/run env GA_TIME_WORKERS=off ./opengrads -l
+GA_TIME_TRACE=1 ./opengrads -l
+GA_TIME_WORKERS=off ./opengrads -l
 ```
 
 Linux archives that need their bundled glibc restart time workers through the

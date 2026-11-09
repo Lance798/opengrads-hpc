@@ -52,7 +52,7 @@ cleanup()
 trap cleanup EXIT
 
 # Unix socket paths are short (104/108 bytes). Keep just the sockets in
-# system /tmp even when development images and fixtures use a deep TMPDIR.
+# system /tmp even when images and fixtures use a deep TMPDIR.
 socket_root="$(/usr/bin/mktemp -d /tmp/opengrads-term-sockets.XXXXXX)"
 export TEST_TMUX_SOCKET_DIR="$socket_root"
 

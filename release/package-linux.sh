@@ -16,8 +16,6 @@ deps_root="$2"
 adios2_root="$3"
 work_root="$4"
 output_root="$5"
-export TMPDIR="${TMPDIR:-$repo_root/tmp}"
-mkdir -p "$TMPDIR"
 grads_version="$(<"$repo_root/cola/src/VERSION")"
 dist_version="$(<"$repo_root/release/VERSION")"
 machine="$(uname -m)"
@@ -109,12 +107,6 @@ copy_notice "$work_root/sources/readline-$READLINE_VERSION/COPYING" \
   "$bundle_root/licenses/Readline-COPYING"
 copy_notice "$work_root/sources/ncurses-$NCURSES_VERSION/COPYING" \
   "$bundle_root/licenses/ncurses-COPYING"
-copy_notice "$work_root/sources/libjpeg-turbo-$JPEG_VERSION/LICENSE.md" \
-  "$bundle_root/licenses/libjpeg-turbo-LICENSE.md"
-copy_notice "$work_root/sources/netcdf-c-$NETCDF_VERSION/COPYRIGHT" \
-  "$bundle_root/licenses/NetCDF-COPYRIGHT"
-copy_notice "$work_root/sources/udunits-$UDUNITS_VERSION/COPYRIGHT" \
-  "$bundle_root/licenses/UDUNITS-COPYRIGHT"
 if [[ ! -r "$deps_root/share/licenses/blosc2/LICENSE.txt" ]]; then
   printf 'Blosc2/codec notices missing; run release/build-dependencies.sh first.\n' >&2
   exit 1
@@ -361,7 +353,7 @@ if ! grep -Fq 'adios2-bp5' <<< "$decoy_output"; then
   exit 1
 fi
 
-smoke_output="$(env -i HOME="${HOME:-$TMPDIR}" PATH=/usr/bin:/bin \
+smoke_output="$(env -i HOME="${HOME:-/tmp}" PATH=/usr/bin:/bin \
   OPENGRADS_COLOR=0 "$bundle_root/opengrads" \
   -bl -d gxdummy -h gxdummy <<'GRADS'
 q config
@@ -377,7 +369,7 @@ grep -Fq 'Calculation threads = 4' <<< "$smoke_output"
 # gscript's color.gs, found along the launcher's GASCRP
 grep -Fq 'clevs= 0 1 2 3 4 5 6 7 8 9 10' <<< "$smoke_output"
 # A script of the user's own by the same name comes before the bundled one.
-user_root="$(mktemp -d "$TMPDIR/opengrads-user-scripts.XXXXXX")"
+user_root="$(mktemp -d "${TMPDIR:-/tmp}/opengrads-user-scripts.XXXXXX")"
 printf "function main(args)\nsay 'user color 'args\n" > "$user_root/color.gs"
 user_output="$(env -i HOME="$user_root" PATH=/usr/bin:/bin GASCRP="$user_root" \
   OPENGRADS_COLOR=0 "$bundle_root/opengrads" -bl -d gxdummy -h gxdummy <<'GRADS'
@@ -406,7 +398,7 @@ if [[ ! -e "$neighbour" ]]; then
     "$neighbour_gex/libgxdummy.so" "$neighbour_gex/libgxdummy.so" \
     > "$neighbour_gex/udpt"
   : > "$neighbour_gex/udxt"
-  neighbour_output="$(env -i HOME="${HOME:-$TMPDIR}" PATH=/usr/bin:/bin \
+  neighbour_output="$(env -i HOME="${HOME:-/tmp}" PATH=/usr/bin:/bin \
     OPENGRADS_COLOR=0 "$bundle_root/opengrads" \
     -bl -d gxdummy -h gxdummy 2>&1 <<'GRADS' || true
 q config
@@ -425,7 +417,7 @@ fi
 # A locale the machine does not have must not stop GrADS. Readline 8.2 before
 # its official patch 001 crashed on the first prompt when LC_ALL, LC_CTYPE or
 # LANG named one -- LC_CTYPE=UTF-8 from a macOS ssh session, say.
-locale_output="$(env -i HOME="${HOME:-$TMPDIR}" PATH=/usr/bin:/bin \
+locale_output="$(env -i HOME="${HOME:-/tmp}" PATH=/usr/bin:/bin \
   LC_ALL=xx_YY.UTF-8 LC_CTYPE=UTF-8 LANG=xx_YY.UTF-8 OPENGRADS_COLOR=0 \
   "$bundle_root/opengrads" -bl -d gxdummy -h gxdummy 2>&1 <<'GRADS' || true
 q config
@@ -441,11 +433,11 @@ fi
 mkdir -p "$output_root"
 # Startup alone does not exercise decompression. Write real compressed arrays
 # with the build dependencies, then read them with only the archive's runtime.
-compression_root="$(mktemp -d "$TMPDIR/opengrads-package-bp5.XXXXXX")"
+compression_root="$(mktemp -d /tmp/opengrads-package-bp5.XXXXXX)"
 trap 'rm -rf -- "$compression_root"' EXIT
 OPENGRADS_ADIOS2_ROOT="$adios2_root" OPENGRADS_DEPS_ROOT="$deps_root" \
   "$repo_root/pytests/TestBP5Compression.sh" --write-fixtures "$compression_root"
-env -i HOME="${HOME:-$TMPDIR}" PATH=/usr/bin:/bin \
+env -i HOME="${HOME:-/tmp}" PATH=/usr/bin:/bin \
   OPENGRADS_LAUNCHER="$bundle_root/opengrads" \
   "$repo_root/pytests/TestBP5Compression.sh" --read-fixtures "$compression_root"
 

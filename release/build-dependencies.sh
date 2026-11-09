@@ -35,13 +35,6 @@ sources_for()
       printf '%s\n' "https://ftpmirror.gnu.org/${url#https://ftp.gnu.org/gnu/}" \
                     "https://mirrors.kernel.org/gnu/${url#https://ftp.gnu.org/gnu/}"
       ;;
-    https://github.com/tmux/tmux/releases/download/*)
-      printf 'https://deb.debian.org/debian/pool/main/t/tmux/tmux_%s.orig.tar.gz\n' \
-        "$TMUX_VERSION"
-      ;;
-    https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/*)
-      printf 'https://distfiles.macports.org/libjpeg-turbo/%s\n' "${url##*/}"
-      ;;
   esac
 }
 
@@ -110,7 +103,7 @@ extract()
   local directory="$2"
 
   if [[ ! -d "$directory" ]]; then
-    tar -xf "$archive" -C "$source_root"
+    tar -xzf "$archive" -C "$source_root"
   fi
 }
 
@@ -261,85 +254,6 @@ if [[ ! -x "$adios2_root/bin/adios2-config" ]] || \
     -DADIOS2_USE_Profiling=OFF
   cmake --build "$build_root/adios2-$ADIOS2_VERSION" --parallel "$jobs"
   cmake --install "$build_root/adios2-$ADIOS2_VERSION"
-fi
-
-# HDF5 detection also probes JPEG. Older cluster images omit its development
-# package even when HDF5 itself is installed.
-if [[ "$platform" == Linux && "${OPENGRADS_BUILD_JPEG:-0}" == 1 ]]; then
-  fetch "$JPEG_URL" "$JPEG_SHA256" "$download_root/libjpeg-turbo-$JPEG_VERSION.tar.gz"
-  extract "$download_root/libjpeg-turbo-$JPEG_VERSION.tar.gz" "$source_root/libjpeg-turbo-$JPEG_VERSION"
-  if [[ ! -f "$deps_root/lib/libjpeg.so" ]]; then
-    cmake -S "$source_root/libjpeg-turbo-$JPEG_VERSION" \
-      -B "$build_root/libjpeg-turbo-$JPEG_VERSION" -G "Unix Makefiles" \
-      -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$deps_root" \
-      -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_INSTALL_RPATH="$deps_root/lib" \
-      -DENABLE_SHARED=ON -DENABLE_STATIC=OFF -DWITH_TURBOJPEG=OFF -DWITH_SIMD=OFF
-    cmake --build "$build_root/libjpeg-turbo-$JPEG_VERSION" --parallel "$jobs"
-    cmake --install "$build_root/libjpeg-turbo-$JPEG_VERSION"
-  fi
-fi
-
-# Development builds keep NetCDF/UDUNITS in the same private prefix. Release
-# builders may continue to use distribution development packages by default.
-if [[ "${OPENGRADS_BUILD_SDF_DEPS:-0}" == 1 ]]; then
-  fetch "$NETCDF_URL" "$NETCDF_SHA256" "$download_root/netcdf-c-$NETCDF_VERSION.tar.gz"
-  fetch "$UDUNITS_URL" "$UDUNITS_SHA256" "$download_root/udunits-$UDUNITS_VERSION.tar.gz"
-  extract "$download_root/netcdf-c-$NETCDF_VERSION.tar.gz" "$source_root/netcdf-c-$NETCDF_VERSION"
-  extract "$download_root/udunits-$UDUNITS_VERSION.tar.gz" "$source_root/udunits-$UDUNITS_VERSION"
-
-  if [[ ! -f "$deps_root/lib/libudunits2.so" ]]; then
-    (
-      mkdir -p "$build_root/udunits-$UDUNITS_VERSION"
-      cd "$build_root/udunits-$UDUNITS_VERSION"
-      "$source_root/udunits-$UDUNITS_VERSION/configure" \
-        --prefix="$deps_root" --enable-shared --disable-static --disable-dependency-tracking
-      make --jobs "$jobs"
-      make install
-    )
-  fi
-  if [[ ! -f "$deps_root/lib/libnetcdf.so" ]]; then
-    cmake -S "$source_root/netcdf-c-$NETCDF_VERSION" \
-      -B "$build_root/netcdf-$NETCDF_VERSION" -G "Unix Makefiles" \
-      -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$deps_root" \
-      -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_INSTALL_RPATH="$deps_root/lib" \
-      -DBUILD_SHARED_LIBS=ON -DENABLE_NETCDF_4=ON -DENABLE_DAP=ON \
-      -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF -DENABLE_BYTERANGE=OFF
-    cmake --build "$build_root/netcdf-$NETCDF_VERSION" --parallel "$jobs"
-    cmake --install "$build_root/netcdf-$NETCDF_VERSION"
-  fi
-fi
-
-# Keep isolated terminal regression tests consistent on older HPC hosts and in CI.
-if [[ "${OPENGRADS_BUILD_TMUX:-0}" == 1 ]]; then
-  fetch "$TMUX_URL" "$TMUX_SHA256" "$download_root/tmux-$TMUX_VERSION.tar.gz"
-  extract "$download_root/tmux-$TMUX_VERSION.tar.gz" "$source_root/tmux-$TMUX_VERSION"
-  if [[ ! -x "$deps_root/bin/tmux" ]]; then
-    (
-      mkdir -p "$build_root/tmux-$TMUX_VERSION"
-      cd "$build_root/tmux-$TMUX_VERSION"
-      CPPFLAGS="-I$deps_root/include" \
-      LDFLAGS="-L$deps_root/lib -Wl,-rpath,$deps_root/lib" \
-        "$source_root/tmux-$TMUX_VERSION/configure" \
-          --prefix="$deps_root" --enable-sixel
-      make --jobs "$jobs"
-      make install
-    )
-  fi
-fi
-
-# A local release should not require a system-wide patchelf installation.
-if [[ "$platform" == Linux && "${OPENGRADS_BUILD_PATCHELF:-0}" == 1 ]]; then
-  fetch "$PATCHELF_URL" "$PATCHELF_SHA256" "$download_root/patchelf-$PATCHELF_VERSION.tar.bz2"
-  extract "$download_root/patchelf-$PATCHELF_VERSION.tar.bz2" "$source_root/patchelf-$PATCHELF_VERSION"
-  if [[ ! -x "$deps_root/bin/patchelf" ]]; then
-    (
-      mkdir -p "$build_root/patchelf-$PATCHELF_VERSION"
-      cd "$build_root/patchelf-$PATCHELF_VERSION"
-      "$source_root/patchelf-$PATCHELF_VERSION/configure" --prefix="$deps_root"
-      make --jobs "$jobs"
-      make install
-    )
-  fi
 fi
 
 printf 'Dependency prefix: %s\n' "$deps_root"
