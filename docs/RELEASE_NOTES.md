@@ -1,7 +1,7 @@
 ## opengrads-hpc 1.0.14
 
 This release improves CPU/OpenMP performance for large reductions and adds
-isolated HDF5 time workers for supported DEFINE and DISPLAY expressions.
+isolated NetCDF/HDF5 time workers for supported DEFINE and DISPLAY expressions.
 The GrADS baseline remains `2.2.1.oga.1`.
 
 ### Added in 1.0.14
@@ -10,14 +10,14 @@ The GrADS baseline remains `2.2.1.oga.1`.
   read the source or archive version metadata automatically, including after
   an update. The CLI reports the distribution and GrADS baseline without
   requiring a completed build or loading runtime libraries.
-- **Whole-expression HDF5 time workers.** Supported native fields, arithmetic,
+- **Whole-expression NetCDF/HDF5 time workers.** Supported native fields, arithmetic,
   powers, trigonometric functions, masks, `esat` and `qvsat` can be evaluated
   at different output times in persistent worker processes. Each worker uses
   one calculation thread; the main process owns DEFINE results, progress,
   cancellation and graphics. Eligible direct T/Z-T profile DISPLAY also
   uses this pool, including outer AAVE, AMEAN and ASUM. XY animations retain
   their existing path. See [TIME_WORKERS.md](TIME_WORKERS.md).
-- **Input-time expression workers for SUM and other reductions.** HDF5
+- **Input-time expression workers for SUM and other reductions.** NetCDF/HDF5
   `sum(expr,t=...,t=...)` can dispatch complete input expressions even when
   the output has only one time. The shared producer also serves AVE, MEAN,
   SUMG, MIN, MAX, MINLOC and MAXLOC. Initialization, chronological
@@ -28,6 +28,17 @@ The GrADS baseline remains `2.2.1.oga.1`.
   by input count, batch size and available-memory estimates. Unsupported
   requests retain their earlier evaluator. Failed or cancelled workers
   discard incomplete results and preserve an existing DEFINE.
+- **Static DEFINE inputs in time workers.** Stored scalars, Z profiles,
+  XY maps and XYZ cubes with a single T/E position can accompany supported
+  native inputs. Each command sends fresh saved values, masks and coordinates;
+  later edits are visible even when worker PIDs are reused. Combined payloads
+  are limited to 128 MiB and 32 definitions; unsupported or oversized inputs
+  retain ordinary evaluation.
+- **Private Linux development and CI environment.** `dev/build.sh`,
+  `dev/test.sh`, `dev/run` and `dev/package.sh` share checksum-pinned private
+  dependencies and an explicit host toolchain. Ubuntu 22.04 and RHEL 8-family
+  CI jobs build, test, package and run unpacked archives without development
+  settings. Binary artifact upload retains the existing approval gate.
 
 ### Improved in 1.0.14
 
@@ -56,14 +67,25 @@ The GrADS baseline remains `2.2.1.oga.1`.
   spatial-only coordinate converter.
 - Linux worker memory estimates include reclaimable file cache through
   `MemAvailable`, while retaining conservative concurrency and batch limits.
+- Native NetCDF surface/profile reads broadcast from their actual axes,
+  preserving missing masks and unpacking. Workers retain the original
+  OPEN/SDFOPEN/XDFOPEN method, including time templates.
+- Linux packaging preserves the LOAD-segment alignment required by RHEL
+  libraries when patching runtime search paths, checks loader-inspection
+  failures, and includes private NetCDF, UDUNITS and JPEG notices.
+- The terminal display creates its picture pane beside its originating GrADS
+  pane even if another tmux window is active. Development activation keeps
+  the caller's selected tmux executable instead of replacing it with a
+  potentially incompatible private client; isolated tests use the private tmux.
 
 ### Scope and verification
 
 Whole-expression time workers currently require native fields of the default
-HDF5 descriptor and supported syntax. NetCDF and BP5 retain their existing
-OpenMP and batch-reader acceleration; this release does not enable their
-whole-expression time workers. Defined inputs, file/dimension qualifiers,
-plug-ins and unsupported dimension combinations retain their earlier paths.
+NetCDF/HDF5 descriptor and supported syntax. Classic and compressed NetCDF-4
+share the HDF5 worker contract; BP5 retains its existing OpenMP and batch-reader
+acceleration. Static DEFINE inputs are supported within the bounds above.
+Time/ensemble-varying definitions, file/dimension qualifiers, plug-ins and
+unsupported dimension combinations retain their earlier paths.
 More workers do not guarantee lower latency, and DEFINE still allocates its
 complete output separately from worker memory estimates.
 

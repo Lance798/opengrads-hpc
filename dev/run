@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Run any development command in the project environment without changing the shell.
+set -euo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/activate.sh"
+if (( $# == 0 )); then
+  printf 'Usage: %s COMMAND [ARG ...]\n' "$0" >&2
+  exit 2
+fi
+exec "$@"

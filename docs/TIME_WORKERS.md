@@ -70,8 +70,8 @@ profile DISPLAY remains supported.
 With the local development launcher, environment controls can be passed as:
 
 ```bash
-./dev exec env GA_TIME_TRACE=1 ./opengrads -l
-./dev exec env GA_TIME_WORKERS=off ./opengrads -l
+./dev/run env GA_TIME_TRACE=1 ./opengrads -l
+./dev/run env GA_TIME_WORKERS=off ./opengrads -l
 ```
 
 Linux archives that need their bundled glibc restart time workers through the

@@ -101,7 +101,10 @@ libraries are available.
 For a packaged release, follow [RELEASES.md](docs/RELEASES.md); it says at
 start-up when a newer release is out, and `./opengrads --update` installs it.
 For a
-source build, follow [INSTALL.md](docs/INSTALL.md). Once started, a BP5 session
+source build, follow [INSTALL.md](docs/INSTALL.md). For ongoing Linux development
+without Conda, use `./dev/build.sh`, `./dev/test.sh`, then
+`source dev/activate.sh`; GitHub Actions runs the same build and tests on pushes
+and pull requests. Once started, a BP5 session
 can look like this:
 
 ```text
