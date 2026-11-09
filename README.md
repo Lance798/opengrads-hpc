@@ -52,9 +52,10 @@ libraries are available.
 - **NetCDF/HDF5/BP5 time workers.** Supported DEFINE and T/Z-T profile DISPLAY expressions
   can evaluate different times in isolated processes. Time SUM/MEAN reductions
   can also dispatch complete input expressions and accumulate them in time
-  order. Static DEFINE scalars, profiles and masks can accompany native fields.
+  order. File-qualified operands such as `qv.3*rhobar.4` and static DEFINE
+  scalars, profiles and masks can accompany native fields.
   `set threads N` controls the CPU budget; worker count and buffers are
-  bounded. BP5 expressions can use workers while bare fields retain native
+  bounded. BP5 expressions can use workers while unqualified bare fields retain native
   batching. The expression allowlist covers 46 built-ins. See
   [time-worker support and limits](docs/TIME_WORKERS.md).
 

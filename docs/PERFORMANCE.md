@@ -2,7 +2,7 @@
 
 The current worker allowlist covers 46 of the 66 built-ins, including spatial
 neighbors, extrema, pressure integrals, indexed vertical slices and IF. BP5
-complete expressions can use isolated time workers; bare native fields and
+complete expressions can use isolated time workers; unqualified native fields and
 ADIOS2 step batching keep their existing reader paths. Each BP5 worker uses
 one ADIOS2 data/metadata reader thread. See [TIME_WORKERS.md](TIME_WORKERS.md)
 for shape restrictions and the numerical/worker-recovery regression commands.
@@ -24,6 +24,34 @@ vendor compiler.
 The November 5 measurements below were collected on the shared Derecho host.
 The November 6 RLL profile diagnosis uses the new Xeon machine and different
 data; its timings are recorded separately below.
+
+## Cross-file worker validation (2026-11-09)
+
+The common expression evaluator now accepts native `.N` operands for all 46
+allowed built-ins. `TestTimeFileInputs.sh` compares 1/4/8-core execution with
+the committed serial evaluator on HDF5, classic NetCDF, compressed NetCDF-4
+and BP5 fixtures. Distinct descriptors sharing a dataset remain separate;
+source coordinates and clocks retain native mapping. Tests cover shifted
+clocks, reversed axes, binary T=1 profiles, mixed open methods, defined-name
+shadowing, bounded source counts, cancellation and failed workers.
+
+On the three supplied datasets, cross-file pointwise, ZINT and input-time SUM
+calculations at t=1..32 were compared with the preceding committed executable.
+The domain was 512x512 for Taiwan BP5 and Puerto Rico NetCDF, and 512x64 for
+sea_grass_mountain HDF5, whose Y dimension is 64. New 1/4/8-core runs compared
+108,625,920 complete float32 output positions with identical hashes and masks;
+1,557 finite double-precision probes had maximum absolute difference zero.
+This checks every exported float32 value, with double precision checked only
+at the sampled spatial positions.
+
+The Taiwan test opened the main descriptor as default file 3 and its native
+profile descriptor as file 4, then evaluated `zint(qv*rhobar.4)`. One local
+observation took 4.883 / 1.484 / 0.989 seconds with 1 / 4 / 8 cores, including
+DEFINE, reads and worker setup. Cache state was not controlled and the host
+was shared, so these measurements establish the tested behavior rather than
+a general scaling guarantee. Build products, commands, logs, output hashes
+and timings for this check are under `tmp/real-crossfile` in the development
+workspace; the reusable synthetic regression is committed under `pytests`.
 
 ## Height-coordinate column integrals
 

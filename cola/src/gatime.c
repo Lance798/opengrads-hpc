@@ -44,9 +44,10 @@ extern char **environ;
 
 #define TIME_MAX_WORKERS 128
 #define TIME_TEXT 4096
-#define TIME_CONFIG 0x47544333 /* v3 adds BP5/BPOPEN restart semantics */
+#define TIME_CONFIG 0x47544334 /* v4 adds command-local native file inputs */
 #define TIME_JOB 0x47544a31
 #define TIME_MAX_DEFINITIONS 32
+#define TIME_MAX_SOURCES 32
 #define TIME_DEFINITION_BUDGET ((size_t)128*1024*1024)
 #define TIME_AXIS_LIMIT 65536
 /* Wire metadata contains values only, never pointers or callback addresses. */
@@ -64,10 +65,16 @@ struct time_inputs {
   size_t bytes;
   struct time_input items[TIME_MAX_DEFINITIONS];
 };
+struct time_source { int opener; char path[TIME_TEXT]; };
+struct time_sources {
+  int count,ids[TIME_MAX_SOURCES];
+  struct gafile *files[TIME_MAX_SOURCES];
+  char expression[TIME_TEXT];
+};
 struct time_config {
   int operation,z1,z2,e,idim,jdim,ri,rj,nx,ny,lo[5],hi[5],reads;
   int cachesf,opener;
-  int definitions;
+  int definitions,sources;
   uint64_t definition_bytes;
   double dmin[5],dmax[5],undef,cache_bytes;
   char path[TIME_TEXT],expression[TIME_TEXT];
@@ -168,10 +175,13 @@ static int time_spatial_difference(const char *p) {
   return *p==')';
 }
 
-/* Whole expressions use read-only built-ins, native default-file fields and
-   bounded defined inputs. Repeated names refer to one command-local snapshot.
-   Constants/definitions alone still do not start an I/O worker pool. */
-static int time_expression(char *expr, struct gastat *pst,struct time_inputs *inputs) {
+/* Reopen only the default and referenced native files. Remap explicit .N
+   operands to compact child ordinals without changing the parent's expression
+   or file list. Distinct descriptors remain distinct even for the same path;
+   the native evaluator owns coordinate/time mapping and profile broadcasting.
+   Repeated DEFINE names refer to one bounded command-local snapshot. */
+static int time_expression(char *expr, struct gastat *pst,struct time_inputs *inputs,
+                           struct time_sources *sources) {
   static const char *functions[]={"ave","mean","sum","sumg","aave","amean",
     "asum","atot","maskout","zint","abs","sqrt","exp","log","log10",
     "sin","cos","tan","asin","acos","atan2","pow","mag","const",
@@ -181,42 +191,78 @@ static int time_expression(char *expr, struct gastat *pst,struct time_inputs *in
     "aminlocx","aminlocy","amaxlocx","amaxlocy",NULL};
   static const char *words[]={"x","y","z","t","e","lon","lat","lev","ens","auto","global",
     "xp","xm","yp","ym","zp","zm",NULL};
-  char name[32],*p=expr,*end; int n,i,field=0; struct gavar *v;struct gafile *defined;
-  struct time_inputs local;
+  char name[32],*p=expr,*end,*start; int n,i,field=0,id,slot,qualified;
+  size_t used=0,length;struct gavar *v;struct gafile *defined,*file;
+  struct time_inputs local;struct time_sources local_sources;
   if(!inputs)inputs=&local;
+  if(!sources)sources=&local_sources;
   inputs->count=0;inputs->bytes=0;
+  sources->count=1;sources->files[0]=pst->pfid;
+  sources->ids[0]=1;
+  for(file=pst->pfi1;file && file!=pst->pfid;file=file->pforw)sources->ids[0]++;
   while (*p) {
+    start=p;qualified=0;slot=0;
     if (isdigit((unsigned char)*p) || (*p=='.' && isdigit((unsigned char)p[1]))) {
-      (void)strtod(p,&end); if(end==p)return 0; p=end; continue;
-    }
-    if (isalpha((unsigned char)*p)) {
+      (void)strtod(p,&end); if(end==p)return 0; p=end;
+    } else if (isalpha((unsigned char)*p)) {
       n=0;
       while(isalnum((unsigned char)*p) || *p=='_') {
         if(n==(int)sizeof(name)-1)return 0;
         name[n++]=*p++;
       }
-      name[n]=0;
-      if(*p=='.')return 0;
+      name[n]=0;file=pst->pfid;
+      if(*p=='.') {
+        qualified=1;p++;id=0;
+        if(!isdigit((unsigned char)*p))return 0;
+        while(isdigit((unsigned char)*p)) {
+          if(id>(INT_MAX-(*p-'0'))/10)return 0;
+          id=id*10+(*p++-'0');
+        }
+        if(id<1 || *p=='(' || *p=='.' || isalpha((unsigned char)*p) || *p=='_')return 0;
+        for(file=pst->pfi1,i=1;file && i<id;i++)file=file->pforw;
+        /* Binary profiles are valid native inputs too. Keep indexed,
+           projected, climatological and unsupported file types local. */
+        if(!file || file->type!=1 || file->ppflag || file->idxflg || file->climo ||
+           (file->ncflg!=0 && file->ncflg!=1 && file->ncflg!=3 && !file->adios2flg) ||
+           file->calendar!=pst->pfid->calendar)return 0;
+        for(slot=0;slot<sources->count && sources->files[slot]!=file;slot++);
+        if(slot==sources->count) {
+          if(slot==TIME_MAX_SOURCES)return 0;
+          sources->files[slot]=file;sources->ids[slot]=id;sources->count++;
+        }
+      }
       if(*p=='(') {
         for(i=0;functions[i] && strcmp(name,functions[i]);i++);
         if(!functions[i])return 0;
         if(!strcmp(name,"cdiff") && !time_spatial_difference(p))return 0;
       } else {
-        defined=getdfn(name,pst);
+        defined=qualified ? NULL : getdfn(name,pst);
         if(defined) {
           if(!time_capture(inputs,name,defined))return 0;
-          continue;
+        } else {
+          v=file->pvar1;
+          for(i=0;i<file->vnum && strcmp(name,v[i].abbrv);i++);
+          if(i<file->vnum)field=1;
+          else if(qualified) {
+            if(strcmp(name,"lon") && strcmp(name,"lat") && strcmp(name,"lev"))return 0;
+          } else { for(i=0;words[i] && strcmp(name,words[i]);i++); if(!words[i])return 0; }
         }
-        v=pst->pfid->pvar1;
-        for(i=0;i<pst->pfid->vnum && strcmp(name,v[i].abbrv);i++);
-        if(i<pst->pfid->vnum)field=1;
-        else { for(i=0;words[i] && strcmp(name,words[i]);i++); if(!words[i])return 0; }
       }
     } else {
       if(!strchr("()+-*/<>=!,&|",*p))return 0;
       p++;
     }
+    if(qualified) {
+      int written=snprintf(sources->expression+used,TIME_TEXT-used,"%s.%d",name,slot+1);
+      if(written<0 || (size_t)written>=TIME_TEXT-used)return 0;
+      used+=(size_t)written;
+    } else {
+      length=(size_t)(p-start);
+      if(length>=TIME_TEXT-used)return 0;
+      memcpy(sources->expression+used,start,length);used+=length;
+    }
   }
+  sources->expression[used]=0;
   return field;
 }
 
@@ -236,28 +282,36 @@ static int time_supported(char *expr, struct gastat *pst) {
     if(p>expr && !*p)return 0;
   }
   return !time_child && time_file(f) && strlen(expr)<TIME_TEXT &&
-         !strchr(f->dnam,'\n') && time_expression(expr,pst,NULL);
+         !strchr(f->dnam,'\n') && time_expression(expr,pst,NULL,NULL);
 }
 
 /* BPOPEN has no persistent descriptor: rediscover the same dataset. Explicit
    CTLs keep their original path spelling and therefore their own axes/aliases.
    The extra BP5 allowance accounts conservatively for private reader buffers. */
-static int time_open_path(struct time_config *c,struct gafile *f) {
+static int time_source_path(struct time_source *source,struct gafile *f) {
 #if TIME_POSIX
   const char *path=f->sdfopener==3 ? f->name : f->dnam;
   char cwd[TIME_TEXT];int length;
-  c->opener=f->sdfopener;
+  memset(source,0,sizeof(*source));
+  source->opener=f->sdfopener;
   if(strchr(path,'\n'))return 0;
-  if(path[0]=='/')length=snprintf(c->path,sizeof(c->path),"%s",path);
+  if(path[0]=='/')length=snprintf(source->path,sizeof(source->path),"%s",path);
   else {
     if(!getcwd(cwd,sizeof(cwd)))return 0;
-    length=snprintf(c->path,sizeof(c->path),"%s/%s",cwd,path);
+    length=snprintf(source->path,sizeof(source->path),"%s/%s",cwd,path);
   }
-  if(f->adios2flg)c->cache_bytes+=64.0*1024*1024;
-  return length>=0 && length<(int)sizeof(c->path);
+  return length>=0 && length<(int)sizeof(source->path);
 #else
-  (void)c;(void)f;return 0;
+  (void)source;(void)f;return 0;
 #endif
+}
+
+static int time_open_path(struct time_config *c,struct gafile *f) {
+  struct time_source source;
+  if(!time_source_path(&source,f))return 0;
+  c->opener=source.opener;memcpy(c->path,source.path,sizeof(c->path));
+  if(f->adios2flg)c->cache_bytes+=64.0*1024*1024;
+  return 1;
 }
 
 /* One owner per complete time. Spatial functions keep their original order,
@@ -582,12 +636,23 @@ static int time_workers(struct time_config *c,int nt) {
 static int time_parallel(struct time_config *c,int t1,int t2,int incr,double *values,char *mask,
                           struct gastat *pst) {
   struct pollfd polls[TIME_MAX_WORKERS];struct time_job job;
-  struct time_inputs inputs;
+  struct time_inputs inputs;struct time_sources sources;
+  struct time_source paths[TIME_MAX_SOURCES-1];int j;
   size_t count=(size_t)c->nx*c->ny*(c->z2-c->z1+1),payload=count*(sizeof(double)+1),part,offset;
   int nt=(t2-t1)/incr+1,n,i,done=0,rc;int64_t next=t1;
   ssize_t got;char *dest;char trace[4096];
   inputs.count=0;inputs.bytes=0;
-  if(pst && !time_expression(c->expression,pst,&inputs))return -1;
+  c->sources=0;
+  if(pst) {
+    if(!time_expression(c->expression,pst,&inputs,&sources))return -1;
+    for(j=1;j<sources.count;j++) {
+      if(!time_source_path(paths+j-1,sources.files[j]))return -1;
+      c->cache_bytes+=(double)c->cachesf*sources.files[j]->cachesize;
+      if(sources.files[j]->adios2flg)c->cache_bytes+=64.0*1024*1024;
+    }
+    c->sources=sources.count-1;
+    memcpy(c->expression,sources.expression,strlen(sources.expression)+1);
+  }
   c->definitions=inputs.count;c->definition_bytes=inputs.bytes;
   n=time_workers(c,nt);if(!n)return -1;
   if(time_spawn(n))return -1;
@@ -597,6 +662,10 @@ static int time_parallel(struct time_config *c,int t1,int t2,int incr,double *va
     for(i=0;i<n && offset<sizeof(trace);i++)offset+=(size_t)snprintf(trace+offset,sizeof(trace)-offset,"%s%ld",i ? "," : "",(long)slots[i].pid);
     if(offset<sizeof(trace)-1)strcat(trace,"\n");
     gaprnt(2,trace);
+    if(c->sources) {
+      snprintf(trace,sizeof(trace),"Time file inputs: count=%d default=%d (native coordinates and clocks)\n",
+               c->sources+1,sources.ids[0]);gaprnt(2,trace);
+    }
     if(inputs.count) {
       snprintf(trace,sizeof(trace),"Time defined inputs: count=%d bytes=%lu (fresh static copies)\n",
                inputs.count,(unsigned long)inputs.bytes);gaprnt(2,trace);
@@ -609,6 +678,7 @@ static int time_parallel(struct time_config *c,int t1,int t2,int incr,double *va
   }
   for(i=0;i<n;i++) {
     rc=time_write_parent(slots[i].fd,c,sizeof(*c));
+    for(j=0;!rc && j<c->sources;j++)rc=time_write_parent(slots[i].fd,paths+j,sizeof(paths[j]));
     if(!rc)rc=time_sendinputs(slots[i].fd,&inputs);
     if(rc)goto error;
     job.operation=TIME_JOB;job.t=next;next+=incr;slots[i].t=job.t;slots[i].received=0;
@@ -680,6 +750,20 @@ void ga_time_init(const char *executable) {
   if(!registered) { atexit(ga_time_shutdown);registered=1; }
 }
 
+static int time_open_source(struct time_source *source,struct gacmn *pcm) {
+  if(!memchr(source->path,0,sizeof(source->path)))return 1;
+  if(source->opener==0) { if(gaopen(source->path,pcm))return 1; }
+#if USENETCDF==1
+  else if(source->opener==1) { if(gasdfopen(source->path,pcm))return 1; }
+  else if(source->opener==2) { if(gaxdfopen(source->path,pcm))return 1; }
+#endif
+#if USEADIOS2==1
+  else if(source->opener==3) { if(gaadios_bpopen(source->path,pcm))return 1; }
+#endif
+  else return 1;
+  return 0;
+}
+
 gaint ga_time_worker(struct gacmn *pcm,int fd) {
   struct time_config c;struct time_job job;struct time_reply reply;
   struct gastat *pst=NULL,model;struct gagrid *shape=NULL;
@@ -694,15 +778,15 @@ gaint ga_time_worker(struct gacmn *pcm,int fd) {
       if(!memchr(c.path,0,sizeof(c.path)) || !memchr(c.expression,0,sizeof(c.expression)) ||
          c.z1<1 || c.z2<c.z1 || c.nx<1 || c.ny<1)break;
       pcm->cachesf=c.cachesf;setcachesf(pcm->cachesf);
-      if(c.opener==0) { if(gaopen(c.path,pcm))break; }
-#if USENETCDF==1
-      else if(c.opener==1) { if(gasdfopen(c.path,pcm))break; }
-      else if(c.opener==2) { if(gaxdfopen(c.path,pcm))break; }
-#endif
-#if USEADIOS2==1
-      else if(c.opener==3) { if(gaadios_bpopen(c.path,pcm))break; }
-#endif
-      else break;
+      {
+        struct time_source source;int source_index;
+        source.opener=c.opener;memcpy(source.path,c.path,sizeof(source.path));
+        if(c.sources<0 || c.sources>=TIME_MAX_SOURCES || time_open_source(&source,pcm))break;
+        for(source_index=0;source_index<c.sources;source_index++) {
+          if(time_read(fd,&source,sizeof(source)) || time_open_source(&source,pcm))break;
+        }
+        if(source_index!=c.sources)break;
+      }
       setcachesf(pcm->cachesf);
       if(time_receiveinputs(fd,&c,pcm))break;
       pst=getpst(pcm);if(!pst)break;model=*pst;gree(pst,"timepst");pst=NULL;

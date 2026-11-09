@@ -37,11 +37,12 @@ CPU-budget change. `GA_TIME_TRACE=1` reports the actual workers and their PIDs;
 `GA_TIME_WORKERS=off` disables the pool.
 
 General-expression output-time workers currently require at least 32 times,
-native fields of the default NetCDF/HDF5/BP5 descriptor, supported syntax and a result
+a default NetCDF/HDF5/BP5 descriptor, supported native file inputs, syntax and a result
 shape that agrees at every time. DEFINE additionally retains its existing
 minimum dataset-work threshold. Bounded static DEFINE inputs can accompany
-native fields. Time/ensemble-varying or oversized definitions, file/dimension
-qualifiers, plug-ins and unsupported functions keep their existing evaluator.
+native fields, including explicit file-qualified operands such as `qv.3*rhobar.4`.
+Time/ensemble-varying or oversized definitions, dimension qualifiers, plug-ins
+and unsupported functions keep their existing evaluator.
 Constants alone do not start workers. New compound DISPLAY expressions that reduce a
 displayed Z/T axis retain the ordinary evaluator; the established outer
 AVE/MEAN/AAVE/AMEAN/ASUM/ZINT profile paths retain their per-time behavior.
@@ -126,8 +127,8 @@ The active worker count also depends on batch length and workspace estimates;
 Pool workers each use one calculation thread. There is no adaptive switch
 between worker/thread combinations during the command.
 
-Time/ensemble-varying or oversized defined fields, non-default-file/dimension-qualified
-inputs, unsupported functions, nested explicit time bounds, relative spatial bounds and varying
+Time/ensemble-varying or oversized defined fields, dimension-qualified
+inputs, unsupported sources/functions, nested explicit time bounds, relative spatial bounds and varying
 ensemble axes keep their earlier paths. Short or memory-limited batches fall
 back to ordinary evaluation. `GA_TIME_TRACE=1` additionally prints
 `Time input expression: ...` when whole input expressions are dispatched.
@@ -137,6 +138,56 @@ incomplete results and preserve an existing DEFINE.
 Large XY results must transfer every per-time grid to the parent and fold them
 there. Scaling can saturate well before 128 workers; output profiles that
 reduce spatially inside each worker return far less data.
+
+## Cross-file expressions
+
+File qualifiers use the shared expression path for all 46 supported built-ins,
+in DEFINE, eligible T/Z-T DISPLAY and input-time reductions. For example, in a
+fresh session:
+
+```text
+open /path/to/vvm.ctl
+open /path/to/vvm_profiles.ctl
+set dfile 1
+set threads 8
+set x 1 512
+set y 1 512
+set z 1
+set t 1 32
+define cwv=zint(qv*rhobar.2)
+```
+
+Use `q files` to check the actual numbers in an existing session. Opening a
+later file does not change the default file. If these descriptors are files
+3 and 4, use `set dfile 3` and `rhobar.4`; `.2` continues to mean file 2.
+
+Each worker reopens the default file and only the referenced native files,
+using each file's original OPEN/SDFOPEN/XDFOPEN/BPOPEN method. Explicit CTLs
+retain their axes and aliases even when several CTLs describe the same data
+path. Internal compact file numbers are private to the worker; the parent
+expression and session file list retain their original meaning. The ordinary
+evaluator maps each source's world coordinates and time axis and checks grid
+compatibility. Sources are never paired by equal time indices. A profile's
+name does not make it static: native missing times remain missing. To reuse
+a single reference time intentionally, first create a bounded static DEFINE
+profile as shown below.
+
+The default descriptor must meet the existing NetCDF/HDF5/BP5 eligibility
+rules. Referenced files may also be ordinary binary grids. Each command is
+limited to 32 native files including the default. Indexed, projected,
+climatological or unsupported sources, differing calendars, variable dimension
+qualifiers such as `qv.3(t=2)`, and oversized source tables keep the ordinary
+path. Worker memory estimates include every reopened source's cache and BP5
+reader allowance. Startup or evaluation failure shuts down the pool, discards
+the incomplete output and preserves an existing DEFINE. Cancellation and
+progress follow the same rules as single-file expressions.
+
+`GA_TIME_TRACE=1` adds `Time file inputs: count=... default=...` when more than
+one descriptor is reopened. `TestTimeFileInputs.sh` compares all 46 functions
+at 1/4/8 cores across HDF5, classic NetCDF, compressed NetCDF-4 and BP5. It also
+checks ordinal remapping, changed defaults, equal data paths with distinct
+axes/clocks, native binary profiles, mixed open methods, source limits,
+DEFINE shadowing, cancellation and killed-worker recovery.
 
 ## Built-in function audit
 
@@ -233,7 +284,7 @@ Each worker limits ADIOS2 data and metadata reader threads to one. Normal
 parent reader settings remain unchanged. Reader buffers are included in the
 worker memory estimate; DEFINE still owns the full final array.
 
-Bare BP5 variables and native input-step batching retain their existing bulk
+Unqualified bare BP5 variables and native input-step batching retain their existing bulk
 reader path. Complete expressions such as `qv*qv`, `if(qv>1e-5,qv*1000,0)` and
 `zint(qv)` can instead evaluate independent output times. A time reduction of
 a compound expression can use input-time workers; a reduction of an unmodified
@@ -264,8 +315,8 @@ with HDF5. Short commands and `GA_TIME_WORKERS=off` keep ordinary evaluation.
 All 46 functions listed above are supported for both formats under the same
 expression/environment restrictions. This does not extend worker eligibility
 to every GrADS built-in. Static session-defined inputs such as
-`define rho=rho.2` can accompany native fields in workers. File-qualified
-operands and plug-ins retain their ordinary evaluator.
+`define rho=rho.2` can accompany native fields in workers. Native file-qualified
+operands use the shared cross-file path above; plug-ins keep the ordinary evaluator.
 For the user's reference-density CWV series:
 
 ```text
@@ -289,8 +340,8 @@ native fields in the default NC descriptor, such as
 does not calculate CWV. Native NC profiles with absent X/Y/T axes are
 broadcast from their actual shape, including missing masks and unpacking.
 
-`TestNetCDFTimeWorkers.sh` runs the four existing time-worker suites and
-`TestTimeDefinedInputs.sh` against
+`TestNetCDFTimeWorkers.sh` runs seven time-worker suites, including
+`TestTimeFileInputs.sh`, against
 both classic and compressed NetCDF-4, including regular/template/reversed
 files, all supported functions, packed data, missing template times, progress,
 cancellation, failed workers, pool reuse, memory caps and identical graphics.

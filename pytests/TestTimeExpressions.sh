@@ -160,8 +160,11 @@ command=zt+'define answer=f+g\nd answer\nd const(f,0)+g\nd esat(150+f/200)\nd qv
 compare(parse(run(ctls[1],command,missing=True)),parse(run(ctls[1],command,1,True,missing=True)))
 saved.rename(piece)
 
-# File/dimension qualifiers and unsupported functions stay local.
-for expr in ('f.1+g','f(t=2)+g','skip(f,2)'):
+# File qualifiers use workers; dimension qualifiers and unsupported functions stay local.
+command=zt+'define answer=f.1+g\nd answer\nd f.1+g\n'
+text=run(ctls[0],command);assert len(groups(text))==2
+compare(parse(text),parse(run(ctls[0],command,1,True)))
+for expr in ('f(t=2)+g','skip(f,2)'):
     command=zt+'define answer='+expr+'\nd answer\n'+('set t 1\n' if '(t=' in expr else '')+'d '+expr+'\n'
     text=run(ctls[0],command);assert not groups(text),expr
     compare(parse(text),parse(run(ctls[0],command,1,True)))

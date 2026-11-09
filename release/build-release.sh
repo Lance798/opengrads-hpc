@@ -93,9 +93,12 @@ OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestDefineNames.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestTimeLoader.sh"
 if grep -Eq '^#define USEHDF5 1$' "$build_root/src/config.h"; then
   OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestTimeSpatialFunctions.sh"
+  OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestTimeFileInputs.sh"
 fi
 OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
 GA_TEST_TIME_FORMAT=bp5 "$repo_root/pytests/TestTimeSpatialFunctions.sh"
+OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
+GA_TEST_TIME_FORMAT=bp5 "$repo_root/pytests/TestTimeFileInputs.sh"
 OPENGRADS_BUILD_ROOT="$build_root" bash "$repo_root/pytests/TestNetCDFTimeWorkers.sh"
 
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestProgress.sh"

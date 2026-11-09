@@ -98,6 +98,7 @@ export OPENGRADS_RUNTIME_LIBRARY_PATH="$runtime_libraries"
 "$repo_root/pytests/TestSaturation.sh"
 "$repo_root/pytests/TestDefineNames.sh"
 GA_TEST_TIME_FORMAT=bp5 "$repo_root/pytests/TestTimeSpatialFunctions.sh"
+GA_TEST_TIME_FORMAT=bp5 "$repo_root/pytests/TestTimeFileInputs.sh"
 
 "$repo_root/pytests/TestProgress.sh"
 "$repo_root/pytests/TestAxisScale.sh"
