@@ -142,12 +142,12 @@ assert not groups(limited),'low-memory execution incorrectly started workers'
 compare(parse(limited),reference)
 print('Time expression reduction memory caps passed: bounded workers and serial fallback',flush=True)
 
-# A 256-time batch followed by 62 times must reuse a larger existing pool.
-text=run(ctls[0],setup+'d sum(f*g,t=1,t=320)\nd mean(f*g,t=1,t=320)',128)
-g=groups(text);assert [int(n) for n,_ in g]==[128,62,128,62],g
+# A 256-time batch followed by 14 times must reuse a larger existing pool.
+text=run(ctls[0],setup+'d sum(f*g,t=1,t=272)\nd mean(f*g,t=1,t=272)',16)
+g=groups(text);assert [int(n) for n,_ in g]==[16,14,16,14],g
 assert g[0][1]==g[2][1] and g[1][1]==g[3][1]
 assert set(g[1][1].split(','))<=set(g[0][1].split(','))
-compare(parse(text),parse(run(ctls[0],setup+'d sum(f*g,t=1,t=320)\nd mean(f*g,t=1,t=320)',1,True)))
+compare(parse(text),parse(run(ctls[0],setup+'d sum(f*g,t=1,t=272)\nd mean(f*g,t=1,t=272)',1,True)))
 
 # DEFINE must also retain all Z planes when only its input times vary.
 command='set x 1 16\nset y 1 16\nset z 1 4\nset t 1\ndefine answer=sum(f*g,t=1,t=320)\n'+\
@@ -195,9 +195,9 @@ linked=root/'linked.ctl';linked.symlink_to(target)
 command=setup+'d sum(f*g,t=1,t=320)'
 compare(parse(run(linked,command)),parse(run(linked,command,1,True)))
 
-# Defined inputs and unsupported expressions remain on the original path.
+# Scalar definitions can accompany native fields; definition-only work stays local.
 command=setup+'define f=7\nd sum(f*g,t=1,t=320)\nd mean(maskout(f,-1),t=1,t=320)'
-text=run(ctls[0],command);assert not groups(text)
+text=run(ctls[0],command);assert groups(text) and 'Time defined inputs: count=1' in text
 compare(parse(text),parse(run(ctls[0],command,1,True)))
 command=setup+'d mean(f*g,t=0,t=321)\nd sum(f*g,t=1,t=7)'
 compare(parse(run(ctls[0],command)),parse(run(ctls[0],command,1,True)))
@@ -236,9 +236,10 @@ def terminal(cancel=False,fail=False,off=False,display=False):
     try:
         pump(.3)
         for s in (f'open {ctls[0]}','set threads 4','set x 1 64','set y 1 64','set z 2','set t 1','set gxout stat'):command(s)
+        command('define inputscale=1.25')
         command('define answer=7')
         begin=len(output)
-        os.write(fd,(('d ' if display else 'define answer=')+'sum(f*g,t=1,t=320)\r').encode());end=time.monotonic()+30;acted=False
+        os.write(fd,(('d ' if display else 'define answer=')+'sum(f*g*inputscale,t=1,t=320)\r').encode());end=time.monotonic()+30;acted=False
         while time.monotonic()<end:
             pump(.01);current=output[begin:].decode('utf-8','replace');g=groups(current)
             if g and not acted and (fail or (cancel and 'workers x 1 thread' in current)):

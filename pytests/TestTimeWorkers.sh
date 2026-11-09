@@ -133,7 +133,7 @@ g=groups(text);assert len(g)==2 and g[0]==g[1],g
 value=parse(text);compare(value[:1],value[1:])
 shadow=run(ctls[0],'set x 1 256\nset y 1 256\nset z 1\nset t 1\ndefine f=7\n'+profile+
     'define answer=aave(f,x=1,x=256,y=1,y=256)\nd answer\n')
-assert not groups(shadow),'defined field incorrectly sent to worker'
+assert not groups(shadow),'definition-only expression unnecessarily started workers'
 
 # DEFINE and direct DISPLAY must also render the same Z/T graphic.
 a=root/'defined.png';b=root/'direct.png'
@@ -150,7 +150,7 @@ run(ctls[0],profile+'define answer='+expr+'\nset gxout shaded\nd answer\nprintim
     ' x640 y480\nclear canvas\nd '+expr+'\nprintim '+str(b)+' x640 y480\n')
 assert a.read_bytes()==b.read_bytes(),'ASUM DEFINE/DISPLAY graphics differ'
 
-heavy='asum('+ '+'.join(['sin(f)']*32)+',x=1,x=256,y=1,y=256)'
+heavy='asum(('+ '+'.join(['sin(f)']*32)+')*inputrho,x=1,x=256,y=1,y=256)'
 def terminal(cancel=False,fail=False,off=False):
     e=dict(env,GA_PROGRESS='off' if off else '.000001',GA_TIME_WORKERS='auto',LANG='C',LC_ALL='C',LC_TERMINAL='iTerm2')
     e.pop('TMUX',None)
@@ -173,6 +173,7 @@ def terminal(cancel=False,fail=False,off=False):
     try:
         pump(.5)
         for s in (f'open {ctls[0]}','set threads 4','set x 1','set y 1','set z 1 4','set t 1 32'):command(s)
+        for s in ('set t 1','define inputrho=rho','set t 1 32'):command(s)
         begin=len(output);os.write(fd,('d '+heavy+'\r').encode());end=time.monotonic()+30;acted=False
         while time.monotonic()<end:
             pump(.02);current=output[begin:].decode('utf-8','replace')

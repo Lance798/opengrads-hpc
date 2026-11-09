@@ -96,12 +96,29 @@ assert text.count('Time workers:')>=len(expressions)
 compare(actual,reference)
 print('VVM all 8 input-time reductions, single fields and compound expressions: passed',flush=True)
 
-# Reproduce the user's session-defined density. It deliberately stays local.
+# Reproduce the user's original command, now with a static DEFINE snapshot.
 bar=ctl.with_name('bar.ctl')
-commands=f'open {bar}\nset x 1\nset y 1\nset z 1 75\nset t 1\ndefine rho=rho.2\n'+\
-    'set z 1\nset t 1 32\ndefine c=aave(zint(rho*qv),x=1,x=16,y=1,y=12)\nd c\n'
-reference,_,_=run(commands,False);actual,text,_=run(commands)
-assert 'Time workers:' not in text
+profiles=f'open {bar}\nset x 1\nset y 1\nset z 1 75\nset t 1\n'+\
+    'define rho=rho.2\ndefine pibar=pibar.2\ndefine pbar=pbar.2\n'
+commands=profiles+'set z 1\nset t 1 last\ndefine c=aave(zint(qv*rho),x=1,x=384,y=1,y=384)\nd c\n'
+reference,_,serial=run(commands,False);actual,text,parallel=run(commands)
+assert 'times=361' in text and 'Time defined inputs: count=1' in text
 compare(actual,reference)
-print(f'VVM session-defined rho fallback: passed; total={samples} values max_abs={max_abs:.17g}',flush=True)
+print(f'VVM original DEFINE rho CWV: all 361 times passed; serial={serial:.2f}s workers={parallel:.2f}s',flush=True)
+commands=profiles+'set x 5\nset y 3\nset z 1 75\nset t 1 32\n'+\
+    'define qs=qvsat(th*pibar,pbar)\nd qs\nd qvsat(th*pibar,pbar)\n'+\
+    'define es=esat(th*pibar)\nd es\nd esat(th*pibar)\n'
+reference,_,_=run(commands,False);actual,text,_=run(commands)
+assert text.count('Time workers:')==4 and 'Time defined inputs: count=2' in text
+compare(actual,reference)
+print('VVM defined pibar/pbar: QVSAT/ESAT, all 75 levels, 32 times, DEFINE/DISPLAY passed',flush=True)
+for kind,z in (('XY','1'),('XYZ','1 75')):
+    commands=profiles+'set x 1 384\nset y 1 384\nset t 1\nset z '+z+'\n'+\
+        'define fixedmask=(qv>0)-0.5\nset x 1\nset y 1\nset z 1\nset t 1 32\n'+\
+        'define c=aave(zint(maskout(qv,fixedmask)*rho),x=1,x=384,y=1,y=384)\nd c\n'
+    reference,_,_=run(commands,False);actual,text,_=run(commands)
+    assert 'Time defined inputs: count=2' in text
+    compare(actual,reference)
+    print(f'VVM static {kind} mask + defined rho: full-area CWV, 32 times passed',flush=True)
+print(f'VVM defined inputs complete: total={samples} values max_abs={max_abs:.17g}',flush=True)
 PY

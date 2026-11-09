@@ -159,14 +159,14 @@ command=zt+'define answer=f+g\nd answer\nd const(f,0)+g\nd esat(150+f/200)\nd qv
 compare(parse(run(ctls[1],command,missing=True)),parse(run(ctls[1],command,1,True,missing=True)))
 saved.rename(piece)
 
-# Session-only data and dimensions not reconstructed by workers stay local.
+# File/dimension qualifiers and unsupported functions stay local.
 for expr in ('f.1+g','f(t=2)+g','if(f>1000,f,g)'):
     command=zt+'define answer='+expr+'\nd answer\n'+('set t 1\n' if '(t=' in expr else '')+'d '+expr+'\n'
     text=run(ctls[0],command);assert not groups(text),expr
     compare(parse(text),parse(run(ctls[0],command,1,True)))
 command='set x 1\nset y 1\nset z 1\nset t 1\ndefine saved=7\n'+zt+\
     'define answer=saved+f\nd answer\nd saved+f\n'
-text=run(ctls[0],command);assert not groups(text)
+text=run(ctls[0],command);assert len(groups(text))==2 and 'Time defined inputs: count=1' in text
 compare(parse(text),parse(run(ctls[0],command,1,True)))
 for setup in (zt.replace('1 32','1 31'),zt.replace('1 32','1')):
     text=run(ctls[0],setup+'define answer=f+g\nd answer\nd f+g\n')

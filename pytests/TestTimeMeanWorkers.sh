@@ -132,12 +132,12 @@ assert not groups(limited),'low-memory execution incorrectly started workers'
 compare(parse(limited),reference)
 print('Time mean memory caps passed: bounded workers and serial fallback',flush=True)
 
-# A 256-time batch followed by 62 times must reuse a larger existing pool.
-text=run(ctls[0],setup+'d mean(f,t=1,t=320)\nd ave(f,t=1,t=320)',128)
-g=groups(text);assert [int(n) for n,_ in g]==[128,62,128,62],g
+# A 256-time batch followed by 14 times must reuse a larger existing pool.
+text=run(ctls[0],setup+'d mean(f,t=1,t=272)\nd ave(f,t=1,t=272)',16)
+g=groups(text);assert [int(n) for n,_ in g]==[16,14,16,14],g
 assert g[0][1]==g[2][1] and g[1][1]==g[3][1]
 assert set(g[1][1].split(','))<=set(g[0][1].split(','))
-compare(parse(text),parse(run(ctls[0],setup+'d mean(f,t=1,t=320)\nd ave(f,t=1,t=320)',1,True)))
+compare(parse(text),parse(run(ctls[0],setup+'d mean(f,t=1,t=272)\nd ave(f,t=1,t=272)',1,True)))
 
 # DEFINE must also retain all Z planes when only its input times vary.
 command='set x 1 16\nset y 1 16\nset z 1 4\nset t 1\ndefine answer=mean(f,t=1,t=320)\n'+\

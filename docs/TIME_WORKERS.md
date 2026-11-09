@@ -39,9 +39,10 @@ CPU-budget change. `GA_TIME_TRACE=1` reports the actual workers and their PIDs;
 General-expression output-time workers currently require at least 32 times,
 native fields of the default NetCDF/HDF5 descriptor, supported syntax and a result
 shape that agrees at every time. DEFINE additionally retains its existing
-minimum dataset-work threshold. Defined inputs, file/dimension qualifiers,
-plug-ins and unsupported functions keep their existing evaluator. Constants
-alone do not start workers. New compound DISPLAY expressions that reduce a
+minimum dataset-work threshold. Bounded static DEFINE inputs can accompany
+native fields. Time/ensemble-varying or oversized definitions, file/dimension
+qualifiers, plug-ins and unsupported functions keep their existing evaluator.
+Constants alone do not start workers. New compound DISPLAY expressions that reduce a
 displayed Z/T axis retain the ordinary evaluator; the established outer
 AVE/MEAN/AAVE/AMEAN/ASUM/ZINT profile paths retain their per-time behavior.
 
@@ -124,8 +125,8 @@ The active worker count also depends on batch length and workspace estimates;
 Pool workers each use one calculation thread. There is no adaptive switch
 between worker/thread combinations during the command.
 
-Defined fields, non-default-file/dimension-qualified inputs, unsupported
-functions, nested explicit time bounds, relative spatial bounds and varying
+Time/ensemble-varying or oversized defined fields, non-default-file/dimension-qualified
+inputs, unsupported functions, nested explicit time bounds, relative spatial bounds and varying
 ensemble axes keep their earlier paths. Short or memory-limited batches fall
 back to ordinary evaluation. `GA_TIME_TRACE=1` additionally prints
 `Time input expression: ...` when whole input expressions are dispatched.
@@ -199,9 +200,10 @@ with HDF5. Short commands and `GA_TIME_WORKERS=off` keep ordinary evaluation.
 
 All 26 functions listed above are supported for both formats under the same
 expression/environment restrictions. This does not extend worker eligibility
-to every GrADS built-in. Session-defined inputs such as `define rho=rho.2`,
-file-qualified operands and plug-ins retain their ordinary evaluator.
-For the user's reference-density CWV series, DEFINE fixes time per evaluation:
+to every GrADS built-in. Static session-defined inputs such as
+`define rho=rho.2` can accompany native fields in workers. File-qualified
+operands and plug-ins retain their ordinary evaluator.
+For the user's reference-density CWV series:
 
 ```text
 open /path/to/thermodynamic.ctl
@@ -217,13 +219,15 @@ define c=aave(zint(rho*qv),x=1,x=384,y=1,y=384)
 display c
 ```
 
-This defined-density expression stays local. Expressions built entirely from
+This expression now sends the saved density profile to each worker.
+Expressions built entirely from
 native fields in the default NC descriptor, such as
 `aave(zint(qv),x=1,x=384,y=1,y=384)`, can use workers; integrating QV alone
 does not calculate CWV. Native NC profiles with absent X/Y/T axes are
 broadcast from their actual shape, including missing masks and unpacking.
 
-`TestNetCDFTimeWorkers.sh` runs the four existing time-worker suites against
+`TestNetCDFTimeWorkers.sh` runs the four existing time-worker suites and
+`TestTimeDefinedInputs.sh` against
 both classic and compressed NetCDF-4, including regular/template/reversed
 files, all supported functions, packed data, missing template times, progress,
 cancellation, failed workers, pool reuse, memory caps and identical graphics.
@@ -242,14 +246,99 @@ OPENGRADS_BUILD_ROOT=/path/to/build \
 The real-data test reads the original files without modifying them. It checks
 all 26 allowed functions, all eight input-time reduction selectors, full
 384x384 ZINT/area reduction across 75 levels and 32 times, all 361 template
-times with `set t 1 last`, and the user's
-session-defined density fallback against one-thread evaluation.
+times with `set t 1 last`, the user's original defined-density CWV expression,
+defined PIBAR/PBAR saturation diagnostics, and static XY/XYZ masks against
+one-thread evaluation.
 
-On the supplied `icluster_f10_b030` template dataset, 44,850 compared values
+On the supplied `icluster_f10_b030` template dataset, 54,843 compared values
 had identical masks and zero maximum absolute difference. One local
 run of the full-area ZINT/area DEFINE plus DISPLAY case took 8.55 seconds with
 one thread and 3.43 seconds with four workers. This is a validation sample,
 not a general scaling guarantee; storage and cache state affect timings.
+
+`TestHDF5TimeWorkersReal.sh /path/to/rcemip_45l_large/vvm.ctl` additionally
+checks the provided 45-level VVMex HDF5 template with 1, 4, 8 and 16 calculation
+cores. It compares native expressions and static scalar/profile/XY/XYZ inputs,
+including saturation, wind speed, column integrals and all eight input-time
+reduction selectors. Coverage uses the first 32 times, cropped horizontal
+areas, Z/T profiles and all levels for column integrals. All 2,976 compared
+values at each parallel CPU count had identical masks and zero maximum
+absolute difference from the one-core evaluator.
+
+## Static DEFINE inputs
+
+Time workers automatically accept stored scalars, Z profiles, XY maps and XYZ
+cubes whose T and E dimensions both have length one. The expression must also
+reference a native field of the default NetCDF/HDF5 descriptor and satisfy the
+existing function, shape, time-count and work thresholds. No `set global` is
+needed. A definition repeated over several times is still time-varying storage
+for eligibility purposes, even if its values happen to be equal.
+
+Workers receive the saved values, missing masks, dimensions, index offsets,
+calendar and coordinate arrays. They do not reopen the source of a definition
+or rerun its original formula. Thus a profile originally copied from a binary
+`bar.ctl` can accompany native NC/HDF5 data; the profile's source file may be
+closed afterwards. Saturation formulas and the order of ZINT, masks and area
+reductions remain unchanged.
+
+For reference profiles, fix X/Y/T/E while defining them, then select the desired
+output times. After the two OPEN commands in the CWV example above:
+
+```text
+set x 1
+set y 1
+set t 1
+set e 1
+set z 1 75
+define rho=rho.2
+define pibar=pibar.2
+define pbar=pbar.2
+set z 1
+set t 1 last
+set threads 4
+define c=aave(zint(qv*rho),x=1,x=384,y=1,y=384)
+```
+
+At the same fixed output Z, `qvsat(th*pibar,pbar)` and `esat(th*pibar)` can
+use those saved profiles too. Static masks can be defined over a spatial
+region at one time and then applied with `maskout(qv,landmask)` or
+`maskout(qv,cubemask)` at subsequent times. Keep the desired Z range when
+creating a 3-D mask, and fix Z when creating a 2-D mask.
+
+Every command captures fresh copies of only its referenced definitions, with
+repeated names deduplicated. Re-DEFINE, UNDEFINE and SET DEFVAL changes are
+therefore visible on the next command even when the worker PIDs are reused.
+Each worker owns its copies; normal REINIT cleanup also handles partial
+receives. Snapshot transmission is nonblocking in the parent and observes
+cancellation and worker failures, preserving an old DEFINE on an aborted
+replacement.
+
+The command's combined snapshot payload (values, byte masks and coordinate
+metadata) is limited to 128 MiB and 32 distinct definitions. Spatial dimensions
+and stored nonlinear coordinate axes are limited to 65,536 entries each.
+Snapshot memory and definition metadata are included in the existing per-worker
+memory estimate and 8 GiB/available-memory concurrency ceiling. A 384x384x75
+stored field uses about 95 MiB for double values and byte masks per worker.
+Large masks can reduce worker count and add transfer time; every command
+copies its inputs afresh. Time/ensemble-varying, climatological, unsupported
+or over-budget definitions keep ordinary evaluation without truncation.
+Purely defined/constant expressions do not start an I/O worker pool.
+
+`GA_TIME_TRACE=1` additionally reports `Time defined inputs: count=... bytes=...`.
+Restart GrADS after rebuilding: the worker configuration protocol is versioned
+so incompatible parent/worker binaries fail promptly rather than misreading a
+payload. `GA_TIME_WORKERS=off` retains ordinary evaluation for comparisons.
+
+`TestTimeDefinedInputs.sh` checks scalar/Z/XY/XYZ inputs, nonlinear/linear and
+cropped coordinates, masks, all eight input-time selectors, source-file close,
+fresh copies after edits, native-name shadowing, pool reuse, large masks,
+budget/dependency limits and identical graphics. Linux tests additionally
+interrupt a deliberately delayed large transfer, verify preservation of an old
+DEFINE and recovery, and check that workers are reaped. The established
+TimeWorkers/TimeExpressionReductions terminal suites also exercise profile and
+scalar inputs during calculation cancellation and killed-worker recovery.
+Their pool-shrink regression uses 16 workers followed by a 14-worker batch,
+keeping validation within 16 calculation cores.
 
 ## Existing HDF5 regression coverage
 
