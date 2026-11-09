@@ -35,6 +35,13 @@ sources_for()
       printf '%s\n' "https://ftpmirror.gnu.org/${url#https://ftp.gnu.org/gnu/}" \
                     "https://mirrors.kernel.org/gnu/${url#https://ftp.gnu.org/gnu/}"
       ;;
+    https://github.com/tmux/tmux/releases/download/*)
+      printf 'https://deb.debian.org/debian/pool/main/t/tmux/tmux_%s.orig.tar.gz\n' \
+        "$TMUX_VERSION"
+      ;;
+    https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/*)
+      printf 'https://distfiles.macports.org/libjpeg-turbo/%s\n' "${url##*/}"
+      ;;
   esac
 }
 
