@@ -24,7 +24,7 @@
 #endif
 static float f[NT][NZ][NY][NX], indexmap[NT][NY][NX], surface[NT][NY][NX];
 static double g[NT][NZ][NY][NX];
-#ifdef ZS_HDF5
+#if defined(ZS_HDF5) || defined(ZS_NETCDF)
 static short packed[NT][NZ][NY][NX];
 #endif
 static void check(int condition, const char *message) {
@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
     for (z=0;z<NZ;z++) {
       f[t][z][y][x]=(float)(1000*t+100*(z+1)+10*y+x);
       g[t][z][y][x]=(double)f[t][z][y][x]+0.125;
-#ifdef ZS_HDF5
+#if defined(ZS_HDF5) || defined(ZS_NETCDF)
       packed[t][z][y][x]=(short)((t*700+z*100+10*y+x)%5000-2500);
       if (!x && !y) packed[t][z][y][x]=-32768;
 #endif
@@ -88,9 +88,11 @@ int main(int argc, char **argv) {
   {
     int mode;
     for (mode=0;mode<NT+2;mode++) {
-      int file, dims[4], fvar,gvar,kvar,svar;
+      int file, dims[4], fvar,gvar,kvar,svar,rvar,pvar;
       int source=mode>=2 ? mode-2 : 0;
       const float fill=-9999;
+      const short packed_fill=-32768;
+      const double rho[NZ]={1.2,1.1,1.0,0.9},scale=0.125,offset=12;
       if (mode>=2) snprintf(path,sizeof(path),"%s/slice%d.nc",argv[1],source);
       else snprintf(path,sizeof(path),"%s/slice%s.nc",argv[1],mode ? "_compressed" : "");
       check(nc_create(path,NC_CLOBBER|(mode ? NC_NETCDF4 : 0),&file)==NC_NOERR,"create NetCDF");
@@ -100,17 +102,48 @@ int main(int argc, char **argv) {
       check(nc_def_dim(file,"x",NX,dims+3)==NC_NOERR,"NetCDF x");
       check(nc_def_var(file,"f",NC_FLOAT,4,dims,&fvar)==NC_NOERR,"NetCDF f");
       check(nc_def_var(file,"g",NC_DOUBLE,4,dims,&gvar)==NC_NOERR,"NetCDF g");
+      check(nc_def_var(file,"rho",NC_DOUBLE,1,dims+1,&rvar)==NC_NOERR,"NetCDF rho");
+      check(nc_def_var(file,"packed",NC_SHORT,4,dims,&pvar)==NC_NOERR,"NetCDF packed");
+      check(nc_put_att_short(file,pvar,"_FillValue",NC_SHORT,1,&packed_fill)==NC_NOERR,"NetCDF packed fill");
+      check(nc_put_att_double(file,pvar,"scale_factor",NC_DOUBLE,1,&scale)==NC_NOERR,"NetCDF scale");
+      check(nc_put_att_double(file,pvar,"add_offset",NC_DOUBLE,1,&offset)==NC_NOERR,"NetCDF offset");
       { int kdims[3]={dims[0],dims[2],dims[3]};
         check(nc_def_var(file,"kmap",NC_FLOAT,3,kdims,&kvar)==NC_NOERR,"NetCDF kmap");
         check(nc_def_var(file,"surface",NC_FLOAT,3,kdims,&svar)==NC_NOERR,"NetCDF surface"); }
       check(nc_put_att_float(file,fvar,"_FillValue",NC_FLOAT,1,&fill)==NC_NOERR,"NetCDF fill");
+      /* Coordinate metadata also exercises SDFOPEN/XDFOPEN worker restart. */
+      {
+        const char *names[4]={"t","z","y","x"};
+        const char *units[4]={"hours since 2000-01-01 00:00:00","m","degrees_north","degrees_east"};
+        int d,coord;
+        for(d=0;d<4;d++) {
+          check(nc_def_var(file,names[d],NC_DOUBLE,1,dims+d,&coord)==NC_NOERR,"NetCDF coordinate");
+          check(nc_put_att_text(file,coord,"units",strlen(units[d]),units[d])==NC_NOERR,"NetCDF coordinate units");
+        }
+      }
       if (mode) {
         check(nc_def_var_deflate(file,fvar,1,1,3)==NC_NOERR,"NetCDF f compression");
         check(nc_def_var_deflate(file,gvar,1,1,3)==NC_NOERR,"NetCDF g compression");
       }
       check(nc_enddef(file)==NC_NOERR,"NetCDF enddef");
+      {
+        const char *names[4]={"t","z","y","x"};
+        const double heights[NZ]={50,150,400,1000};
+        const int lengths[4]={mode>=2 ? 1 : NT,NZ,NY,NX};
+        double *coords=malloc((NT+NZ+NY+NX)*sizeof(*coords));
+        int d,i,coord;
+        check(coords!=NULL,"NetCDF coordinate buffer");
+        for(d=0;d<4;d++) {
+          for(i=0;i<lengths[d];i++)coords[i]=d==0 ? source+i : d==1 ? heights[i] : d==2 ? -60+0.25*i : 10+0.1*i;
+          check(nc_inq_varid(file,names[d],&coord)==NC_NOERR,"NetCDF coordinate id");
+          check(nc_put_var_double(file,coord,coords)==NC_NOERR,"NetCDF coordinate values");
+        }
+        free(coords);
+      }
       check(nc_put_var_float(file,fvar,&f[source][0][0][0])==NC_NOERR,"NetCDF write f");
       check(nc_put_var_double(file,gvar,&g[source][0][0][0])==NC_NOERR,"NetCDF write g");
+      check(nc_put_var_double(file,rvar,rho)==NC_NOERR,"NetCDF write rho");
+      check(nc_put_var_short(file,pvar,&packed[source][0][0][0])==NC_NOERR,"NetCDF write packed");
       check(nc_put_var_float(file,kvar,&indexmap[source][0][0])==NC_NOERR,"NetCDF write kmap");
       check(nc_put_var_float(file,svar,&surface[source][0][0])==NC_NOERR,"NetCDF write surface");
       check(nc_close(file)==NC_NOERR,"NetCDF close");

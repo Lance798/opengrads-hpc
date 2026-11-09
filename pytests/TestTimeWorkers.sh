@@ -5,32 +5,30 @@ set -euo pipefail
 repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 test_root="$(mktemp -d /tmp/opengrads-time-workers.XXXXXX)"
 trap 'rm -rf -- "$test_root"' EXIT
-if [[ -n "${GA_TEST_HDF5_LIBS:-}" ]]; then
-  read -r -a hflags <<< "${GA_TEST_HDF5_CFLAGS:-}"
-  read -r -a hlibs <<< "$GA_TEST_HDF5_LIBS"
-else
-  read -r -a hflags <<< "$(pkg-config --cflags hdf5)"
-  read -r -a hlibs <<< "$(pkg-config --libs hdf5)"
-fi
-"${CC:-cc}" -std=gnu99 -O2 -DZS_HDF5 -DNX=256 -DNY=256 -DNT=32 \
+source "$repo_root/pytests/time_worker_format.sh"
+"${CC:-cc}" -std=gnu99 -O2 "$writer_define" -DNX=256 -DNY=256 -DNT=32 \
   "${hflags[@]}" "$repo_root/pytests/zslice_writer.c" "${hlibs[@]}" -lm -o "$test_root/writer"
 "$test_root/writer" "$test_root" zint
 python3 -u - "$repo_root" "$test_root" <<'PY'
 import errno,math,os,pty,re,select,signal,subprocess,sys,time
 from pathlib import Path
-repo,root=map(Path,sys.argv[1:]);launcher=str(repo/'opengrads')
+repo,root=map(Path,sys.argv[1:]);launcher=os.environ.get('OPENGRADS_LAUNCHER',str(repo/'opengrads'))
 env=dict(os.environ,OPENGRADS_BUILD_ROOT=os.environ.get('OPENGRADS_BUILD_ROOT',str(repo/'build')),
          OPENGRADS_COLOR='0',GA_TIME_TRACE='1',GA_PROGRESS='off')
 header=('undef -9999\nxdef 256 linear 10 .1\nydef 256 linear -60 .25\n'
         'zdef 4 levels 50 150 400 1000\ntdef 32 linear 00z01jan2000 1hr\n'
         'vars 4\nf 4 {dims} F\ng 4 {dims} G\nsurface 0 {surface} Surface\nrho 4 z Density\nendvars\n')
+fixture_format=os.environ.get('GA_TEST_TIME_FORMAT','h5')
+extension='h5' if fixture_format=='h5' else 'nc'
+dtype='hdf5_grid' if extension=='h5' else 'netcdf'
+regular='slice'+('_compressed' if fixture_format=='nc4' else '')+'.'+extension
 ctls=[]
 for template,reverse in ((False,False),(True,False),(False,True)):
     name=('template' if template else 'regular')+('-reverse' if reverse else '')
     ctl=root/(name+'.ctl');ctls.append(ctl)
-    ctl.write_text('dset ^'+('slice%tm1.h5' if template else 'slice.h5')+'\ndtype hdf5_grid\n'+
+    ctl.write_text('dset ^'+('slice%tm1.'+extension if template else regular)+'\ndtype '+dtype+'\n'+
         ('options '+('template ' if template else '')+('yrev zrev' if reverse else '')+'\n' if template or reverse else '')+
-        header.format(dims='z,y,x' if template else 't,z,y,x',surface='y,x' if template else 't,y,x'))
+        header.format(dims='z,y,x' if template and extension=='h5' else 't,z,y,x',surface='y,x' if template and extension=='h5' else 't,y,x'))
 
 def parse(text):
     lines=iter(text.splitlines());grids=[]
@@ -49,7 +47,7 @@ def compare(a,b):
     for ga,gb in zip(a,b):
         assert len(ga)==len(gb)
         for x,y in zip(ga,gb):
-            assert (x is None)==(y is None),'mask mismatch'
+            assert (x is None)==(y is None),('mask mismatch',x,y)
             if x is None:continue
             assert math.isfinite(x) and math.isfinite(y)
             error=abs(x-y);max_abs=max(max_abs,error);samples+=1
@@ -95,7 +93,8 @@ for ctl in ctls:
         reference=parse(run(ctl,command,1,True))
         for n in (2,4,8):
             text=run(ctl,command,n);assert groups(text),(ctl,expression,'no workers')
-            compare(parse(text),reference)
+            try:compare(parse(text),reference)
+            except AssertionError as exc:raise AssertionError((ctl.name,expression,n,exc)) from exc
         if expression.startswith(('ave(','aave(','amean(','asum(')):
             direct=run(ctl,setup+'d '+expression)
             compare(parse(direct),reference)
@@ -116,7 +115,7 @@ text=run(cyclic,command);assert len(groups(text))==2
 compare(parse(text),parse(run(cyclic,command,1,True)))
 
 # Missing middle template time retains each function's established mask rules.
-piece=root/'slice16.h5';saved=root/'slice16.saved';piece.rename(saved)
+piece=root/('slice16.'+extension);saved=root/'slice16.saved';piece.rename(saved)
 for expression,setup in (cases[1],cases[-1]):
     command=setup+'define answer='+expression+'\nd answer\n'
     compare(parse(run(ctls[1],command,missing=True)),parse(run(ctls[1],command,1,True,missing=True)))

@@ -4,13 +4,12 @@ set -euo pipefail
 repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/opengrads-time-mean.XXXXXX")"
 trap 'rm -rf -- "$test_root"' EXIT
-read -r -a hflags <<< "$(pkg-config --cflags hdf5)"
-read -r -a hlibs <<< "$(pkg-config --libs hdf5)"
-"${CC:-cc}" -std=gnu99 -O2 -DZS_HDF5 -DNX=64 -DNY=64 -DNT=320 \
+source "$repo_root/pytests/time_worker_format.sh"
+"${CC:-cc}" -std=gnu99 -O2 "$writer_define" -DNX=64 -DNY=64 -DNT=320 \
   "${hflags[@]}" "$repo_root/pytests/zslice_writer.c" "${hlibs[@]}" -lm -o "$test_root/writer"
 "$test_root/writer" "$test_root" zint
 # Make the active-reader interval deterministic for terminal cancellation and
-# failure tests. Only child HDF5 calls are delayed; production has no test hook.
+# failure tests. Only child native reads are delayed; production has no test hook.
 cat > "$test_root/slow.c" <<'C'
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -18,7 +17,11 @@ cat > "$test_root/slow.c" <<'C'
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef ZS_NETCDF
+#include <netcdf.h>
+#else
 #include <hdf5.h>
+#endif
 FILE *fopen(const char *path,const char *mode) {
   static FILE *(*next)(const char *,const char *);
   const char *kib=getenv("GA_TEST_MEM_KIB");
@@ -30,27 +33,40 @@ FILE *fopen(const char *path,const char *mode) {
   }
   return next(path,mode);
 }
+#ifdef ZS_NETCDF
+int nc_get_vara_double(int a,int b,const size_t *c,const size_t *d,double *e) {
+  static int (*next)(int,int,const size_t *,const size_t *,double *);
+  if(!next)*(void **)(&next)=dlsym(RTLD_NEXT,"nc_get_vara_double");
+  if(getenv("GA_TIME_AFFINITY"))usleep(20000);
+  return next(a,b,c,d,e);
+}
+#else
 herr_t H5Dread(hid_t a,hid_t b,hid_t c,hid_t d,hid_t e,void *f) {
   static herr_t (*next)(hid_t,hid_t,hid_t,hid_t,hid_t,void *);
   if(!next)*(void **)(&next)=dlsym(RTLD_NEXT,"H5Dread");
   if(getenv("GA_TIME_AFFINITY"))usleep(20000);
   return next(a,b,c,d,e,f);
 }
+#endif
 C
-"${CC:-cc}" -shared -fPIC -O2 "${hflags[@]}" "$test_root/slow.c" -ldl -o "$test_root/slow.so"
+"${CC:-cc}" -shared -fPIC -O2 "$writer_define" "${hflags[@]}" "$test_root/slow.c" -ldl -o "$test_root/slow.so"
 python3 -u - "$repo_root" "$test_root" <<'PY'
 import math,os,pty,re,select,signal,subprocess,sys,time
 from pathlib import Path
-repo,root=map(Path,sys.argv[1:]);env=dict(os.environ,GA_TIME_TRACE='1',GA_PROGRESS='off',OPENGRADS_COLOR='0')
+repo,root=map(Path,sys.argv[1:]);launcher=os.environ.get('OPENGRADS_LAUNCHER',str(repo/'opengrads'));env=dict(os.environ,GA_TIME_TRACE='1',GA_PROGRESS='off',OPENGRADS_COLOR='0')
 header=('undef -9999\nxdef 64 linear 10 .1\nydef 64 linear -60 .25\n'
         'zdef 4 levels 50 150 400 1000\ntdef 320 linear 00z01jan2000 1hr\n'
         'vars 4\nf 4 {dims} F\ng 4 {dims} G\nsurface 0 {surface} Surface\nrho 4 z Density\nendvars\n')
+fixture_format=os.environ.get('GA_TEST_TIME_FORMAT','h5')
+extension='h5' if fixture_format=='h5' else 'nc'
+dtype='hdf5_grid' if extension=='h5' else 'netcdf'
+regular='slice'+('_compressed' if fixture_format=='nc4' else '')+'.'+extension
 ctls=[]
 for template,reverse in ((False,False),(True,False),(False,True)):
     ctl=root/(('template' if template else 'regular')+('-reverse' if reverse else '')+'.ctl');ctls.append(ctl)
-    ctl.write_text('dset ^'+('slice%tm1.h5' if template else 'slice.h5')+'\ndtype hdf5_grid\n'+
+    ctl.write_text('dset ^'+('slice%tm1.'+extension if template else regular)+'\ndtype '+dtype+'\n'+
         ('options '+('template ' if template else '')+('yrev zrev' if reverse else '')+'\n' if template or reverse else '')+
-        header.format(dims='z,y,x' if template else 't,z,y,x',surface='y,x' if template else 't,y,x'))
+        header.format(dims='z,y,x' if template and extension=='h5' else 't,z,y,x',surface='y,x' if template and extension=='h5' else 't,y,x'))
 
 def parse(text):
     lines=iter(text.splitlines());result=[]
@@ -79,7 +95,7 @@ def groups(text):return re.findall(r'Time workers: workers=(\d+) inner=1 .*?pids
 def run(ctl,commands,n=4,off=False,missing=False,mem_kib=None):
     e=dict(env,GA_TIME_WORKERS='off' if off else 'auto')
     if mem_kib is not None:e.update(LD_PRELOAD=str(root/'slow.so'),GA_TEST_MEM_KIB=str(mem_kib))
-    p=subprocess.run([str(repo/'opengrads'),'-blu','-d','gxdummy','-h','gxdummy'],
+    p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','gxdummy'],
         input=f'open {ctl}\nset threads {n}\nset cachesf 2\nset gxout print\nset prnopts %.17g 32 1\n'+commands+'\nquit\n',
         text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
         env=e,timeout=180)
@@ -129,7 +145,7 @@ command='set x 1 16\nset y 1 16\nset z 1 4\nset t 1\ndefine answer=mean(f,t=1,t=
 compare(parse(run(ctls[0],command)),parse(run(ctls[0],command,1,True)))
 
 # Missing time files keep the ordinary per-cell denominator and paired masks.
-piece=root/'slice160.h5';saved=root/'slice160.saved';piece.rename(saved)
+piece=root/('slice160.'+extension);saved=root/'slice160.saved';piece.rename(saved)
 command=setup+'d mean(f,t=1,t=320)\nd mean(f+g,t=1,t=320)'
 compare(parse(run(ctls[1],command,missing=True)),parse(run(ctls[1],command,1,True,True)))
 saved.rename(piece)
@@ -140,7 +156,7 @@ for ctl in ctls[:2]:
     packed=root/(ctl.stem+'-packed.ctl')
     packed.write_text(ctl.read_text().split('vars 4')[0]+
         'unpack scale_factor add_offset\nvars 1\npacked 4 '+
-        ('z,y,x' if ctl==ctls[1] else 't,z,y,x')+' Packed\nendvars\n')
+        ('z,y,x' if ctl==ctls[1] and extension=='h5' else 't,z,y,x')+' Packed\nendvars\n')
     command=setup+'d mean(packed,t=1,t=320)\nd mean(packed+0,t=1,t=320)'
     value=parse(run(packed,command));compare(value[:1],value[1:])
     compare(value,parse(run(packed,command,1,True)))
@@ -162,7 +178,7 @@ def terminal(cancel=False,fail=False,off=False):
            LD_PRELOAD=str(root/'slow.so'),LANG='C',LC_ALL='C',LC_TERMINAL='iTerm2')
     e.pop('TMUX',None)
     pid,fd=pty.fork()
-    if pid==0:os.execve(str(repo/'opengrads'),[str(repo/'opengrads'),'-bl','-d','gxdummy','-h','gxdummy'],e)
+    if pid==0:os.execve(launcher,[launcher,'-bl','-d','gxdummy','-h','gxdummy'],e)
     output=bytearray()
     def pump(seconds):
         end=time.monotonic()+seconds

@@ -451,30 +451,22 @@ gaint gaggrd (struct gagrid *pgrid) {
   if (pfi->ncflg==1 && pfi->tmplat && !pfi->ppflag && !pgr->toff && id<=1 && jd<=1) {
     struct gagrid sub=*pgr;
     struct gagrid *saved=pgr;
-    gaint tt,ee,oflg,mapped=1,k,found;
-    /* Profiles and other broadcast fields keep the row reader. */
-    for (i=0;i<2;i++) if (id==i || jd==i) {
-      found=0;
-      for (k=0;k<pvr->nvardims;k++) if (pvr->units[k]==-100-i) found=1;
-      if (!found) mapped=0;
+    gaint tt,ee,oflg;
+    tt=gaopfn(pgr->dimmin[3],pgr->dimmin[4],&ee,&oflg,pfi);
+    if (tt==-99999) return 1;
+    if (tt==-88888) {
+      for (i=0;i<size;i++) { gr[i]=pgr->undef; gru[i]=0; }
+      return 0;
     }
-    if (mapped) {
-      tt=gaopfn(pgr->dimmin[3],pgr->dimmin[4],&ee,&oflg,pfi);
-      if (tt==-99999) return 1;
-      if (tt==-88888) {
-        for (i=0;i<size;i++) { gr[i]=pgr->undef; gru[i]=0; }
-        return 0;
-      }
-      rc=gancsetup();
-      if (rc) return rc;
-      sub.dimmin[3]=sub.dimmax[3]=tt;
-      sub.dimmin[4]=sub.dimmax[4]=ee;
-      pgr=&sub;
-      rc=gancgrid(gr,gru,id,jd);
-      pgr=saved; pgr->undef=sub.undef;
-      if (rc<0) goto nodat;
-      return rc;
-    }
+    rc=gancsetup();
+    if (rc) return rc;
+    sub.dimmin[3]=sub.dimmax[3]=tt;
+    sub.dimmin[4]=sub.dimmax[4]=ee;
+    pgr=&sub;
+    rc=gancgrid(gr,gru,id,jd);
+    pgr=saved; pgr->undef=sub.undef;
+    if (rc<0) goto nodat;
+    return rc;
   }
 #endif
 
@@ -707,14 +699,14 @@ gaint y,z,t,e;
 
 
 /* Read a bounded batch of fixed-Z horizontal grids. BP5 can submit its
-   steps together. HDF5 can isolate its reads in persistent time workers.
+   steps together. NetCDF/HDF5 isolate reads in persistent time workers.
    Other libraries stay on the caller thread and fill the same buffers. */
 gaint gagrdsteps(struct gagrid *grid, gaint t0, gaint n, gaint incr,
                   gadouble *values, char *mask) {
   struct gafile *file=grid->pfile;
   struct gavar *var=grid->pvar;
   struct gagrid sub=*grid;
-  gaint k,rc,d,a,mapped,tt,ee,oflg,row;
+  gaint k,rc,tt,ee,oflg,row;
   size_t size=(size_t)grid->isiz*grid->jsiz,pos;
 #if USEADIOS2==1
   if (file && var && file->adios2flg && var->levels>-900)
@@ -728,14 +720,7 @@ gaint gagrdsteps(struct gagrid *grid, gaint t0, gaint n, gaint incr,
       grid->dimmin[4]<1 || grid->dimmax[4]>file->dnum[4]) return -1;
   if (file->ncflg==1) {
     if (grid->dimmin[2]<1 || grid->dimmax[2]>file->dnum[2]) return -1;
-#if USENETCDF==1
-    /* Keep the established broadcast path for unmapped axes. */
-    for (a=0;a<2;a++) if (grid->idim==a || grid->jdim==a) {
-      mapped=0;
-      for (d=0;d<var->nvardims;d++) if (var->units[d]==-100-a) mapped=1;
-      if (!mapped) return -1;
-    }
-#else
+#if USENETCDF!=1
     return -1;
 #endif
   } else if (file->ncflg==3) {
@@ -743,7 +728,7 @@ gaint gagrdsteps(struct gagrid *grid, gaint t0, gaint n, gaint incr,
     return -1;
 #endif
   } else if (file->ncflg || grid->idim!=0 || (grid->jdim!=1 && grid->jdim!=-1)) return -1;
-  if (file->ncflg==3) {
+  if (file->ncflg==1 || file->ncflg==3) {
     rc=ga_time_readsteps(grid,t0,n,incr,values,mask,cachesf);
     if (rc>=0) return rc;
   }
@@ -3567,6 +3552,39 @@ gadouble unitsvals[5]={-100,-101,-102,-103,-104};
 gadouble *grtmp=NULL,*grtmp2=NULL;
 char *grutmp=NULL;
 gaint oldncopts ;         /* to save and restore setting for automatic error handling */
+
+  /* A profile/surface can omit a requested axis. Read only its native
+     shape, then broadcast, instead of masking/copying an unfilled buffer.
+     Both regular and template reads use this path in every process. */
+  {
+    int mapped[5]={0,0,0,0,0},d,mi=id>=0,mj=jd>=0;
+    for(d=0;d<pvr->nvardims;d++)
+      if(pvr->units[d]<=-100 && pvr->units[d]>=-104)mapped[-100-(int)pvr->units[d]]=1;
+    if(id>=0)mi=mapped[id];
+    if(jd>=0)mj=mapped[jd];
+    if((id>=0 && !mi) || (jd>=0 && !mj)) {
+      struct gagrid sub=*pgr,*saved=pgr;
+      gadouble *values;char *mask;size_t n,at;
+      for(d=0;d<5;d++)if(!mapped[d])sub.dimmin[d]=sub.dimmax[d]=1;
+      sub.idim=mi ? id : mj ? jd : -1;sub.jdim=mi && mj ? jd : -1;
+      sub.isiz=mi ? pgr->isiz : mj ? pgr->jsiz : 1;
+      sub.jsiz=mi && mj ? pgr->jsiz : 1;n=(size_t)sub.isiz*sub.jsiz;
+      values=galloc(n*sizeof(*values),"ncbroadcast");mask=galloc(n,"ncbroadcastmask");
+      if(!values || !mask) {
+        if(values)gree(values,"ncbroadcast");if(mask)gree(mask,"ncbroadcastmask");
+        gaprnt(0,"NetCDF Error: unable to allocate broadcast grid\n");return 1;
+      }
+      pgr=&sub;rc=gancgrid(values,mask,sub.idim,sub.jdim);pgr=saved;
+      if(!rc) {
+        pgr->undef=sub.undef;
+        for(j=0;j<pgr->jsiz;j++)for(i=0;i<pgr->isiz;i++) {
+          at=mi ? (size_t)i+(mj ? (size_t)j*sub.isiz : 0) : mj ? (size_t)j : 0;
+          gr[(size_t)j*pgr->isiz+i]=values[at];gru[(size_t)j*pgr->isiz+i]=mask[at];
+        }
+      }
+      gree(values,"ncbroadcast");gree(mask,"ncbroadcastmask");return rc;
+    }
+  }
   
   /* Turn off automatic error handling. */
   ncopts = NC_VERBOSE ;

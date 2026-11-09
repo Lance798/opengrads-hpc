@@ -461,6 +461,7 @@ struct gastat {
   gaint errcnt;                /* Current error count */
   gaint errflg;                /* Current error flag */
   gaint ncflg;                 /* 1==netcdf  2==hdfsds */
+  gaint sdfopener;             /* Reopen with 0=open, 1=sdfopen, 2=xdfopen */
   gaint ncid;                  /* netcdf file id */
   gaint sdid;                  /* hdf-sds file id */
   gah5id h5id;                 /* hdf5 file id (hid_t is 64-bit) */

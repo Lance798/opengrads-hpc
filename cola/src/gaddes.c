@@ -2870,6 +2870,7 @@ size_t sz;
   pfi->zrflg = 0;        /* Assume bottom to top */
   pfi->idxflg = 0;       /* Assume binary */
   pfi->ncflg = 0;        /* Assume not netcdf */
+  pfi->sdfopener = 0;
   pfi->bufrflg = 0;      /* Assume not bufr */
   pfi->adios2flg = 0;    /* Assume not ADIOS2 BP5 */
   pfi->adios2 = NULL;     /* No ADIOS2 state allocated */
