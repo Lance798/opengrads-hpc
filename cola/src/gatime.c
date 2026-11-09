@@ -44,7 +44,7 @@ extern char **environ;
 
 #define TIME_MAX_WORKERS 128
 #define TIME_TEXT 4096
-#define TIME_CONFIG 0x47544332 /* v2 adds bounded static DEFINE payloads */
+#define TIME_CONFIG 0x47544333 /* v3 adds BP5/BPOPEN restart semantics */
 #define TIME_JOB 0x47544a31
 #define TIME_MAX_DEFINITIONS 32
 #define TIME_DEFINITION_BUDGET ((size_t)128*1024*1024)
@@ -77,6 +77,8 @@ struct time_reply { int rc,t; uint64_t size; };
 static char time_executable[TIME_TEXT];
 static char time_loader[TIME_TEXT],time_library_path[TIME_TEXT];
 static int time_child;
+
+gaint ga_time_is_worker(void) { return time_child; }
 
 /* Linux's free-page count excludes reclaimable file cache. Use the kernel's
    available-memory estimate so warm input files do not artificially shrink
@@ -147,6 +149,25 @@ static int time_capture(struct time_inputs *inputs,const char *name,struct gafil
   inputs->bytes+=bytes;return 1;
 }
 
+/* CDIFF over T/E needs neighboring tasks rather than independent times. Keep
+   those calls local; X/Y/Z and their one-sided forms are per-time operations. */
+static int time_spatial_difference(const char *p) {
+  int depth=0;
+  do {
+    if(*p=='(')depth++;
+    else if(*p==')')depth--;
+    else if(*p==',' && depth==1)break;
+    p++;
+  } while(*p && depth>0);
+  if(*p++!=',')return 0;
+  while(*p==' ')p++;
+  if(*p!='x' && *p!='y' && *p!='z')return 0;
+  p++;
+  if(*p=='p' || *p=='m')p++;
+  while(*p==' ')p++;
+  return *p==')';
+}
+
 /* Whole expressions use read-only built-ins, native default-file fields and
    bounded defined inputs. Repeated names refer to one command-local snapshot.
    Constants/definitions alone still do not start an I/O worker pool. */
@@ -154,8 +175,12 @@ static int time_expression(char *expr, struct gastat *pst,struct time_inputs *in
   static const char *functions[]={"ave","mean","sum","sumg","aave","amean",
     "asum","atot","maskout","zint","abs","sqrt","exp","log","log10",
     "sin","cos","tan","asin","acos","atan2","pow","mag","const",
-    "esat","qvsat",NULL};
-  static const char *words[]={"x","y","z","t","e","lon","lat","lev","ens","auto","global",NULL};
+    "esat","qvsat","if","hdivg","hcurl","vint","zslice",
+    "tvrh2q","tvrh2t","smth9","cdiff","asumg",
+    "min","max","minloc","maxloc","amin","amax",
+    "aminlocx","aminlocy","amaxlocx","amaxlocy",NULL};
+  static const char *words[]={"x","y","z","t","e","lon","lat","lev","ens","auto","global",
+    "xp","xm","yp","ym","zp","zm",NULL};
   char name[32],*p=expr,*end; int n,i,field=0; struct gavar *v;struct gafile *defined;
   struct time_inputs local;
   if(!inputs)inputs=&local;
@@ -175,6 +200,7 @@ static int time_expression(char *expr, struct gastat *pst,struct time_inputs *in
       if(*p=='(') {
         for(i=0;functions[i] && strcmp(name,functions[i]);i++);
         if(!functions[i])return 0;
+        if(!strcmp(name,"cdiff") && !time_spatial_difference(p))return 0;
       } else {
         defined=getdfn(name,pst);
         if(defined) {
@@ -194,16 +220,44 @@ static int time_expression(char *expr, struct gastat *pst,struct time_inputs *in
   return field;
 }
 
-/* Each process owns its NetCDF/HDF5 handles and library state. */
+/* Each process owns its NetCDF/HDF5/ADIOS2 handles and library state. */
 static int time_file(struct gafile *f) {
-  return f && f->type==1 && (f->ncflg==1 || f->ncflg==3) &&
+  return f && f->type==1 && (f->ncflg==1 || f->ncflg==3 || f->adios2flg) &&
          !f->ppflag && !f->idxflg && !f->climo;
 }
 
 static int time_supported(char *expr, struct gastat *pst) {
   struct gafile *f=pst->pfid;
+  const char *p=expr;
+  /* BP5 already batches an unmodified native field across steps. Keep that
+     path; isolated evaluators are useful for complete expressions instead. */
+  if(f && f->adios2flg) {
+    while(isalnum((unsigned char)*p) || *p=='_')p++;
+    if(p>expr && !*p)return 0;
+  }
   return !time_child && time_file(f) && strlen(expr)<TIME_TEXT &&
          !strchr(f->dnam,'\n') && time_expression(expr,pst,NULL);
+}
+
+/* BPOPEN has no persistent descriptor: rediscover the same dataset. Explicit
+   CTLs keep their original path spelling and therefore their own axes/aliases.
+   The extra BP5 allowance accounts conservatively for private reader buffers. */
+static int time_open_path(struct time_config *c,struct gafile *f) {
+#if TIME_POSIX
+  const char *path=f->sdfopener==3 ? f->name : f->dnam;
+  char cwd[TIME_TEXT];int length;
+  c->opener=f->sdfopener;
+  if(strchr(path,'\n'))return 0;
+  if(path[0]=='/')length=snprintf(c->path,sizeof(c->path),"%s",path);
+  else {
+    if(!getcwd(cwd,sizeof(cwd)))return 0;
+    length=snprintf(c->path,sizeof(c->path),"%s/%s",cwd,path);
+  }
+  if(f->adios2flg)c->cache_bytes+=64.0*1024*1024;
+  return length>=0 && length<(int)sizeof(c->path);
+#else
+  (void)c;(void)f;return 0;
+#endif
 }
 
 /* One owner per complete time. Spatial functions keep their original order,
@@ -645,6 +699,9 @@ gaint ga_time_worker(struct gacmn *pcm,int fd) {
       else if(c.opener==1) { if(gasdfopen(c.path,pcm))break; }
       else if(c.opener==2) { if(gaxdfopen(c.path,pcm))break; }
 #endif
+#if USEADIOS2==1
+      else if(c.opener==3) { if(gaadios_bpopen(c.path,pcm))break; }
+#endif
       else break;
       setcachesf(pcm->cachesf);
       if(time_receiveinputs(fd,&c,pcm))break;
@@ -731,17 +788,7 @@ gaint ga_time_readsteps(struct gagrid *grid,gaint t0,gaint n,gaint incr,
       c.dmax[d]=file->gr2ab[d](file->grvals[d],grid->dimmax[d]);
     }
   }
-#if TIME_POSIX
-  if(file->dnam[0]=='/')snprintf(c.path,sizeof(c.path),"%s",file->dnam);
-  else {
-    char cwd[TIME_TEXT];int length;
-    if(!getcwd(cwd,sizeof(cwd)))return -1;
-    length=snprintf(c.path,sizeof(c.path),"%s/%s",cwd,file->dnam);
-    if(length<0 || length>=(int)sizeof(c.path))return -1;
-  }
-#else
-  return -1;
-#endif
+  if(!time_open_path(&c,file))return -1;
   snprintf(c.expression,sizeof(c.expression),"%s",grid->pvar->abbrv);
   return time_parallel(&c,t0,t0+(n-1)*incr,incr,values,mask,NULL);
 }
@@ -780,17 +827,7 @@ gaint ga_time_evaluatesteps(char *expr,struct gastat *pst,struct gagrid *shape,
     c.lo[d]=shape->dimmin[d];c.hi[d]=shape->dimmax[d];
     c.dmin[d]=pst->dmin[d];c.dmax[d]=pst->dmax[d];
   }
-#if TIME_POSIX
-  if(f->dnam[0]=='/')snprintf(c.path,sizeof(c.path),"%s",f->dnam);
-  else {
-    char cwd[TIME_TEXT];int length;
-    if(!getcwd(cwd,sizeof(cwd)))return -1;
-    length=snprintf(c.path,sizeof(c.path),"%s/%s",cwd,f->dnam);
-    if(length<0 || length>=(int)sizeof(c.path))return -1;
-  }
-#else
-  return -1;
-#endif
+  if(!time_open_path(&c,f))return -1;
   snprintf(c.expression,sizeof(c.expression),"%s",expr);
   return time_parallel(&c,t0,t0+(n-1)*incr,incr,values,mask,pst);
 }
@@ -807,19 +844,7 @@ static int time_configure(struct time_config *c,char *expr,struct gacmn *pcm,
   c->cache_bytes=(double)pcm->cachesf*pst->pfid->cachesize;
   if(!time_supported(expr,pst) || z1<1 || z2>pst->pfid->dnum[2] ||
      (double)c->nx*c->ny*(z2-z1+1)>128.0*1024*1024/9)return 0;
-#if TIME_POSIX
-  /* Preserve symlink spelling: ^dataset paths are relative to the descriptor
-     path used by the caller, not necessarily its realpath target directory. */
-  if(pst->pfid->dnam[0]=='/')snprintf(c->path,sizeof(c->path),"%s",pst->pfid->dnam);
-  else {
-    char cwd[TIME_TEXT];int length;
-    if(!getcwd(cwd,sizeof(cwd)))return 0;
-    length=snprintf(c->path,sizeof(c->path),"%s/%s",cwd,pst->pfid->dnam);
-    if(length<0 || length>=(int)sizeof(c->path))return 0;
-  }
-#else
-  snprintf(c->path,sizeof(c->path),"%s",pst->pfid->dnam);
-#endif
+  if(!time_open_path(c,pst->pfid))return 0;
   snprintf(c->expression,sizeof(c->expression),"%s",expr);
   for(d=0;d<5;d++) { c->dmin[d]=pcm->dmin[d];c->dmax[d]=pcm->dmax[d];c->lo[d]=shape->dimmin[d];c->hi[d]=shape->dimmax[d]; }
   return 1;
@@ -846,7 +871,12 @@ static int time_display_reduces_axis(const char *expr,int z,int t) {
   /* These native functions require fixed Z/T. Only the established outer
      profile paths explicitly supply their per-level/per-time environment. */
   if((z || t) && (strstr(expr,"aave(") || strstr(expr,"amean(") ||
-     strstr(expr,"asum(") || strstr(expr,"atot(") || strstr(expr,"zint(")))return 1;
+     strstr(expr,"asum(") || strstr(expr,"atot(") || strstr(expr,"zint(") ||
+     strstr(expr,"asumg(") || strstr(expr,"amin(") || strstr(expr,"amax(") ||
+     strstr(expr,"aminlocx(") || strstr(expr,"aminlocy(") ||
+     strstr(expr,"amaxlocx(") || strstr(expr,"amaxlocy(") ||
+     strstr(expr,"hdivg(") || strstr(expr,"hcurl(") ||
+     strstr(expr,"vint(") || strstr(expr,"zslice(")))return 1;
   while((p=strchr(p,','))) {
     const char *name=++p;size_t length;
     while(isalpha((unsigned char)*p))p++;
@@ -871,6 +901,11 @@ gaint ga_time_display(char *expr,struct gastat *pst,struct gacmn *pcm) {
   struct gagrid *shape=NULL,*out=NULL;struct time_config c;
   int z1,z2,t1,t2,e,nt,nz,k,rc,lv,generic;size_t size;
   const char *setting=getenv("GA_TIME_WORKERS");
+  /* These operate on the native result's varying axes, which may include T
+     or a whole Z profile. Splitting them into scalar output times changes
+     their neighborhood or makes a varying axis fixed. DEFINE and the input
+     producer keep the original spatial grid and can still dispatch them. */
+  if(strstr(expr,"smth9(") || strstr(expr,"cdiff("))return -1;
   if(!time_supported(expr,pst) || pcm->vdim[0] || pcm->vdim[1] || pcm->vdim[4] ||
      (pst->idim!=2 && pst->idim!=3) || (pst->jdim!=-1 && pst->jdim!=3))return -1;
   /* Preserve the established profile path. New compound expressions that

@@ -46,6 +46,7 @@
 
 #include "grads.h"
 #include "gaomp.h"
+#include "gatime.h"
 
 #define GA_ADIOS_MAX_DIMS 8
 
@@ -898,6 +899,9 @@ gaint gaadios_bpopen(char *args, struct gacmn *pcm) {
   adios = adios2_init_serial();
   if (!adios) goto metadata_error;
   io = adios2_declare_io(adios,"opengrads_bp5_discovery");
+  if(io && ga_time_is_worker() &&
+     (adios2_set_parameter(io,"Threads","1")!=adios2_error_none ||
+      adios2_set_parameter(io,"MetadataThreads","1")!=adios2_error_none))goto metadata_error;
   if (!io) goto metadata_error;
   engine = adios2_open(io,pathname,adios2_mode_readRandomAccess);
   if (!engine) goto metadata_error;
@@ -1115,8 +1119,10 @@ gaint gaadios_bpopen(char *args, struct gacmn *pcm) {
     struct gafile *opened;
     opened = pcm->pfi1;
     while (opened && opened->pforw) opened = opened->pforw;
-    if (opened)
+    if (opened) {
       snprintf(opened->dnam,sizeof(opened->dnam),"BP5 metadata: %.4081s",pathname);
+      opened->sdfopener=3;
+    }
     snprintf(pout,1255,
              "BP5 dataset opened without a descriptor: %lu fields, %lux%lux%lu, %lu steps\n",
              (unsigned long)included,(unsigned long)xsize,(unsigned long)ysize,
@@ -1399,6 +1405,13 @@ gaint gaadios_open (struct gafile *pfi) {
   state->io = adios2_declare_io(state->adios,"opengrads_bp5_reader");
   if (state->io==NULL) {
     gaprnt(0,"BP5 Open Error: adios2_declare_io failed\n");
+    gaadios_close(pfi);
+    return 1;
+  }
+  if (ga_time_is_worker() &&
+      (adios2_set_parameter(state->io,"Threads","1")!=adios2_error_none ||
+       adios2_set_parameter(state->io,"MetadataThreads","1")!=adios2_error_none)) {
+    gaprnt(0,"BP5 Open Error: unable to set worker reader threads\n");
     gaadios_close(pfi);
     return 1;
   }

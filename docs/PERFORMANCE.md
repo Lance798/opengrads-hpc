@@ -1,5 +1,14 @@
 # Calculation performance
 
+The current worker allowlist covers 46 of the 66 built-ins, including spatial
+neighbors, extrema, pressure integrals, indexed vertical slices and IF. BP5
+complete expressions can use isolated time workers; bare native fields and
+ADIOS2 step batching keep their existing reader paths. Each BP5 worker uses
+one ADIOS2 data/metadata reader thread. See [TIME_WORKERS.md](TIME_WORKERS.md)
+for shape restrictions and the numerical/worker-recovery regression commands.
+The dated measurements below describe the versions and workloads stated in
+each section; their earlier 24/26-function counts are historical.
+
 The 1.0.14 time-worker implementation now covers eligible classic NetCDF,
 compressed NetCDF-4 and HDF5 expressions, including bounded static DEFINE
 inputs. The historical HDF5 measurements below describe their stated commits
@@ -1557,3 +1566,49 @@ This is an end-to-end result for one synthetic workload, not a universal
 scaling promise. File access, parsing, allocation, and other legacy global
 state remain serial, so pure arithmetic kernels can scale better while
 I/O-heavy scripts can scale less.
+
+### Twenty additional built-ins and BP5 expression workers (November 2026)
+
+The allowlist now covers 46 built-ins. The twenty additions use the original
+per-time evaluator for spatial diagnostics, conditions, extrema, pressure
+integrals and indexed Z slices. BP5 complete expressions can use the same
+isolated processes as NetCDF/HDF5; unmodified native fields and ADIOS2 step
+batches retain their existing optimized readers. CTL and BPOPEN restart,
+one data/metadata reader thread per worker, progress, cancellation and
+killed-worker recovery are covered by the new regression suite.
+
+All twenty additions were compared with the frozen `7609345` one-core build
+on the three supplied model datasets, over T=1:32 at 1, 4 and 8 calculation
+cores. Each process tree was pinned to its stated CPU count. The domain was
+512 x 512 for Taiwan VVM BP5 and Puerto Rico NetCDF; sea/grass/mountain HDF5
+has only 64 Y cells and was tested at 512 x 64. Pressure-specific diagnostics
+used private descriptors with reference-profile pressure coordinates; source
+data were unchanged.
+
+Across the new 1/4/8-core configurations, all 481,716,192 exported
+float32 values matched the frozen output byte-for-byte (SHA256). The
+11,520 finite double-precision spatial probes also matched exactly, including
+missing masks and non-finite classifications. A separate small-domain run
+compared every sampled result of all twenty functions in double precision
+at the same CPU counts, with maximum absolute difference zero.
+
+The additional 512-domain `qv*qv`, `zint(qv)` and
+`sum(qv*qv,t=1,t=32)` cases checked output-time and input-time dispatch.
+All 108,625,920 exported float32 values and
+1,755 finite double probes matched, with zero maximum probe difference.
+Full exported-array agreement is at float32 output precision; the double
+checks are spatial probes, not a full double-array export.
+
+The 23 regression-suite invocations passed; the NetCDF aggregate includes
+twelve format-specific sub-suites. The new spatial suite additionally checks
+fractional bounds, cyclic seams, missing data, first-hit extrema ties,
+spatial-Z input reductions, native DISPLAY fallback and static BPOPEN inputs.
+ASan/UBSan passed IF and HDF5/BP5 spatial tests, including worker recovery.
+No-OpenMP, no-POSIX-worker and no-ADIOS2 compile checks passed. IF also has
+independent analytic scalar/X/Z/XY checks for its corrected condition storage.
+
+Reproducible local drivers and numeric manifests are in
+`tmp/real-workers20/`; the summary is `tmp/workers20-verification.txt`.
+The large-case timings are single observations with uncontrolled cache state
+and are not a general scaling claim. Use the committed
+`pytests/TestTimeSpatialFunctions.sh` for the portable regression fixtures.

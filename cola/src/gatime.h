@@ -10,6 +10,7 @@ void ga_time_init(const char *);
 void ga_time_prepare_worker(void);
 void ga_time_shutdown(void);
 gaint ga_time_active_workers(void);
+gaint ga_time_is_worker(void);
 gaint ga_time_worker(struct gacmn *, int);
 gaint ga_time_define(char *, struct gacmn *, gaint, gaint, gaint, gaint,
                      gaint, struct gagrid *, gadouble *, char *, gadouble);

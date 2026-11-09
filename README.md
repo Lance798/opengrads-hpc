@@ -7,7 +7,7 @@ OpenMP-threaded calculations, and self-contained releases for Linux and
 macOS.
 
 **"HPC" means single-node CPU acceleration through ADIOS2/BP5, OpenMP
-threading and isolated NetCDF/HDF5 time workers.** There is no MPI or GPU support and
+threading and isolated NetCDF/HDF5/BP5 time workers.** There is no MPI or GPU support and
 none is planned; ADIOS2 is deliberately built with `ADIOS2_USE_MPI=OFF`.
 Reading output written by a multi-rank MPI job does not require MPI here.
 
@@ -49,12 +49,13 @@ libraries are available.
   shows a progress line with the time left. See
   [performance notes](docs/PERFORMANCE.md).
 
-- **NetCDF/HDF5 time workers.** Supported DEFINE and T/Z-T profile DISPLAY expressions
+- **NetCDF/HDF5/BP5 time workers.** Supported DEFINE and T/Z-T profile DISPLAY expressions
   can evaluate different times in isolated processes. Time SUM/MEAN reductions
   can also dispatch complete input expressions and accumulate them in time
   order. Static DEFINE scalars, profiles and masks can accompany native fields.
   `set threads N` controls the CPU budget; worker count and buffers are
-  bounded. BP5 retains its existing OpenMP and reader paths. See
+  bounded. BP5 expressions can use workers while bare fields retain native
+  batching. The expression allowlist covers 46 built-ins. See
   [time-worker support and limits](docs/TIME_WORKERS.md).
 
 - **Restored self-describing-file access.** Release builds require NetCDF and
@@ -131,7 +132,7 @@ Use `q config` to see whether this build includes `adios2-bp5`, `openmp`,
 - [Height-coordinate column integrals and column water vapor](docs/ZINT.md)
 - [Saturation vapor pressure and mixing ratio](docs/SATURATION.md)
 - [OpenMP controls and benchmark notes](docs/PERFORMANCE.md)
-- [NetCDF/HDF5 time workers: expressions, support and limits](docs/TIME_WORKERS.md)
+- [NetCDF/HDF5/BP5 time workers: expressions, support and limits](docs/TIME_WORKERS.md)
 - [Architecture and development roadmap](docs/ARCHITECTURE.md)
 
 ## Legacy OpenGrADS documentation
