@@ -61,5 +61,6 @@ chmod +x "$test_root/launch"
 export OPENGRADS_LAUNCHER="$test_root/launch"
 bash "$repo_root/pytests/TestTimeWorkers.sh"
 bash "$repo_root/pytests/TestTimeExpressionReductions.sh"
+bash "$repo_root/pytests/TestTimeDefinedInputs.sh"
 if [[ -n "$GA_TEST_TARGET_LAUNCHER" ]]; then test -s "$GA_TEST_LOADER_LOG"; fi
 printf 'Explicit loader regression passed: output/input workers, values, graphics, progress and failure recovery\n'

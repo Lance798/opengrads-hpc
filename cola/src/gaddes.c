@@ -2863,6 +2863,8 @@ size_t sz;
 
   pfi->name[0]='\0';     /* dset name is null  */
   pfi->type = 1;         /* Assume grid unless told otherwise */
+  pfi->climo = 0;        /* Native files are not defined climatologies */
+  pfi->cysiz = 0;
   pfi->tlpflg = 0;       /* Assume file not circular */
   pfi->bswap = 0;        /* Assume no byte swapping needed */
   pfi->seqflg = 0;       /* Assume direct access */

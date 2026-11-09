@@ -52,7 +52,8 @@ libraries are available.
 - **NetCDF/HDF5 time workers.** Supported DEFINE and T/Z-T profile DISPLAY expressions
   can evaluate different times in isolated processes. Time SUM/MEAN reductions
   can also dispatch complete input expressions and accumulate them in time
-  order. `set threads N` controls the CPU budget; worker count and buffers are
+  order. Static DEFINE scalars, profiles and masks can accompany native fields.
+  `set threads N` controls the CPU budget; worker count and buffers are
   bounded. BP5 retains its existing OpenMP and reader paths. See
   [time-worker support and limits](docs/TIME_WORKERS.md).
 
