@@ -93,6 +93,8 @@ HDF5 密集 chunk 讀取使用與原生 rank/extent 相符的 memory dataspace�
 
 Linux packager 保留 RHEL ELF LOAD alignment，避免 patchelf 新 segment 與原始 2 MiB alignment 不一致；函式庫檢查失敗會停止打包。Private NetCDF/UDUNITS/JPEG notices、UDUNITS XML、圖形外掛、runtime libraries、版本 helper 與 terminal viewer 一併封裝。封裝後的 ldd／loader 檢查拒絕缺少或逃出 archive 的非 glibc 函式庫依賴。
 
+Pinned tmux／JPEG 下載分別提供 Debian／MacPorts 備援，避免只依賴單一 GitHub 下載端點；所有來源都必須通過相同的既有 SHA-256，不變更版本、不跳過驗證。
+
 一般與 forced bundled-loader 路徑均測試時間 workers，修正舊 glibc 主機上將 loader 當成 GrADS executable 的重啟問題。`--version` 與啟動 banner 由 source/archive metadata 決定，不需載入 GrADS runtime。
 
 ## 5. tmux 與 Term

@@ -73,6 +73,8 @@ The GrADS baseline remains `2.2.1.oga.1`.
 - Linux packaging preserves the LOAD-segment alignment required by RHEL
   libraries when patching runtime search paths, checks loader-inspection
   failures, and includes private NetCDF, UDUNITS and JPEG notices.
+- Pinned tmux and JPEG source downloads have checksum-verified Debian and
+  MacPorts fallbacks when their primary GitHub download is unavailable.
 - The terminal display creates its picture pane beside its originating GrADS
   pane even if another tmux window is active. Development activation keeps
   the caller's selected tmux executable instead of replacing it with a
