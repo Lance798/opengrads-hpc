@@ -27,6 +27,100 @@ Use the equivalent packages on other distributions. On a cluster, `module
 avail` may provide the compiler and CMake. No root access is needed beyond
 these packages.
 
+## Project development environment (Linux, no Conda)
+
+For ongoing development, use the private environment in this checkout. The
+same commands run in `.github/workflows/build.yml` on every branch push and
+pull request, on Ubuntu 22.04 and the RHEL 8 / glibc 2.28 family.
+
+Install the host compiler, graphics, HDF5, curl, Expat and libevent development packages
+once. On Ubuntu/Debian:
+
+```bash
+sudo apt install build-essential gfortran autoconf automake libtool cmake curl \
+  tar patch gawk bison pkg-config python3 libcairo2-dev libx11-dev libxext-dev \
+  libxmu-dev libice-dev libsm-dev libgeotiff-dev libtiff-dev libhdf5-dev \
+  libjpeg-dev zlib1g-dev libcurl4-openssl-dev libexpat1-dev libevent-dev
+```
+
+The workflow lists equivalent RHEL-family packages. Then, from the checkout:
+
+```bash
+./dev/build.sh
+./dev/test.sh
+source dev/activate.sh
+opengrads
+```
+
+This builds checksum-pinned ncurses, Readline, Blosc2, serial ADIOS2, NetCDF,
+UDUNITS, libjpeg-turbo and tmux into `.release-work`, then builds GrADS and the graphics plug-ins
+into `build`. No Conda environment or root install is used. Both directories
+are ignored by Git. The host GCC/G++, CMake, HDF5, libevent and graphics libraries are
+still prerequisites; their versions may differ between systems. This is an
+isolated project dependency environment, not a container or a fully pinned OS.
+
+Activation makes `opengrads`, `adios2-config` and `nc-config` use this checkout,
+sets the build/test paths and the UDUNITS database, and replaces inherited
+Intel/MPI/other-environment include and library search paths. Use a fresh
+shell or deactivate another package environment first. Run
+`opengrads_deactivate` to restore the previous shell variables.
+
+To keep your current shell unchanged, prefix any command with `./dev/run`:
+
+```bash
+./dev/run ./opengrads
+./dev/run make -C build/src -j4 grads
+./dev/run ./pytests/TestBP5.sh
+./dev/run ./pytests/TestSDFOpen.sh
+```
+
+Re-run `./dev/build.sh` after source changes; installed dependencies are reused
+and compilation is incremental. Keep using these commands for this checkout.
+Do not mix its objects with a build configured against a different dependency
+prefix. For a compiler module outside `/usr/local/bin:/usr/bin:/bin`, set
+`OPENGRADS_TOOLCHAIN_PATH` before activation; changing compilers requires a
+fresh `build` directory and fresh dependency builds.
+
+Interactive tmux commands keep the executable selected before activation, so
+activation does not replace the client used with an existing server. The
+private tmux is selected through `TEST_TMUX` for isolated terminal tests.
+To explicitly use it interactively, run this from the checkout root outside tmux:
+
+```bash
+OPENGRADS_HOST_TMUX="$PWD/.release-work/deps/bin/tmux" \
+  ./dev/run tmux -L opengrads-dev new-session
+```
+
+The private tmux is not included in release archives. With an old server that cannot
+identify iTerm2 and no forwarded `LC_TERMINAL`, use
+`GA_TERM_PROTOCOL=iterm2 ./dev/run ./opengrads -l -d Term`.
+The acceleration tests require Python 3.8 or newer; on
+RHEL 8 install `python38`. Activation selects it when the default `python3`
+is older. Legacy `/tmp` test templates are redirected into the checkout
+`tmp/` directory. Host HDF5 headers are exposed through a local pkg-config
+file on RHEL installations that lack one. HDF5 2-specific raw decoding tests
+are skipped when the host provides an earlier HDF5 release.
+
+To make a runnable Linux release from this environment:
+
+```bash
+./dev/package.sh
+cd "release-dist/opengrads-hpc-$(cat release/VERSION)-linux-$(uname -m)"
+./opengrads
+```
+
+The packager builds its private patchelf tool, reuses the development build,
+collects runtime libraries and the UDUNITS database, verifies packaged BP5
+reads in a clean environment, and writes a `.tar.gz` and `.sha256` alongside
+the runnable directory. Intermediate files use `tmp/` in the checkout, which
+is ignored by Git. Activate the development environment only for work
+in the source checkout; an unpacked release starts with `./opengrads`.
+
+The development workflow builds, tests, packages and runs an unpacked Linux
+archive on both distributions. Uploading binary artifacts retains the existing
+`BINARY_REDISTRIBUTION_APPROVED` gate; diagnostics are uploaded independently.
+The existing release workflow below still produces the platform release archives.
+
 ## One command
 
 ```bash

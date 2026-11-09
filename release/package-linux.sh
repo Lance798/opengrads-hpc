@@ -16,6 +16,8 @@ deps_root="$2"
 adios2_root="$3"
 work_root="$4"
 output_root="$5"
+export TMPDIR="${TMPDIR:-$repo_root/tmp}"
+mkdir -p "$TMPDIR"
 grads_version="$(<"$repo_root/cola/src/VERSION")"
 dist_version="$(<"$repo_root/release/VERSION")"
 machine="$(uname -m)"
@@ -107,6 +109,12 @@ copy_notice "$work_root/sources/readline-$READLINE_VERSION/COPYING" \
   "$bundle_root/licenses/Readline-COPYING"
 copy_notice "$work_root/sources/ncurses-$NCURSES_VERSION/COPYING" \
   "$bundle_root/licenses/ncurses-COPYING"
+copy_notice "$work_root/sources/libjpeg-turbo-$JPEG_VERSION/LICENSE.md" \
+  "$bundle_root/licenses/libjpeg-turbo-LICENSE.md"
+copy_notice "$work_root/sources/netcdf-c-$NETCDF_VERSION/COPYRIGHT" \
+  "$bundle_root/licenses/NetCDF-COPYRIGHT"
+copy_notice "$work_root/sources/udunits-$UDUNITS_VERSION/COPYRIGHT" \
+  "$bundle_root/licenses/UDUNITS-COPYRIGHT"
 if [[ ! -r "$deps_root/share/licenses/blosc2/LICENSE.txt" ]]; then
   printf 'Blosc2/codec notices missing; run release/build-dependencies.sh first.\n' >&2
   exit 1
@@ -251,20 +259,31 @@ if ! command -v patchelf > /dev/null 2>&1; then
   exit 1
 fi
 
-patchelf --force-rpath --set-rpath \
-  '$ORIGIN/.libs:$ORIGIN/../../adios2/lib:$ORIGIN/../../deps/lib' \
-  "$bundle_root/build/src/grads"
+# Preserve each ELF's existing LOAD alignment. Some RHEL 8 libraries use
+# 2 MiB alignment; patchelf 0.18 otherwise places a new segment at a 4 KiB
+# offset but retains its 2 MiB alignment, and the loader rejects the result.
+set_bundle_rpath()
+{
+  local binary="$1" rpath="$2" alignment page_size
+  page_size="$(getconf PAGESIZE)"
+  while read -r alignment; do
+    if (( alignment > page_size )); then page_size="$((alignment))"; fi
+  done < <(readelf -lW "$binary" | awk '$1 == "LOAD" { print $NF }')
+  patchelf --page-size "$page_size" --force-rpath --set-rpath "$rpath" "$binary"
+}
+
+set_bundle_rpath "$bundle_root/build/src/grads" \
+  '$ORIGIN/.libs:$ORIGIN/../../adios2/lib:$ORIGIN/../../deps/lib'
 
 for library in "$runtime_lib_root"/*.so*; do
   [[ -f "$library" ]] || continue
-  patchelf --force-rpath --set-rpath '$ORIGIN' "$library" 2>/dev/null || true
+  set_bundle_rpath "$library" '$ORIGIN'
 done
 
 for plugin in "$plugin_root"/*.so; do
   [[ -f "$plugin" ]] || continue
-  patchelf --force-rpath --set-rpath \
-    '$ORIGIN:$ORIGIN/../../../adios2/lib:$ORIGIN/../../../deps/lib' \
-    "$plugin" 2>/dev/null || true
+  set_bundle_rpath "$plugin" \
+    '$ORIGIN:$ORIGIN/../../../adios2/lib:$ORIGIN/../../../deps/lib'
 done
 
 # The executable must now resolve everything without LD_LIBRARY_PATH set.
@@ -281,7 +300,10 @@ canonical_bundle="$(readlink -f "$bundle_root")"
 for binary in "$bundle_root/build/src/grads" "$plugin_root"/*.so \
               "$runtime_lib_root"/*.so*; do
   [[ -f "$binary" ]] || continue
-  ldd_output="$(env -u LD_LIBRARY_PATH -u LD_PRELOAD ldd "$binary" 2>&1)"
+  if ! ldd_output="$(env -u LD_LIBRARY_PATH -u LD_PRELOAD ldd "$binary" 2>&1)"; then
+    printf 'Unable to inspect packaged library %s:\n%s\n' "$binary" "$ldd_output" >&2
+    exit 1
+  fi
   if grep -Fq 'not found' <<< "$ldd_output"; then
     printf 'Unresolved packaged library for %s:\n%s\n' "$binary" "$ldd_output" >&2
     exit 1
@@ -339,7 +361,7 @@ if ! grep -Fq 'adios2-bp5' <<< "$decoy_output"; then
   exit 1
 fi
 
-smoke_output="$(env -i HOME="${HOME:-/tmp}" PATH=/usr/bin:/bin \
+smoke_output="$(env -i HOME="${HOME:-$TMPDIR}" PATH=/usr/bin:/bin \
   OPENGRADS_COLOR=0 "$bundle_root/opengrads" \
   -bl -d gxdummy -h gxdummy <<'GRADS'
 q config
@@ -355,7 +377,7 @@ grep -Fq 'Calculation threads = 4' <<< "$smoke_output"
 # gscript's color.gs, found along the launcher's GASCRP
 grep -Fq 'clevs= 0 1 2 3 4 5 6 7 8 9 10' <<< "$smoke_output"
 # A script of the user's own by the same name comes before the bundled one.
-user_root="$(mktemp -d "${TMPDIR:-/tmp}/opengrads-user-scripts.XXXXXX")"
+user_root="$(mktemp -d "$TMPDIR/opengrads-user-scripts.XXXXXX")"
 printf "function main(args)\nsay 'user color 'args\n" > "$user_root/color.gs"
 user_output="$(env -i HOME="$user_root" PATH=/usr/bin:/bin GASCRP="$user_root" \
   OPENGRADS_COLOR=0 "$bundle_root/opengrads" -bl -d gxdummy -h gxdummy <<'GRADS'
@@ -384,7 +406,7 @@ if [[ ! -e "$neighbour" ]]; then
     "$neighbour_gex/libgxdummy.so" "$neighbour_gex/libgxdummy.so" \
     > "$neighbour_gex/udpt"
   : > "$neighbour_gex/udxt"
-  neighbour_output="$(env -i HOME="${HOME:-/tmp}" PATH=/usr/bin:/bin \
+  neighbour_output="$(env -i HOME="${HOME:-$TMPDIR}" PATH=/usr/bin:/bin \
     OPENGRADS_COLOR=0 "$bundle_root/opengrads" \
     -bl -d gxdummy -h gxdummy 2>&1 <<'GRADS' || true
 q config
@@ -403,7 +425,7 @@ fi
 # A locale the machine does not have must not stop GrADS. Readline 8.2 before
 # its official patch 001 crashed on the first prompt when LC_ALL, LC_CTYPE or
 # LANG named one -- LC_CTYPE=UTF-8 from a macOS ssh session, say.
-locale_output="$(env -i HOME="${HOME:-/tmp}" PATH=/usr/bin:/bin \
+locale_output="$(env -i HOME="${HOME:-$TMPDIR}" PATH=/usr/bin:/bin \
   LC_ALL=xx_YY.UTF-8 LC_CTYPE=UTF-8 LANG=xx_YY.UTF-8 OPENGRADS_COLOR=0 \
   "$bundle_root/opengrads" -bl -d gxdummy -h gxdummy 2>&1 <<'GRADS' || true
 q config
@@ -419,18 +441,18 @@ fi
 mkdir -p "$output_root"
 # Startup alone does not exercise decompression. Write real compressed arrays
 # with the build dependencies, then read them with only the archive's runtime.
-compression_root="$(mktemp -d /tmp/opengrads-package-bp5.XXXXXX)"
+compression_root="$(mktemp -d "$TMPDIR/opengrads-package-bp5.XXXXXX")"
 trap 'rm -rf -- "$compression_root"' EXIT
 OPENGRADS_ADIOS2_ROOT="$adios2_root" OPENGRADS_DEPS_ROOT="$deps_root" \
   "$repo_root/pytests/TestBP5Compression.sh" --write-fixtures "$compression_root"
-env -i HOME="${HOME:-/tmp}" PATH=/usr/bin:/bin \
+env -i HOME="${HOME:-$TMPDIR}" PATH=/usr/bin:/bin \
   OPENGRADS_LAUNCHER="$bundle_root/opengrads" \
   "$repo_root/pytests/TestBP5Compression.sh" --read-fixtures "$compression_root"
 
 # Exercise actual packaged time workers through the bundled loader, including
 # the old-host startup branch that development binaries do not normally use.
 GA_TEST_HDF5_CFLAGS="$(sed -n 's/^HDF5_CFLAGS *= *//p' "$build_root/src/Makefile")" \
-GA_TEST_HDF5_LIBS="$(sed -n 's/^HDF5_LDFLAGS *= *//p' "$build_root/src/Makefile") $(sed -n 's/^HDF5_LIBS *= *//p' "$build_root/src/Makefile")" \
+GA_TEST_HDF5_LIBS="-L$deps_root/lib -Wl,-rpath,$deps_root/lib $(sed -n 's/^HDF5_LDFLAGS *= *//p' "$build_root/src/Makefile") $(sed -n 's/^HDF5_LIBS *= *//p' "$build_root/src/Makefile")" \
 OPENGRADS_BUILD_ROOT="$bundle_root/build" \
 OPENGRADS_LAUNCHER="$bundle_root/opengrads" \
   "$repo_root/pytests/TestTimeLoader.sh"

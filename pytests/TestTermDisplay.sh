@@ -35,10 +35,15 @@ test_root="$(mktemp -d /tmp/opengrads-term-test.XXXXXX)"
 background_pids=()
 cleanup()
 {
-  local pid
+  local pid socket
   # bash 3.2, on macOS, takes an empty array for an unset one under set -u
   for pid in ${background_pids[@]+"${background_pids[@]}"}; do
     kill "$pid" 2>/dev/null || true
+  done
+  # Failed Python drivers can leave their private tmux server detached.
+  for socket in "$test_root"/*.sock; do
+    [[ -S "$socket" ]] || continue
+    "${TEST_TMUX:-tmux}" -S "$socket" kill-server >/dev/null 2>&1 || true
   done
   rm -rf -- "$test_root"
 }
@@ -356,7 +361,8 @@ check_animation 'GIF written in the background' "$test_root/async" '400x300 5 1 
 #    go to standard output.
 mkdir "$test_root/tmp"
 output="$(
-  TMPDIR="$test_root/tmp" GA_TERM_MODE=inline GA_TERM_SCALE=1 \
+  unset TMUX TMUX_PANE
+  TMPDIR="$test_root/tmp" GA_TERM_MODE=inline GA_TERM_SCALE=1 GA_TERM_PROTOCOL=iterm2 \
     run_grads -g 200x150 <<GRADS_COMMANDS
 open $model_ctl
 d ts
@@ -371,7 +377,8 @@ if grep -aq $'\033\\]1337;File=[^:]*:R0lGODlh' <<< "$output"; then
   fail 'inline mode printed a GIF without GA_TERM_ANIM=gif'
 fi
 output="$(
-  TMPDIR="$test_root/tmp" GA_TERM_MODE=inline GA_TERM_SCALE=1 GA_TERM_ANIM=gif \
+  unset TMUX TMUX_PANE
+  TMPDIR="$test_root/tmp" GA_TERM_MODE=inline GA_TERM_SCALE=1 GA_TERM_ANIM=gif GA_TERM_PROTOCOL=iterm2 \
     run_grads -g 200x150 <<GRADS_COMMANDS
 open $model_ctl
 run $test_root/dbuffloop.gs
@@ -1011,7 +1018,8 @@ print('tmux', version, 'discarded', discarded, 'bytes', len(d), 'images', d.coun
 PYTHON
 for how in plain steps control; do
   result="$(python3 "$test_root/intmux.py" "$launcher" "$model_ctl" "$test_root" \
-    "$viewer" "$build_root" "$tmux_bin" "$how" 2>&1)"
+    "$viewer" "$build_root" "$tmux_bin" "$how" 2>&1)" || \
+    fail "tmux test driver failed ($how)" "$result"
   # what GrADS saw, for a failure
   result="$result"$'\n'"$(cat "$test_root/term-$how.log" 2>/dev/null || true)"
   grep -qx 'panes 2' <<< "$result" ||
@@ -1077,7 +1085,8 @@ client.terminate()
 subprocess.run(tm + ['kill-server'], capture_output=True, env=env)
 PYTHON
 result="$(python3 "$test_root/hidden.py" "$launcher" "$model_ctl" "$test_root" \
-  "$viewer" "$build_root" "$tmux_bin" 2>&1)"
+  "$viewer" "$build_root" "$tmux_bin" 2>&1)" || \
+  fail 'hidden-pane test driver failed' "$result"
 result="$result"$'\n'"$(cat "$test_root/term-hidden.log" 2>/dev/null || true)"
 grep -qx 'shown 1' <<< "$result" ||
   fail 'the first picture did not arrive (hidden pane check)' "$result"

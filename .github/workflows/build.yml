@@ -1,0 +1,121 @@
+name: Development build and release packaging
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: development-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Linux / ${{ matrix.platform }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            image: ubuntu:22.04
+          - platform: rhel-8
+            image: quay.io/pypa/manylinux_2_28_x86_64
+    container: ${{ matrix.image }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      OPENGRADS_BUILD_JOBS: 4
+      OPENGRADS_UPDATE_CHECK: 0
+    steps:
+      - name: Install host build prerequisites
+        run: |
+          if command -v apt-get >/dev/null; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              git ca-certificates build-essential gfortran autoconf automake libtool \
+              cmake curl tar patch gawk bison pkg-config python3 \
+              libcairo2-dev libx11-dev libxext-dev libxmu-dev libice-dev libsm-dev \
+              libgeotiff-dev libtiff-dev libhdf5-dev libjpeg-dev zlib1g-dev \
+              libcurl4-openssl-dev libexpat1-dev libevent-dev
+          else
+            dnf -y install epel-release
+            dnf config-manager --set-enabled powertools || \
+              dnf config-manager --set-enabled crb
+            dnf -y install \
+              git ca-certificates gcc gcc-c++ gcc-gfortran autoconf automake libtool \
+              make cmake curl tar patch gawk bison pkgconf-pkg-config python3 python38 \
+              cairo-devel libX11-devel libXext-devel libXmu-devel libICE-devel \
+              libSM-devel libgeotiff-devel libtiff-devel hdf5-devel \
+              libjpeg-turbo-devel zlib-devel libcurl-devel expat-devel libevent-devel
+          fi
+
+      - uses: actions/checkout@v7
+
+      - name: Build in the project environment
+        run: |
+          mkdir -p build
+          set -o pipefail
+          ./dev/build.sh 2>&1 | tee build/build.log
+
+      - name: Test in the project environment
+        run: |
+          set -o pipefail
+          ./dev/test.sh 2>&1 | tee build/test.log
+
+      - name: Build the complete release archive
+        run: |
+          set -o pipefail
+          ./dev/package.sh 2>&1 | tee build/package.log
+
+      - name: Verify and run the unpacked archive without development settings
+        run: |
+          cd release-dist
+          sha256sum -c -- *.tar.gz.sha256
+          trial_root="$(mktemp -d)"
+          for archive in *.tar.gz; do
+            tar -xzf "$archive" -C "$trial_root"
+          done
+          bundle="$trial_root/opengrads-hpc-$(cat ../release/VERSION)-linux-$(uname -m)"
+          env -i HOME="$trial_root" PATH=/usr/bin:/bin OPENGRADS_UPDATE_CHECK=0 \
+            "$bundle/opengrads" --version
+          env -i HOME="$trial_root" PATH=/usr/bin:/bin OPENGRADS_UPDATE_CHECK=0 \
+            OPENGRADS_COLOR=0 GA_TERM_MODE=file GA_TERM_SYNC=1 GA_TERM_DIR="$trial_root/pictures" \
+            "$bundle/opengrads" -l -d Term <<EOF
+          open $GITHUB_WORKSPACE/pytests/data/model.ctl
+          d ts
+          quit
+          EOF
+          test -s "$trial_root/pictures/plot.png"
+
+      - name: Upload approved release candidate
+        if: ${{ vars.BINARY_REDISTRIBUTION_APPROVED == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: development-release-${{ matrix.platform }}
+          path: |
+            release-dist/*.tar.gz
+            release-dist/*.sha256
+          if-no-files-found: error
+
+      - name: Record compiled features
+        run: |
+          printf 'q config\nquit\n' | ./dev/run ./opengrads -bl -d gxdummy -h gxdummy
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: development-logs-${{ matrix.platform }}
+          path: |
+            build/build.log
+            build/test.log
+            build/package.log
+            build/config.log
+          if-no-files-found: ignore

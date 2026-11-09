@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Keep interactive commands on the host tmux selected by activation.
+set -euo pipefail
+if [[ -z "${OPENGRADS_HOST_TMUX:-}" ]]; then
+  printf 'No tmux was found before development activation.\n' >&2
+  exit 127
+fi
+exec "$OPENGRADS_HOST_TMUX" "$@"

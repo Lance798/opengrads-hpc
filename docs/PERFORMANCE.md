@@ -1,5 +1,12 @@
 # Calculation performance
 
+The 1.0.14 time-worker implementation now covers eligible classic NetCDF,
+compressed NetCDF-4 and HDF5 expressions, including bounded static DEFINE
+inputs. The historical HDF5 measurements below describe their stated commits
+and hardware; they do not measure the later NetCDF or DEFINE-input extensions.
+See [TIME_WORKERS.md](TIME_WORKERS.md) for the current support limits and
+the separately recorded NetCDF/HDF5 real-data validation.
+
 opengrads-hpc can use OpenMP for common in-memory grid calculations. The default
 is **4 calculation threads**. OpenMP is detected automatically by
 `configure`; no extra user action is needed with a supported GCC, Clang, or

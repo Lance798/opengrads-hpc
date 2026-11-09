@@ -410,7 +410,7 @@ static gaint tmuxsplit (void) {
 char cmd[2048],qv[700],qd[700],size[32],pct[32],tty[256];
 char *v,*p,*msg;
 char *argv[16];
-gaint i,rc;
+gaint i,rc,sizearg;
 
   v = viewer();
   if (v==NULL) return (1);
@@ -425,13 +425,16 @@ gaint i,rc;
 
   i = 0;
   argv[i++] = "tmux"; argv[i++] = "split-window"; argv[i++] = "-h";
+  p = getenv("TMUX_PANE");
+  if (p && *p) { argv[i++] = "-t"; argv[i++] = p; }
   argv[i++] = "-d"; argv[i++] = "-P"; argv[i++] = "-F"; argv[i++] = "#{pane_id}";
+  sizearg = i;
   argv[i++] = "-l"; argv[i++] = size; argv[i++] = cmd; argv[i] = NULL;
   rc = runcmd(argv,pane,sizeof(pane));
   if (rc!=0 || pane[0]!='%') {
     /* tmux before 3.1 only understands a percentage given with -p */
     snprintf(pct,sizeof(pct),"%d",atoi(size));
-    argv[7] = "-p"; argv[8] = pct;
+    argv[sizearg] = "-p"; argv[sizearg+1] = pct;
     rc = runcmd(argv,pane,sizeof(pane));
   }
   if (rc!=0 || pane[0]!='%') {
