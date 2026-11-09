@@ -34,11 +34,6 @@ The GrADS baseline remains `2.2.1.oga.1`.
   later edits are visible even when worker PIDs are reused. Combined payloads
   are limited to 128 MiB and 32 definitions; unsupported or oversized inputs
   retain ordinary evaluation.
-- **Private Linux development and CI environment.** `dev/build.sh`,
-  `dev/test.sh`, `dev/run` and `dev/package.sh` share checksum-pinned private
-  dependencies and an explicit host toolchain. Ubuntu 22.04 and RHEL 8-family
-  CI jobs build, test, package and run unpacked archives without development
-  settings. Binary artifact upload retains the existing approval gate.
 
 ### Improved in 1.0.14
 
@@ -72,13 +67,11 @@ The GrADS baseline remains `2.2.1.oga.1`.
   OPEN/SDFOPEN/XDFOPEN method, including time templates.
 - Linux packaging preserves the LOAD-segment alignment required by RHEL
   libraries when patching runtime search paths, checks loader-inspection
-  failures, and includes private NetCDF, UDUNITS and JPEG notices.
-- Pinned tmux and JPEG source downloads have checksum-verified Debian and
-  MacPorts fallbacks when their primary GitHub download is unavailable.
+  failures, and preserves the dependency search path needed by packaged
+  loader regressions.
 - The terminal display creates its picture pane beside its originating GrADS
-  pane even if another tmux window is active. Development activation keeps
-  the caller's selected tmux executable instead of replacing it with a
-  potentially incompatible private client; isolated tests use the private tmux.
+  pane even if another tmux window is active. Terminal regressions use an
+  explicit simulated image protocol and short private socket paths.
 
 ### Scope and verification
 
