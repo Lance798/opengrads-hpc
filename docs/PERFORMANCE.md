@@ -1,5 +1,72 @@
 # Calculation performance
 
+## Fixed-time spatial reductions (2026-11-09)
+
+The [shared spatial planner](SPATIAL_REDUCTIONS.md) extends expression sections,
+DEFINE across Z, and bounded XYZ reductions. Its 18 pointwise built-ins and 19
+outer reductions use the existing expression and numerical kernels. It does
+not add spatial worker processes or change time-worker defaults.
+
+Effectiveness was checked before modifying tracked source: the preceding
+`b661751` executable was compared with explicit resident-field staging, then a
+disposable bounded prototype. Full-volume staging helped Y reductions but used
+about 900 MiB RSS and did not reliably help Z/area reductions. The integrated
+producer instead budgets 128 MiB for prefetched values/masks plus the expression
+slab, with reader/evaluator/result storage additional.
+
+Measurements used the supplied Taiwan BP5 data, fixed T=1, 1024x1024x69, and
+`u*u` inside each reduction on shared `derecho3` (AMD EPYC 7543). These are
+medians of three runs, with process affinity limited to 1/4/8 CPUs and no test
+using more than 16 CPUs. The four-core comparison was:
+
+| Operation | Previous executable | Current executable |
+| --- | ---: | ---: |
+| Y MEAN displayed as XZ | 21.55 s | 1.31 s |
+| Y MEAN defined across Z | exceeded the 180 s test cap | 1.30 s |
+| Z MEAN producing XY | 5.67 s | 0.83 s |
+| AAVE defined as a Z profile | 6.12 s | 1.09 s |
+
+The timed DEFINE regions include reads, expression evaluation and setup, but
+exclude CLI startup and output export. DISPLAY timing includes the same
+70,656-value float32 export in both versions. The capped original Y DEFINE did
+not finish; its actual runtime and an exact speedup are unknown. Its completed
+DISPLAY supplies an independent reference for the same numerical XZ output.
+
+Current Y DISPLAY / Z MEAN / area-profile medians at 1, 4 and 8 cores were
+1.93 / 1.20 / 1.68 s, 1.31 / 0.83 / 1.09 s, and 1.57 / 1.03 / 1.25 s,
+respectively. Eight cores were not consistently faster than four. Peak RSS
+across these cases was about 291-410 MiB, including native reader buffers.
+These warm-cache, shared-host observations are not a general scaling promise.
+
+Additional checks used the supplied sea_grass_mountain HDF5 data (1024x64x69)
+and Puerto Rico NetCDF data (1024x1024x69). Staging small full-plane HDF5 Z/area
+reductions and NetCDF XYZ data increased time and memory, so default selection
+keeps those preceding read paths. X/Y expression sections remain eligible.
+The completed three-dataset 1/4/8-core runs compared **14,476,299 float32 output
+positions bitwise** with the preceding executable, including automatic fallback.
+
+An evolved-time check at T=17 used `qvsat(270+qv*500,90000)` inside latitude-
+weighted Y AVE, Z MEAN and AAVE profiles. Complete printed doubles were checked,
+not only probes: BP5 at 1/4/8 cores, HDF5 and NetCDF at four cores compared
+**4,613,465 double positions**, with masks agreeing and maximum absolute
+difference **2.7755575615628914e-17**. This expression tests the nonlinear
+built-in implementation; it is not a physical temperature diagnostic.
+
+`TestSpatialReductions.sh` compares all proposed built-in stages in forced,
+default and disabled modes at 1/4/8 threads on binary/HDF5/NetCDF/NetCDF-4/BP5
+fixtures. It covers 2,176,263 positions with finite maximum difference zero,
+along with masks, nonfinite values, fractional/relative bounds, short variables,
+native singleton profiles, coordinate-name precedence and alias collisions.
+Four formats also passed ASan/UBSan with legacy process leak checking disabled.
+Optional compilation passed without OpenMP, without ADIOS2, and with the optional
+grid readers disabled. Existing numerical, reduction-I/O and worker lifecycle
+regressions passed, including HDF5/NetCDF-4/BP5 cross-file and spatial suites.
+
+Development build products, complete commands, logs, hashes and numerical
+results are under `tmp/spatial-prototype`; the executable launcher is
+`tmp/opengrads-spatial`. Reusable tests and support limits are committed with
+the implementation.
+
 The current worker allowlist covers 47 of the 67 built-ins, including spatial
 neighbors, extrema, pressure integrals, indexed vertical slices and IF. BP5
 complete expressions can use isolated time workers; unqualified native fields and

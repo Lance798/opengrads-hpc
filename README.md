@@ -49,6 +49,11 @@ libraries are available.
   shows a progress line with the time left. See
   [performance notes](docs/PERFORMANCE.md).
 
+- **Fixed-time spatial reductions.** Eligible built-in expressions inside X/Y/Z
+  means, sums and extrema share bounded section/volume readers and the existing
+  math kernels. DEFINE can batch across Z while retaining XZ/YZ results. See
+  [spatial reduction coverage and limits](docs/SPATIAL_REDUCTIONS.md).
+
 - **NetCDF/HDF5/BP5 time workers.** Supported DEFINE and T/Z-T profile DISPLAY expressions
   can evaluate different times in isolated processes. Time SUM/MEAN reductions
   can also dispatch complete input expressions and accumulate them in time
