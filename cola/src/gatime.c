@@ -44,9 +44,10 @@ extern char **environ;
 
 #define TIME_MAX_WORKERS 128
 #define TIME_TEXT 4096
-#define TIME_CONFIG 0x47544332 /* v2 adds bounded static DEFINE payloads */
+#define TIME_CONFIG 0x47544334 /* v4 adds command-local native file inputs */
 #define TIME_JOB 0x47544a31
 #define TIME_MAX_DEFINITIONS 32
+#define TIME_MAX_SOURCES 32
 #define TIME_DEFINITION_BUDGET ((size_t)128*1024*1024)
 #define TIME_AXIS_LIMIT 65536
 /* Wire metadata contains values only, never pointers or callback addresses. */
@@ -64,10 +65,16 @@ struct time_inputs {
   size_t bytes;
   struct time_input items[TIME_MAX_DEFINITIONS];
 };
+struct time_source { int opener; char path[TIME_TEXT]; };
+struct time_sources {
+  int count,ids[TIME_MAX_SOURCES];
+  struct gafile *files[TIME_MAX_SOURCES];
+  char expression[TIME_TEXT];
+};
 struct time_config {
   int operation,z1,z2,e,idim,jdim,ri,rj,nx,ny,lo[5],hi[5],reads;
   int cachesf,opener;
-  int definitions;
+  int definitions,sources;
   uint64_t definition_bytes;
   double dmin[5],dmax[5],undef,cache_bytes;
   char path[TIME_TEXT],expression[TIME_TEXT];
@@ -77,6 +84,8 @@ struct time_reply { int rc,t; uint64_t size; };
 static char time_executable[TIME_TEXT];
 static char time_loader[TIME_TEXT],time_library_path[TIME_TEXT];
 static int time_child;
+
+gaint ga_time_is_worker(void) { return time_child; }
 
 /* Linux's free-page count excludes reclaimable file cache. Use the kernel's
    available-memory estimate so warm input files do not artificially shrink
@@ -147,63 +156,162 @@ static int time_capture(struct time_inputs *inputs,const char *name,struct gafil
   inputs->bytes+=bytes;return 1;
 }
 
-/* Whole expressions use read-only built-ins, native default-file fields and
-   bounded defined inputs. Repeated names refer to one command-local snapshot.
-   Constants/definitions alone still do not start an I/O worker pool. */
-static int time_expression(char *expr, struct gastat *pst,struct time_inputs *inputs) {
+/* CDIFF over T/E needs neighboring tasks rather than independent times. Keep
+   those calls local; X/Y/Z and their one-sided forms are per-time operations. */
+static int time_spatial_difference(const char *p) {
+  int depth=0;
+  do {
+    if(*p=='(')depth++;
+    else if(*p==')')depth--;
+    else if(*p==',' && depth==1)break;
+    p++;
+  } while(*p && depth>0);
+  if(*p++!=',')return 0;
+  while(*p==' ')p++;
+  if(*p!='x' && *p!='y' && *p!='z')return 0;
+  p++;
+  if(*p=='p' || *p=='m')p++;
+  while(*p==' ')p++;
+  return *p==')';
+}
+
+/* Reopen only the default and referenced native files. Remap explicit .N
+   operands to compact child ordinals without changing the parent's expression
+   or file list. Distinct descriptors remain distinct even for the same path;
+   the native evaluator owns coordinate/time mapping and profile broadcasting.
+   Repeated DEFINE names refer to one bounded command-local snapshot. */
+static int time_expression(char *expr, struct gastat *pst,struct time_inputs *inputs,
+                           struct time_sources *sources) {
   static const char *functions[]={"ave","mean","sum","sumg","aave","amean",
     "asum","atot","maskout","zint","abs","sqrt","exp","log","log10",
     "sin","cos","tan","asin","acos","atan2","pow","mag","const",
-    "esat","qvsat",NULL};
-  static const char *words[]={"x","y","z","t","e","lon","lat","lev","ens","auto","global",NULL};
-  char name[32],*p=expr,*end; int n,i,field=0; struct gavar *v;struct gafile *defined;
-  struct time_inputs local;
+    "esat","qvsat","if","hdivg","hcurl","vint","zslice",
+    "tvrh2q","tvrh2t","smth9","cdiff","roll","asumg",
+    "min","max","minloc","maxloc","amin","amax",
+    "aminlocx","aminlocy","amaxlocx","amaxlocy",NULL};
+  static const char *words[]={"x","y","z","t","e","lon","lat","lev","ens","auto","global",
+    "xp","xm","yp","ym","zp","zm",NULL};
+  char name[32],*p=expr,*end,*start; int n,i,field=0,id,slot,qualified;
+  size_t used=0,length;struct gavar *v;struct gafile *defined,*file;
+  struct time_inputs local;struct time_sources local_sources;
   if(!inputs)inputs=&local;
+  if(!sources)sources=&local_sources;
   inputs->count=0;inputs->bytes=0;
+  sources->count=1;sources->files[0]=pst->pfid;
+  sources->ids[0]=1;
+  for(file=pst->pfi1;file && file!=pst->pfid;file=file->pforw)sources->ids[0]++;
   while (*p) {
+    start=p;qualified=0;slot=0;
     if (isdigit((unsigned char)*p) || (*p=='.' && isdigit((unsigned char)p[1]))) {
-      (void)strtod(p,&end); if(end==p)return 0; p=end; continue;
-    }
-    if (isalpha((unsigned char)*p)) {
+      (void)strtod(p,&end); if(end==p)return 0; p=end;
+    } else if (isalpha((unsigned char)*p)) {
       n=0;
       while(isalnum((unsigned char)*p) || *p=='_') {
         if(n==(int)sizeof(name)-1)return 0;
         name[n++]=*p++;
       }
-      name[n]=0;
-      if(*p=='.')return 0;
+      name[n]=0;file=pst->pfid;
+      if(*p=='.') {
+        qualified=1;p++;id=0;
+        if(!isdigit((unsigned char)*p))return 0;
+        while(isdigit((unsigned char)*p)) {
+          if(id>(INT_MAX-(*p-'0'))/10)return 0;
+          id=id*10+(*p++-'0');
+        }
+        if(id<1 || *p=='(' || *p=='.' || isalpha((unsigned char)*p) || *p=='_')return 0;
+        for(file=pst->pfi1,i=1;file && i<id;i++)file=file->pforw;
+        /* Binary profiles are valid native inputs too. Keep indexed,
+           projected, climatological and unsupported file types local. */
+        if(!file || file->type!=1 || file->ppflag || file->idxflg || file->climo ||
+           (file->ncflg!=0 && file->ncflg!=1 && file->ncflg!=3 && !file->adios2flg) ||
+           file->calendar!=pst->pfid->calendar)return 0;
+        for(slot=0;slot<sources->count && sources->files[slot]!=file;slot++);
+        if(slot==sources->count) {
+          if(slot==TIME_MAX_SOURCES)return 0;
+          sources->files[slot]=file;sources->ids[slot]=id;sources->count++;
+        }
+      }
       if(*p=='(') {
         for(i=0;functions[i] && strcmp(name,functions[i]);i++);
         if(!functions[i])return 0;
+        if(!strcmp(name,"cdiff") && !time_spatial_difference(p))return 0;
       } else {
-        defined=getdfn(name,pst);
+        defined=qualified ? NULL : getdfn(name,pst);
         if(defined) {
           if(!time_capture(inputs,name,defined))return 0;
-          continue;
+        } else {
+          v=file->pvar1;
+          for(i=0;i<file->vnum && strcmp(name,v[i].abbrv);i++);
+          if(i<file->vnum)field=1;
+          else if(qualified) {
+            if(strcmp(name,"lon") && strcmp(name,"lat") && strcmp(name,"lev"))return 0;
+          } else { for(i=0;words[i] && strcmp(name,words[i]);i++); if(!words[i])return 0; }
         }
-        v=pst->pfid->pvar1;
-        for(i=0;i<pst->pfid->vnum && strcmp(name,v[i].abbrv);i++);
-        if(i<pst->pfid->vnum)field=1;
-        else { for(i=0;words[i] && strcmp(name,words[i]);i++); if(!words[i])return 0; }
       }
     } else {
       if(!strchr("()+-*/<>=!,&|",*p))return 0;
       p++;
     }
+    if(qualified) {
+      int written=snprintf(sources->expression+used,TIME_TEXT-used,"%s.%d",name,slot+1);
+      if(written<0 || (size_t)written>=TIME_TEXT-used)return 0;
+      used+=(size_t)written;
+    } else {
+      length=(size_t)(p-start);
+      if(length>=TIME_TEXT-used)return 0;
+      memcpy(sources->expression+used,start,length);used+=length;
+    }
   }
+  sources->expression[used]=0;
   return field;
 }
 
-/* Each process owns its NetCDF/HDF5 handles and library state. */
+/* Each process owns its NetCDF/HDF5/ADIOS2 handles and library state. */
 static int time_file(struct gafile *f) {
-  return f && f->type==1 && (f->ncflg==1 || f->ncflg==3) &&
+  return f && f->type==1 && (f->ncflg==1 || f->ncflg==3 || f->adios2flg) &&
          !f->ppflag && !f->idxflg && !f->climo;
 }
 
 static int time_supported(char *expr, struct gastat *pst) {
   struct gafile *f=pst->pfid;
+  const char *p=expr;
+  /* BP5 already batches an unmodified native field across steps. Keep that
+     path; isolated evaluators are useful for complete expressions instead. */
+  if(f && f->adios2flg) {
+    while(isalnum((unsigned char)*p) || *p=='_')p++;
+    if(p>expr && !*p)return 0;
+  }
   return !time_child && time_file(f) && strlen(expr)<TIME_TEXT &&
-         !strchr(f->dnam,'\n') && time_expression(expr,pst,NULL);
+         !strchr(f->dnam,'\n') && time_expression(expr,pst,NULL,NULL);
+}
+
+/* BPOPEN has no persistent descriptor: rediscover the same dataset. Explicit
+   CTLs keep their original path spelling and therefore their own axes/aliases.
+   The extra BP5 allowance accounts conservatively for private reader buffers. */
+static int time_source_path(struct time_source *source,struct gafile *f) {
+#if TIME_POSIX
+  const char *path=f->sdfopener==3 ? f->name : f->dnam;
+  char cwd[TIME_TEXT];int length;
+  memset(source,0,sizeof(*source));
+  source->opener=f->sdfopener;
+  if(strchr(path,'\n'))return 0;
+  if(path[0]=='/')length=snprintf(source->path,sizeof(source->path),"%s",path);
+  else {
+    if(!getcwd(cwd,sizeof(cwd)))return 0;
+    length=snprintf(source->path,sizeof(source->path),"%s/%s",cwd,path);
+  }
+  return length>=0 && length<(int)sizeof(source->path);
+#else
+  (void)source;(void)f;return 0;
+#endif
+}
+
+static int time_open_path(struct time_config *c,struct gafile *f) {
+  struct time_source source;
+  if(!time_source_path(&source,f))return 0;
+  c->opener=source.opener;memcpy(c->path,source.path,sizeof(c->path));
+  if(f->adios2flg)c->cache_bytes+=64.0*1024*1024;
+  return 1;
 }
 
 /* One owner per complete time. Spatial functions keep their original order,
@@ -528,21 +636,38 @@ static int time_workers(struct time_config *c,int nt) {
 static int time_parallel(struct time_config *c,int t1,int t2,int incr,double *values,char *mask,
                           struct gastat *pst) {
   struct pollfd polls[TIME_MAX_WORKERS];struct time_job job;
-  struct time_inputs inputs;
+  struct time_inputs inputs;struct time_sources sources;
+  struct time_source paths[TIME_MAX_SOURCES-1];int j;
   size_t count=(size_t)c->nx*c->ny*(c->z2-c->z1+1),payload=count*(sizeof(double)+1),part,offset;
   int nt=(t2-t1)/incr+1,n,i,done=0,rc;int64_t next=t1;
   ssize_t got;char *dest;char trace[4096];
   inputs.count=0;inputs.bytes=0;
-  if(pst && !time_expression(c->expression,pst,&inputs))return -1;
+  c->sources=0;
+  if(pst) {
+    if(!time_expression(c->expression,pst,&inputs,&sources))return -1;
+    for(j=1;j<sources.count;j++) {
+      if(!time_source_path(paths+j-1,sources.files[j]))return -1;
+      c->cache_bytes+=(double)c->cachesf*sources.files[j]->cachesize;
+      if(sources.files[j]->adios2flg)c->cache_bytes+=64.0*1024*1024;
+    }
+    c->sources=sources.count-1;
+  }
   c->definitions=inputs.count;c->definition_bytes=inputs.bytes;
   n=time_workers(c,nt);if(!n)return -1;
   if(time_spawn(n))return -1;
+  /* Parent profile fallbacks still evaluate against the original file list.
+     Publish compact child ordinals only after committing to worker execution. */
+  if(pst)memcpy(c->expression,sources.expression,strlen(sources.expression)+1);
   pool_active=n;
   if(getenv("GA_TIME_TRACE")) {
     offset=(size_t)snprintf(trace,sizeof(trace),"Time workers: workers=%d inner=1 times=%d levels=%d pids=",n,nt,c->z2-c->z1+1);
     for(i=0;i<n && offset<sizeof(trace);i++)offset+=(size_t)snprintf(trace+offset,sizeof(trace)-offset,"%s%ld",i ? "," : "",(long)slots[i].pid);
     if(offset<sizeof(trace)-1)strcat(trace,"\n");
     gaprnt(2,trace);
+    if(c->sources) {
+      snprintf(trace,sizeof(trace),"Time file inputs: count=%d default=%d (native coordinates and clocks)\n",
+               c->sources+1,sources.ids[0]);gaprnt(2,trace);
+    }
     if(inputs.count) {
       snprintf(trace,sizeof(trace),"Time defined inputs: count=%d bytes=%lu (fresh static copies)\n",
                inputs.count,(unsigned long)inputs.bytes);gaprnt(2,trace);
@@ -555,6 +680,7 @@ static int time_parallel(struct time_config *c,int t1,int t2,int incr,double *va
   }
   for(i=0;i<n;i++) {
     rc=time_write_parent(slots[i].fd,c,sizeof(*c));
+    for(j=0;!rc && j<c->sources;j++)rc=time_write_parent(slots[i].fd,paths+j,sizeof(paths[j]));
     if(!rc)rc=time_sendinputs(slots[i].fd,&inputs);
     if(rc)goto error;
     job.operation=TIME_JOB;job.t=next;next+=incr;slots[i].t=job.t;slots[i].received=0;
@@ -626,6 +752,20 @@ void ga_time_init(const char *executable) {
   if(!registered) { atexit(ga_time_shutdown);registered=1; }
 }
 
+static int time_open_source(struct time_source *source,struct gacmn *pcm) {
+  if(!memchr(source->path,0,sizeof(source->path)))return 1;
+  if(source->opener==0) { if(gaopen(source->path,pcm))return 1; }
+#if USENETCDF==1
+  else if(source->opener==1) { if(gasdfopen(source->path,pcm))return 1; }
+  else if(source->opener==2) { if(gaxdfopen(source->path,pcm))return 1; }
+#endif
+#if USEADIOS2==1
+  else if(source->opener==3) { if(gaadios_bpopen(source->path,pcm))return 1; }
+#endif
+  else return 1;
+  return 0;
+}
+
 gaint ga_time_worker(struct gacmn *pcm,int fd) {
   struct time_config c;struct time_job job;struct time_reply reply;
   struct gastat *pst=NULL,model;struct gagrid *shape=NULL;
@@ -640,12 +780,15 @@ gaint ga_time_worker(struct gacmn *pcm,int fd) {
       if(!memchr(c.path,0,sizeof(c.path)) || !memchr(c.expression,0,sizeof(c.expression)) ||
          c.z1<1 || c.z2<c.z1 || c.nx<1 || c.ny<1)break;
       pcm->cachesf=c.cachesf;setcachesf(pcm->cachesf);
-      if(c.opener==0) { if(gaopen(c.path,pcm))break; }
-#if USENETCDF==1
-      else if(c.opener==1) { if(gasdfopen(c.path,pcm))break; }
-      else if(c.opener==2) { if(gaxdfopen(c.path,pcm))break; }
-#endif
-      else break;
+      {
+        struct time_source source;int source_index;
+        source.opener=c.opener;memcpy(source.path,c.path,sizeof(source.path));
+        if(c.sources<0 || c.sources>=TIME_MAX_SOURCES || time_open_source(&source,pcm))break;
+        for(source_index=0;source_index<c.sources;source_index++) {
+          if(time_read(fd,&source,sizeof(source)) || time_open_source(&source,pcm))break;
+        }
+        if(source_index!=c.sources)break;
+      }
       setcachesf(pcm->cachesf);
       if(time_receiveinputs(fd,&c,pcm))break;
       pst=getpst(pcm);if(!pst)break;model=*pst;gree(pst,"timepst");pst=NULL;
@@ -731,17 +874,7 @@ gaint ga_time_readsteps(struct gagrid *grid,gaint t0,gaint n,gaint incr,
       c.dmax[d]=file->gr2ab[d](file->grvals[d],grid->dimmax[d]);
     }
   }
-#if TIME_POSIX
-  if(file->dnam[0]=='/')snprintf(c.path,sizeof(c.path),"%s",file->dnam);
-  else {
-    char cwd[TIME_TEXT];int length;
-    if(!getcwd(cwd,sizeof(cwd)))return -1;
-    length=snprintf(c.path,sizeof(c.path),"%s/%s",cwd,file->dnam);
-    if(length<0 || length>=(int)sizeof(c.path))return -1;
-  }
-#else
-  return -1;
-#endif
+  if(!time_open_path(&c,file))return -1;
   snprintf(c.expression,sizeof(c.expression),"%s",grid->pvar->abbrv);
   return time_parallel(&c,t0,t0+(n-1)*incr,incr,values,mask,NULL);
 }
@@ -780,17 +913,7 @@ gaint ga_time_evaluatesteps(char *expr,struct gastat *pst,struct gagrid *shape,
     c.lo[d]=shape->dimmin[d];c.hi[d]=shape->dimmax[d];
     c.dmin[d]=pst->dmin[d];c.dmax[d]=pst->dmax[d];
   }
-#if TIME_POSIX
-  if(f->dnam[0]=='/')snprintf(c.path,sizeof(c.path),"%s",f->dnam);
-  else {
-    char cwd[TIME_TEXT];int length;
-    if(!getcwd(cwd,sizeof(cwd)))return -1;
-    length=snprintf(c.path,sizeof(c.path),"%s/%s",cwd,f->dnam);
-    if(length<0 || length>=(int)sizeof(c.path))return -1;
-  }
-#else
-  return -1;
-#endif
+  if(!time_open_path(&c,f))return -1;
   snprintf(c.expression,sizeof(c.expression),"%s",expr);
   return time_parallel(&c,t0,t0+(n-1)*incr,incr,values,mask,pst);
 }
@@ -807,19 +930,7 @@ static int time_configure(struct time_config *c,char *expr,struct gacmn *pcm,
   c->cache_bytes=(double)pcm->cachesf*pst->pfid->cachesize;
   if(!time_supported(expr,pst) || z1<1 || z2>pst->pfid->dnum[2] ||
      (double)c->nx*c->ny*(z2-z1+1)>128.0*1024*1024/9)return 0;
-#if TIME_POSIX
-  /* Preserve symlink spelling: ^dataset paths are relative to the descriptor
-     path used by the caller, not necessarily its realpath target directory. */
-  if(pst->pfid->dnam[0]=='/')snprintf(c->path,sizeof(c->path),"%s",pst->pfid->dnam);
-  else {
-    char cwd[TIME_TEXT];int length;
-    if(!getcwd(cwd,sizeof(cwd)))return 0;
-    length=snprintf(c->path,sizeof(c->path),"%s/%s",cwd,pst->pfid->dnam);
-    if(length<0 || length>=(int)sizeof(c->path))return 0;
-  }
-#else
-  snprintf(c->path,sizeof(c->path),"%s",pst->pfid->dnam);
-#endif
+  if(!time_open_path(c,pst->pfid))return 0;
   snprintf(c->expression,sizeof(c->expression),"%s",expr);
   for(d=0;d<5;d++) { c->dmin[d]=pcm->dmin[d];c->dmax[d]=pcm->dmax[d];c->lo[d]=shape->dimmin[d];c->hi[d]=shape->dimmax[d]; }
   return 1;
@@ -846,7 +957,12 @@ static int time_display_reduces_axis(const char *expr,int z,int t) {
   /* These native functions require fixed Z/T. Only the established outer
      profile paths explicitly supply their per-level/per-time environment. */
   if((z || t) && (strstr(expr,"aave(") || strstr(expr,"amean(") ||
-     strstr(expr,"asum(") || strstr(expr,"atot(") || strstr(expr,"zint(")))return 1;
+     strstr(expr,"asum(") || strstr(expr,"atot(") || strstr(expr,"zint(") ||
+     strstr(expr,"asumg(") || strstr(expr,"amin(") || strstr(expr,"amax(") ||
+     strstr(expr,"aminlocx(") || strstr(expr,"aminlocy(") ||
+     strstr(expr,"amaxlocx(") || strstr(expr,"amaxlocy(") ||
+     strstr(expr,"hdivg(") || strstr(expr,"hcurl(") ||
+     strstr(expr,"vint(") || strstr(expr,"zslice(")))return 1;
   while((p=strchr(p,','))) {
     const char *name=++p;size_t length;
     while(isalpha((unsigned char)*p))p++;
@@ -871,6 +987,11 @@ gaint ga_time_display(char *expr,struct gastat *pst,struct gacmn *pcm) {
   struct gagrid *shape=NULL,*out=NULL;struct time_config c;
   int z1,z2,t1,t2,e,nt,nz,k,rc,lv,generic;size_t size;
   const char *setting=getenv("GA_TIME_WORKERS");
+  /* These operate on the native result's varying axes, which may include T
+     or a whole Z profile. Splitting them into scalar output times changes
+     their neighborhood or makes a varying axis fixed. DEFINE and the input
+     producer keep the original spatial grid and can still dispatch them. */
+  if(strstr(expr,"smth9(") || strstr(expr,"cdiff("))return -1;
   if(!time_supported(expr,pst) || pcm->vdim[0] || pcm->vdim[1] || pcm->vdim[4] ||
      (pst->idim!=2 && pst->idim!=3) || (pst->jdim!=-1 && pst->jdim!=3))return -1;
   /* Preserve the established profile path. New compound expressions that

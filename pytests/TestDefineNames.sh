@@ -61,6 +61,11 @@ out=run('define qv=10\nqv_1=20\ndefine '+name+'=30\n'+name+'='+name+'+1\n'+
 a=grids(out)
 assert all(v==10 for v in a[0]) and all(v==20 for v in a[1]) and all(v==31 for v in a[2]),out
 assert a[3]==a[4],out
+# The X clear-canvas command must not intercept explicit/implied definitions
+# named x, expressions using them, or the independent SET X dimension option.
+out=run('x=qv_raw+1\nd x\ndefine x=qv_raw*2\nd x\n'+
+        'X = qv_raw+3\nd x\nset x 2 3\nset y 1\nd x\nundefine x\n')
+assert grids(out)==[[v+1 for v in base],[v*2 for v in base],[v+3 for v in base],[4.,5.]],out
 # Volumes retain underscores through dimension selection and vertical functions.
 out=run('set z 1 2\nset t 1 2\ndefine qv_cube=qv_raw\nset z 2\nset t 2\nd qv_cube\n'+
         'set t 1\nset z 1\nd zslice(qv_cube,2)\nd zint(qv_cube)\n')

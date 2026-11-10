@@ -1,3 +1,92 @@
+## opengrads-hpc 1.0.15
+
+This release expands time-worker expressions to BP5 and cross-file inputs,
+adds bounded fixed-time spatial reductions, and provides circular grid shifts
+and a bundled VVM terrain script. The GrADS baseline remains `2.2.1.oga.1`.
+
+### Added in 1.0.15
+
+- **Broader time-worker support.** The shared expression allowlist now covers
+  47 of 67 built-ins, including IF, spatial neighbors, extrema and their
+  locations, pressure integrals, indexed vertical slices and ROLL. Eligible
+  BP5 expressions can use the same isolated pool as NetCDF/HDF5 expressions.
+  Native file-qualified operands such as `zint(qv.3*rhobar.4)` retain each
+  descriptor's coordinates, clock, ensemble and open method. Bounded static
+  DEFINE inputs remain supported. See [TIME_WORKERS.md](TIME_WORKERS.md).
+- **Circular X/Y shifts.** `roll(expr, integer_shift, x|y)` wraps values and
+  missing masks within the evaluated grid without changing coordinates or
+  performing interpolation. Positive shifts move values toward larger
+  indices; arbitrarily large signed decimal shifts are reduced modulo the
+  axis length. ROLL supports eligible time workers and OpenMP row copies.
+  See [ROLL.md](ROLL.md).
+- **Bundled `vvmtopo`.** `vvmtopo topo` creates VVM terrain obstruction fields
+  `topou`, `topov` and `topow` through whole-grid operations, replacing per-cell
+  script loops. X/Y boundaries are periodic by default; `vvmtopo topo 0 0`
+  uses closed boundaries. The launcher and release archives include the
+  script library. It selects the full native X/Y domain at Z=1, T=1 and
+  leaves that environment active. See [VVMTOPO.md](VVMTOPO.md).
+- **`x` as a Clear Canvas alias.** Enter `x` at `ga->` and press Enter to
+  reuse `cc` / `clear canvas`, including remembered plot settings and undo.
+  `set x`, `d x` and definitions named `x` retain their existing meanings.
+  Bare `x` now takes precedence over an implicit `x.gs` script; use
+  `run x.gs` explicitly. Registered user-defined commands retain priority.
+  See [CLEAR_CANVAS.md](CLEAR_CANVAS.md).
+
+### Improved in 1.0.15
+
+- **Fixed-time X/Y/Z reductions.** A shared planner batches eligible expression
+  sections and bounded XYZ reads through the existing evaluator and numerical
+  kernels. It covers 19 outer reductions with 18 pointwise built-ins inside
+  their expressions, including DEFINE across Z and displayed XZ/YZ sections.
+  Fractional weights, missing masks and first-hit extrema rules are preserved.
+  Axis folds retain their addition order; area kernels retain existing OpenMP
+  rounding behavior. See [SPATIAL_REDUCTIONS.md](SPATIAL_REDUCTIONS.md).
+- The XYZ producer defaults to eligible BP5/HDF5 inputs and budgets 128 MiB
+  for prefetched values, masks and expression slabs; reader buffers,
+  evaluator temporaries and final results are additional. Small full-plane
+  Z/area reductions and NetCDF XYZ requests retain their preceding reader
+  paths because staging did not improve the tested cases. Eligible X/Y
+  expression sections can still batch. `GA_SPATIAL_BATCH=off` disables the
+  new planner for comparison.
+
+### Fixed in 1.0.15
+
+- IF gives scalar and profile conditions independent storage, preventing
+  aliasing when the result expands across other axes.
+- Parent-side fallback retains original file ordinals; worker-local `.N`
+  remapping is applied only after dispatch succeeds. Cross-file failures,
+  cancellation and recovery preserve an existing DEFINE.
+
+### Scope and verification
+
+The default remains four calculation threads. Time workers keep their
+existing shape, work, time-count and memory eligibility checks; adding a
+function to the allowlist does not make every expression eligible. Each BP5
+worker uses one ADIOS2 data reader thread and one metadata reader thread;
+parent-process ADIOS2 defaults and unqualified bare-field batching are unchanged.
+Fixed-time reductions use OpenMP and batched reads, without spatial worker
+processes. Neighbor-dependent expressions, nested reductions, unsupported
+modifiers and unsafe batch shapes retain their established evaluator.
+
+Validation on the development Linux host used 1/4/8 cores, with no test using
+more than 16. The spatial five-format matrix checked 2,176,263 positions with
+finite maximum difference zero, plus masks and nonfinite values. Three supplied
+BP5/HDF5/NetCDF datasets checked 14,476,299 complete float32 spatial outputs
+bitwise against the preceding executable. A separate nonlinear T=17 check
+compared 4,613,465 printed double positions with agreeing masks and maximum
+absolute difference 2.7755575615628914e-17. Supplementary X averages matched
+another 1,271,808 exported float32 positions bitwise.
+
+Twenty existing numerical and worker regression suites passed during spatial
+integration, alongside ASan/UBSan and optional-feature compilation checks.
+ROLL has an independent NumPy oracle and multi-format worker checks; canvas
+alias checks cover images, names, undo, prompts and scripts. Version metadata
+checks cover source and Linux/macOS archive launchers. These development
+checks do not replace release-archive validation on the target platforms.
+Workload-specific measurements, reference commits and numerical limits are
+recorded in [PERFORMANCE.md](PERFORMANCE.md); more cores do not always reduce
+runtime.
+
 ## opengrads-hpc 1.0.14
 
 This release improves CPU/OpenMP performance for large reductions and adds

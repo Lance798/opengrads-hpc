@@ -1,12 +1,12 @@
 # Time workers and general expressions
 
-`set threads N` is the total calculation CPU budget. Eligible NetCDF/HDF5 commands
+`set threads N` is the total calculation CPU budget. Eligible NetCDF/HDF5/BP5 commands
 can use up to N isolated worker processes, one calculation thread per worker,
 to evaluate different output times. Workers execute the complete expression
 with the existing evaluator. The main process retains result ordering,
 progress, cancellation, the defined-variable registry and all graphics.
 
-For example, after opening a NetCDF or HDF5 descriptor:
+For example, after opening a NetCDF, HDF5 or BP5 descriptor:
 
 ```text
 set threads 64
@@ -37,11 +37,12 @@ CPU-budget change. `GA_TIME_TRACE=1` reports the actual workers and their PIDs;
 `GA_TIME_WORKERS=off` disables the pool.
 
 General-expression output-time workers currently require at least 32 times,
-native fields of the default NetCDF/HDF5 descriptor, supported syntax and a result
+a default NetCDF/HDF5/BP5 descriptor, supported native file inputs, syntax and a result
 shape that agrees at every time. DEFINE additionally retains its existing
 minimum dataset-work threshold. Bounded static DEFINE inputs can accompany
-native fields. Time/ensemble-varying or oversized definitions, file/dimension
-qualifiers, plug-ins and unsupported functions keep their existing evaluator.
+native fields, including explicit file-qualified operands such as `qv.3*rhobar.4`.
+Time/ensemble-varying or oversized definitions, dimension qualifiers, plug-ins
+and unsupported functions keep their existing evaluator.
 Constants alone do not start workers. New compound DISPLAY expressions that reduce a
 displayed Z/T axis retain the ordinary evaluator; the established outer
 AVE/MEAN/AAVE/AMEAN/ASUM/ZINT profile paths retain their per-time behavior.
@@ -95,8 +96,9 @@ A time reduction can use workers even when its output has only one time.
 SUM now evaluates supported expressions independently at their input times,
 then folds grids in ascending time order using the original weights, missing
 masks and accumulator. This works in DEFINE and direct DISPLAY. The shared
-input producer also benefits AVE, MEAN, SUMG, MIN, MAX, MINLOC and MAXLOC;
-it does not add those last four names to the whole-expression allowlist.
+input producer also benefits AVE, MEAN, SUMG, MIN, MAX, MINLOC and MAXLOC.
+These selectors also belong to the whole-expression allowlist; reducing a
+displayed axis still retains the native output shape.
 
 For a single XY map summed over 256 input times:
 
@@ -117,7 +119,7 @@ absolute spatial reductions and cyclic longitude retain the ordinary evaluator
 inside each worker. Keeping the outer T fixed produces one time-summed map;
 `set t 1 256` instead requests repeated output-time evaluations of that sum.
 
-The first two input times retain the original initialization. Eligible NetCDF/HDF5
+The first two input times retain the original initialization. Eligible NetCDF/HDF5/BP5
 reductions with at least 32 requested input times then use batches of up to
 256 grids, bounded by the existing 64 MiB--1 GiB target and available memory.
 The active worker count also depends on batch length and workspace estimates;
@@ -125,8 +127,8 @@ The active worker count also depends on batch length and workspace estimates;
 Pool workers each use one calculation thread. There is no adaptive switch
 between worker/thread combinations during the command.
 
-Time/ensemble-varying or oversized defined fields, non-default-file/dimension-qualified
-inputs, unsupported functions, nested explicit time bounds, relative spatial bounds and varying
+Time/ensemble-varying or oversized defined fields, dimension-qualified
+inputs, unsupported sources/functions, nested explicit time bounds, relative spatial bounds and varying
 ensemble axes keep their earlier paths. Short or memory-limited batches fall
 back to ordinary evaluation. `GA_TIME_TRACE=1` additionally prints
 `Time input expression: ...` when whole input expressions are dispatched.
@@ -137,48 +139,188 @@ Large XY results must transfer every per-time grid to the parent and fold them
 there. Scaling can saturate well before 128 workers; output profiles that
 reduce spatially inside each worker return far less data.
 
+## Cross-file expressions
+
+File qualifiers use the shared expression path for all 47 supported built-ins,
+in DEFINE, eligible T/Z-T DISPLAY and input-time reductions. For example, in a
+fresh session:
+
+```text
+open /path/to/vvm.ctl
+open /path/to/vvm_profiles.ctl
+set dfile 1
+set threads 8
+set x 1 512
+set y 1 512
+set z 1
+set t 1 32
+define cwv=zint(qv*rhobar.2)
+```
+
+Use `q files` to check the actual numbers in an existing session. Opening a
+later file does not change the default file. If these descriptors are files
+3 and 4, use `set dfile 3` and `rhobar.4`; `.2` continues to mean file 2.
+
+Each worker reopens the default file and only the referenced native files,
+using each file's original OPEN/SDFOPEN/XDFOPEN/BPOPEN method. Explicit CTLs
+retain their axes and aliases even when several CTLs describe the same data
+path. Internal compact file numbers are private to the worker; the parent
+expression and session file list retain their original meaning. The ordinary
+evaluator maps each source's world coordinates and time axis and checks grid
+compatibility. Sources are never paired by equal time indices. A profile's
+name does not make it static: native missing times remain missing. To reuse
+a single reference time intentionally, first create a bounded static DEFINE
+profile as shown below.
+
+The default descriptor must meet the existing NetCDF/HDF5/BP5 eligibility
+rules. Referenced files may also be ordinary binary grids. Each command is
+limited to 32 native files including the default. Indexed, projected,
+climatological or unsupported sources, differing calendars, variable dimension
+qualifiers such as `qv.3(t=2)`, and oversized source tables keep the ordinary
+path. Worker memory estimates include every reopened source's cache and BP5
+reader allowance. Startup or evaluation failure shuts down the pool, discards
+the incomplete output and preserves an existing DEFINE. Cancellation and
+progress follow the same rules as single-file expressions.
+
+`GA_TIME_TRACE=1` adds `Time file inputs: count=... default=...` when more than
+one descriptor is reopened. `TestTimeFileInputs.sh` compares all 47 functions
+at 1/4/8 cores across HDF5, classic NetCDF, compressed NetCDF-4 and BP5. It also
+checks ordinal remapping, changed defaults, equal data paths with distinct
+axes/clocks, native binary profiles, mixed open methods, source limits,
+DEFINE shadowing, cancellation and killed-worker recovery.
+
+## Circular X/Y shifts
+
+`roll(expr, integer_shift, x|y)` moves values and their missing mask within the
+evaluated grid; coordinates stay unchanged. DEFINE workers retain each XY
+plane, including output Z/T series. Input-time workers retain their XY/XZ/YZ
+shape. Singleton X/Y axes are unchanged, so ordinary T/ZT profile DISPLAY
+also keeps its native behavior. Existing outer spatial reductions evaluate
+ROLL within the grid they establish. Native X/T or Y/T DISPLAY continues
+through the ordinary evaluator. See [ROLL.md](ROLL.md) for shift direction,
+selected-domain boundaries and nested calls.
+
+```text
+set x 1 512
+set y 1 512
+set z 1
+set t 1 32
+define west=roll(qv,1,x)
+set t 1
+define accumulated=sum(roll(qv,-1,x)*qv,t=1,t=32)
+```
+
+`TestRoll.sh` verifies independent permutations, bit-preserving copies and
+optional NumPy comparisons. `TestTimeRoll.sh` checks serial versus 4/8 workers
+on HDF5, NetCDF/NetCDF-4 and BP5, including file-qualified inputs, static
+snapshots, templates, missing times, parent fallback, cancellation and failure
+recovery. Parent profile fallback retains original file numbers when no
+workers start; compact worker ordinals are published only for worker jobs.
+
 ## Built-in function audit
 
-The `rtnprs` registry in `cola/src/gafunc.c` contains 66 built-in names.
-The current time-worker allowlist contains 26 of them. Eligibility depends on
-the complete expression and command shape; this is not a guarantee that every
-possible argument or dimension combination is parallelized.
+The `rtnprs` registry in `cola/src/gafunc.c` contains 67 built-in names.
+The time-worker allowlist contains 47 of them. Eligibility depends on the
+complete expression and command shape; it does not imply that every argument
+or dimension combination is parallelized.
 
-| Current worker functions | Names |
+| Worker functions | Names |
 |---|---|
-| Arithmetic functions | `abs`, `sqrt`, `exp`, `log`, `log10`, `pow`, `mag` |
+| Arithmetic | `abs`, `sqrt`, `exp`, `log`, `log10`, `pow`, `mag` |
 | Trigonometry | `sin`, `cos`, `tan`, `asin`, `acos`, `atan2` |
-| Mask/value handling | `maskout`, `const` |
-| Saturation diagnostics | `esat`, `qvsat` |
-| Averages and sums | `ave`, `mean`, `sum`, `sumg`, `aave`, `amean`, `asum`, `atot` |
-| Height integral | `zint` |
+| Conditions and masks | `if`, `maskout`, `const` |
+| Thermodynamic diagnostics | `esat`, `qvsat`, `tvrh2q`, `tvrh2t` |
+| Averages and sums | `ave`, `mean`, `sum`, `sumg`, `aave`, `amean`, `asum`, `asumg`, `atot` |
+| Dimension extrema | `min`, `max`, `minloc`, `maxloc` |
+| Area extrema | `amin`, `amax`, `aminlocx`, `aminlocy`, `amaxlocx`, `amaxlocy` |
+| Spatial neighbors | `hdivg`, `hcurl`, `smth9`, `cdiff`, `roll` |
+| Vertical operations | `zint`, `vint`, `zslice` |
 
-Ordinary `+`, `-`, `*`, `/`, parentheses, unary minus, comparisons and
-`&`/`&&`/`|`/`||` can combine these functions and native fields. Formulas,
-operation order, division-by-zero handling and invalid-value masks remain
-those of the existing evaluator. GrADS comparisons return +1/-1; the 0.5
-shift in the MASKOUT example retains the true cells. There is no built-in
-`atan()`; `atan2` is the registered function.
+The twenty additional names use the existing evaluator in each process.
+DEFINE can evaluate an XY plane independently at every output time, including
+horizontal derivatives, smoothing, column integrals and indexed Z slices:
 
-The remaining 40 names are not accepted inside worker expressions. Outer
-MIN/MAX/MINLOC/MAXLOC can still use the shared input-time producer described
-above; their existing accumulator and result handling stay in the parent.
-The categories below describe the additional review needed, not a finding
-that these functions are inherently unsafe or impossible to parallelize.
+```text
+set threads 8
+set x 1 512
+set y 1 512
+set z 1
+set t 1 32
+define speed=if(u>0,u,-u)
+define smooth=smth9(qv)
+define dx=cdiff(qv,x)
+define column=zint(qv)
+```
 
-| Additional review | Names | Main consideration |
-|---|---|---|
-| Branches and pointwise diagnostics | `if`, `skip`, `tvrh2q`, `tvrh2t` | Scalar/axis broadcasts, masks, branch storage and numerical guards |
-| Spatial neighbors | `hdivg`, `hcurl`, `smth9`, `cdiff` | Coordinate metrics, halo reads and boundaries |
-| Additional spatial/statistical reductions | `asumg`, `grarea`, `min`, `max`, `minloc`, `maxloc`, `amin`, `amax`, `aminlocx`, `aminlocy`, `amaxlocx`, `amaxlocy` | Result dimensions, weights and location tie rules |
-| Vertical operations | `vint`, `zslice`, `gint`, `fndlvl` | Full-column dependencies, interpolation and output shape |
-| Correlation/regression/time masks | `scorr`, `tcorr`, `tmave`, `sregr`, `tregr` | Input spans, missing-sample pairing and accumulation order |
-| Dimension loops | `tloop`, `eloop` | Nested scheduling and dimension ownership |
-| Station, collection and interpolation | `gr2stn`, `oacres`, `oabin`, `stnave`, `stnmin`, `stnmax`, `coll2gr`, `s2g1d`, `lterp` | Station/collection session state, target grids and output coordinates |
+Input-time reductions retain their spatial grid inside each worker, including
+varying Z for `sum(cdiff(qv,z),t=1,t=32)`. `cdiff` accepts only X/Y/Z and their
+`p`/`m` one-sided forms in workers. T/E derivatives retain the native evaluator
+because they need neighboring times or ensembles. Direct DISPLAY containing
+`smth9` or `cdiff` also retains the native evaluator: smoothing a T/Z-T result
+or differentiating a varying Z axis must not become scalar-per-time work.
+This restriction does not prevent DEFINE or input-time expression workers.
 
-The audit removed an unregistered `atan` entry from the worker allowlist;
-this does not remove a callable built-in. No additional untested functions
-are enabled by this stage.
+Area extrema and ASUMG retain the same native fixed-Z/T/E DISPLAY restrictions
+as ATOT. VINT/ZSLICE and horizontal diagnostics keep their native dimension
+requirements; the new allowlist does not make an invalid DISPLAY valid only
+at higher thread counts. MIN/MAX/MINLOC/MAXLOC can use direct T DISPLAY when
+it preserves the native result shape. Existing outer AAVE/AMEAN/ASUM/ZINT
+profile paths keep their established per-time behavior.
+
+Ordinary arithmetic, comparisons and `&`/`&&`/`|`/`||` can combine these
+functions. GrADS comparisons return +1/-1. IF evaluates both branches and
+retains the original mask propagation; it is not a lazy conditional. Its
+scalar and one-dimensional conditions now own independent temporary storage,
+fixing an existing aliasing/freeing error before enabling worker use. Pressure
+units, convergence guards, vertical addition order and first-hit extrema tie
+rules remain those of the native functions. There is no registered `atan()`;
+use `atan2`.
+
+The remaining 20 names retain their earlier paths:
+
+| Functions outside the allowlist | Main consideration |
+|---|---|
+| `skip`, `grarea` | Axis sampling phase and input masks |
+| `gint`, `fndlvl` | Integration axes and vertical search shape |
+| `scorr`, `sregr`, `tcorr`, `tregr`, `tmave` | Paired samples, time windows and accumulation order |
+| `tloop`, `eloop` | Loop ownership and nested scheduling |
+| `gr2stn`, `oacres`, `oabin`, `stnave`, `stnmin`, `stnmax`, `coll2gr`, `s2g1d`, `lterp` | Station/collection state and target coordinates |
+
+`TestIf.sh` checks independent analytic scalar/X/Z/XY values and branch-error
+recovery. `TestTimeSpatialFunctions.sh` checks all twenty additions against the
+one-thread evaluator at 4 and 16 calculation cores, including regular/template
+and reversed HDF5/NetCDF, raw/compressed BP5, masks, ties, spatial-Z input
+reductions, legal direct DISPLAY, native fallbacks, pool reuse and cleanup.
+Its BP5 mode also checks CTL/BPOPEN progress, cancellation, killed-worker
+recovery and preservation of an old DEFINE. Run the formats as:
+
+```bash
+bash pytests/TestIf.sh
+bash pytests/TestTimeSpatialFunctions.sh
+GA_TEST_TIME_FORMAT=nc bash pytests/TestTimeSpatialFunctions.sh
+GA_TEST_TIME_FORMAT=nc4 bash pytests/TestTimeSpatialFunctions.sh
+GA_TEST_TIME_FORMAT=bp5 bash pytests/TestTimeSpatialFunctions.sh
+```
+
+## BP5 expression workers
+
+BP5 expressions use the same pool, masks, ordering, static-definition snapshots
+and memory limits. Explicit BP5 CTLs reopen with their original descriptor,
+preserving aliases and coordinate choices. BPOPEN workers rediscover the
+original dataset, rather than trying to reopen its deleted temporary descriptor.
+Each worker limits ADIOS2 data and metadata reader threads to one. Normal
+parent reader settings remain unchanged. Reader buffers are included in the
+worker memory estimate; DEFINE still owns the full final array.
+
+Unqualified bare BP5 variables and native input-step batching retain their existing bulk
+reader path. Complete expressions such as `qv*qv`, `if(qv>1e-5,qv*1000,0)` and
+`zint(qv)` can instead evaluate independent output times. A time reduction of
+a compound expression can use input-time workers; a reduction of an unmodified
+native field keeps its optimized ADIOS2 batch reads. Worker startup and private
+metadata can dominate small requests, so eligibility alone is not a speedup
+guarantee. Use `GA_TIME_TRACE=1` and compare `GA_TIME_WORKERS=off` when measuring.
+Restart GrADS after rebuilding: the worker protocol version includes the BP5
+restart contract and rejects an incompatible parent/worker binary.
 
 ## NetCDF support and template activation
 
@@ -198,11 +340,11 @@ Native input-time reads retain their batching/work thresholds, while whole
 input expressions require at least 32 requested times. These rules are shared
 with HDF5. Short commands and `GA_TIME_WORKERS=off` keep ordinary evaluation.
 
-All 26 functions listed above are supported for both formats under the same
+All 47 functions listed above are supported for both formats under the same
 expression/environment restrictions. This does not extend worker eligibility
 to every GrADS built-in. Static session-defined inputs such as
-`define rho=rho.2` can accompany native fields in workers. File-qualified
-operands and plug-ins retain their ordinary evaluator.
+`define rho=rho.2` can accompany native fields in workers. Native file-qualified
+operands use the shared cross-file path above; plug-ins keep the ordinary evaluator.
 For the user's reference-density CWV series:
 
 ```text
@@ -226,8 +368,8 @@ native fields in the default NC descriptor, such as
 does not calculate CWV. Native NC profiles with absent X/Y/T axes are
 broadcast from their actual shape, including missing masks and unpacking.
 
-`TestNetCDFTimeWorkers.sh` runs the four existing time-worker suites and
-`TestTimeDefinedInputs.sh` against
+`TestNetCDFTimeWorkers.sh` runs eight time-worker suites, including
+`TestTimeFileInputs.sh`, against
 both classic and compressed NetCDF-4, including regular/template/reversed
 files, all supported functions, packed data, missing template times, progress,
 cancellation, failed workers, pool reuse, memory caps and identical graphics.
@@ -269,7 +411,7 @@ absolute difference from the one-core evaluator.
 
 Time workers automatically accept stored scalars, Z profiles, XY maps and XYZ
 cubes whose T and E dimensions both have length one. The expression must also
-reference a native field of the default NetCDF/HDF5 descriptor and satisfy the
+reference a native field of the default NetCDF/HDF5/BP5 descriptor and satisfy the
 existing function, shape, time-count and work thresholds. No `set global` is
 needed. A definition repeated over several times is still time-varying storage
 for eligibility purposes, even if its values happen to be equal.

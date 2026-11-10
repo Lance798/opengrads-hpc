@@ -4,7 +4,9 @@
 # ave and its kin over x, y or z of a plain variable, when the result varies
 # in one dimension at most (a horizontal-mean profile, a zonal mean, a
 # point), read every position at once, as one section, instead of a read
-# for each. A profile averaged over x and y was a read of a column for every
+# for each. Disable the newer expression batching here so "+0" still selects
+# an independent position-at-a-time reference. TestSpatialReductions covers
+# the new batch planner. A profile averaged over x and y was a read of a column for every
 # point of the plane. Each result must match, to the last bit, the same
 # average taken a position at a time, which "+0" forces: weights by
 # latitude and by -b bounds, global wrap-around in longitude, levels in
@@ -66,7 +68,7 @@ for c in "${cases[@]}"; do
   commands+=$'\n'"!echo MARK $n plus0"$'\n'"d ${expr/$var,/$var+0,}"
 done
 commands+=$'\n'"!echo MARK end"$'\n'"quit"
-output="$(OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_COLOR=0 GA_PROGRESS=off \
+output="$(OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_COLOR=0 GA_PROGRESS=off GA_SPATIAL_BATCH=off \
   "$launcher" -bl -d gxdummy -h gxdummy <<< "$commands" 2>&1)"
 
 # the numbers each display printed, keyed by case and form

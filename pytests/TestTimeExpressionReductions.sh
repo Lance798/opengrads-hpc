@@ -167,7 +167,7 @@ text=run(cyclic,command);assert 'Time input expression:' in text
 compare(parse(text),parse(run(cyclic,command,1,True)))
 
 # Context-sensitive relative bounds and nested time reductions use the evaluator.
-for expr in ('sum(f*g,z-1,z+1)','sum(f*g,t=1,t=4)','f.1*g'):
+for expr in ('sum(f*g,z-1,z+1)','sum(f*g,t=1,t=4)'):
     command=setup+'d sum('+expr+',t=1,t=40)'
     text=run(ctls[0],command)
     assert 'Time input expression:' not in text,expr

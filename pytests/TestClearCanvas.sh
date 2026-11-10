@@ -114,7 +114,7 @@ out = run(old + 'd ts\nd ts\nq shades\n')
 assert shades(out) == auto, out
 
 # Long/short names share exactly the same behavior, including script calls.
-for index, command in enumerate(('clear canvas', 'CC', 'Clear Canvas', 'c canvas')):
+for index, command in enumerate(('x', 'X', 'clear canvas', 'CC', 'Clear Canvas', 'c canvas')):
     out = run(old + 'd ts\n' + command + '\nd ts\nq shades\n' + snap('alias'))
     ref = reference(old, 'ts', 'alias-reference')
     assert shades(out) == shades(ref), (command, out)
@@ -148,6 +148,8 @@ assert shades(out) == shades(reference(old, 'ts', 'unused-old')), out
 out = run(old + 'd ts\ncc invalid\nq shades\n', errors=True)
 assert 'Clear Canvas takes no arguments' in out and shades(out) == shades(reference(old, 'ts', 'unused-old')), out
 out = run(old + 'd ts\nclear canvas invalid\nq shades\n', errors=True)
+assert 'Clear Canvas takes no arguments' in out and shades(out) == shades(reference(old, 'ts', 'unused-old')), out
+out = run(old + 'd ts\nx invalid\nq shades\n', errors=True)
 assert 'Clear Canvas takes no arguments' in out and shades(out) == shades(reference(old, 'ts', 'unused-old')), out
 
 # Explicit line styling and vrange survive; automatically chosen line colors

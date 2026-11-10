@@ -7,7 +7,7 @@ OpenMP-threaded calculations, and self-contained releases for Linux and
 macOS.
 
 **"HPC" means single-node CPU acceleration through ADIOS2/BP5, OpenMP
-threading and isolated NetCDF/HDF5 time workers.** There is no MPI or GPU support and
+threading and isolated NetCDF/HDF5/BP5 time workers.** There is no MPI or GPU support and
 none is planned; ADIOS2 is deliberately built with `ADIOS2_USE_MPI=OFF`.
 Reading output written by a multi-rank MPI job does not require MPI here.
 
@@ -49,13 +49,25 @@ libraries are available.
   shows a progress line with the time left. See
   [performance notes](docs/PERFORMANCE.md).
 
-- **NetCDF/HDF5 time workers.** Supported DEFINE and T/Z-T profile DISPLAY expressions
+- **Fixed-time spatial reductions.** Eligible built-in expressions inside X/Y/Z
+  means, sums and extrema share bounded section/volume readers and the existing
+  math kernels. DEFINE can batch across Z while retaining XZ/YZ results. See
+  [spatial reduction coverage and limits](docs/SPATIAL_REDUCTIONS.md).
+
+- **NetCDF/HDF5/BP5 time workers.** Supported DEFINE and T/Z-T profile DISPLAY expressions
   can evaluate different times in isolated processes. Time SUM/MEAN reductions
   can also dispatch complete input expressions and accumulate them in time
-  order. Static DEFINE scalars, profiles and masks can accompany native fields.
+  order. File-qualified operands such as `qv.3*rhobar.4` and static DEFINE
+  scalars, profiles and masks can accompany native fields.
   `set threads N` controls the CPU budget; worker count and buffers are
-  bounded. BP5 retains its existing OpenMP and reader paths. See
+  bounded. BP5 expressions can use workers while unqualified bare fields retain native
+  batching. The expression allowlist covers 47 built-ins. See
   [time-worker support and limits](docs/TIME_WORKERS.md).
+
+- **Circular grid shifts.** `roll(expr, shift, x|y)` moves values and missing
+  masks within the selected grid, preserving coordinates and exact stored
+  values. X/Y roll supports time workers and OpenMP. See
+  [ROLL usage](docs/ROLL.md).
 
 - **Restored self-describing-file access.** Release builds require NetCDF and
   UDUNITS support, so `sdfopen` and `xdfopen` remain available for compatible
@@ -65,7 +77,10 @@ libraries are available.
 - **Advanced scripts and extensions.** The bundled OpenGrADS script
   collection in [lib/scripts](lib/scripts) provides reusable plotting and
   analysis tools, including maps, panels, colour bars, meteorograms,
-  trajectories, and interpolation helpers. Plotting scripts from Bin Guan's
+  trajectories, and interpolation helpers. `vvmtopo topo` builds VVM terrain
+  obstruction fields `topou`, `topov`, and `topow`, with periodic X/Y boundaries
+  by default; `vvmtopo topo 0 0` disables wrapping. See
+  [vvmtopo usage](docs/VVMTOPO.md). Plotting scripts from Bin Guan's
   bGASL add 1-D graphs, shading with contours, vertical cross-sections,
   vectors, multi-panel layouts, legends, and publication-ready output.
   Chihiro Kodama's [gscript](lib/scripts/gscript) adds colour tables
@@ -131,7 +146,7 @@ Use `q config` to see whether this build includes `adios2-bp5`, `openmp`,
 - [Height-coordinate column integrals and column water vapor](docs/ZINT.md)
 - [Saturation vapor pressure and mixing ratio](docs/SATURATION.md)
 - [OpenMP controls and benchmark notes](docs/PERFORMANCE.md)
-- [NetCDF/HDF5 time workers: expressions, support and limits](docs/TIME_WORKERS.md)
+- [NetCDF/HDF5/BP5 time workers: expressions, support and limits](docs/TIME_WORKERS.md)
 - [Architecture and development roadmap](docs/ARCHITECTURE.md)
 
 ## Legacy OpenGrADS documentation

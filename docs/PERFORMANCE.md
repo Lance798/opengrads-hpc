@@ -1,6 +1,91 @@
 # Calculation performance
 
-The 1.0.14 time-worker implementation now covers eligible classic NetCDF,
+## Fixed-time spatial reductions (2026-11-09)
+
+The [shared spatial planner](SPATIAL_REDUCTIONS.md) extends expression sections,
+DEFINE across Z, and bounded XYZ reductions. Its 18 pointwise built-ins and 19
+outer reductions use the existing expression and numerical kernels. It does
+not add spatial worker processes or change time-worker defaults.
+
+Effectiveness was checked before modifying tracked source: the preceding
+`b661751` executable was compared with explicit resident-field staging, then a
+disposable bounded prototype. Full-volume staging helped Y reductions but used
+about 900 MiB RSS and did not reliably help Z/area reductions. The integrated
+producer instead budgets 128 MiB for prefetched values/masks plus the expression
+slab, with reader/evaluator/result storage additional.
+
+Measurements used the supplied Taiwan BP5 data, fixed T=1, 1024x1024x69, and
+`u*u` inside each reduction on shared `derecho3` (AMD EPYC 7543). These are
+medians of three runs, with process affinity limited to 1/4/8 CPUs and no test
+using more than 16 CPUs. The four-core comparison was:
+
+| Operation | Previous executable | Current executable |
+| --- | ---: | ---: |
+| X MEAN displayed as YZ | 39.79 s | 1.27 s |
+| Y MEAN displayed as XZ | 21.55 s | 1.31 s |
+| Y MEAN defined across Z | exceeded the 180 s test cap | 1.30 s |
+| Z MEAN producing XY | 5.67 s | 0.83 s |
+| AAVE defined as a Z profile | 6.12 s | 1.09 s |
+
+The timed DEFINE regions include reads, expression evaluation and setup, but
+exclude CLI startup and output export. DISPLAY timing includes the same
+70,656-value float32 export in both versions. The capped original Y DEFINE did
+not finish; its actual runtime and an exact speedup are unknown. Its completed
+DISPLAY supplies an independent reference for the same numerical XZ output.
+
+Current Y DISPLAY / Z MEAN / area-profile medians at 1, 4 and 8 cores were
+1.93 / 1.20 / 1.68 s, 1.31 / 0.83 / 1.09 s, and 1.57 / 1.03 / 1.25 s,
+respectively. Eight cores were not consistently faster than four. Peak RSS
+across these cases was about 291-410 MiB, including native reader buffers.
+These warm-cache, shared-host observations are not a general scaling promise.
+
+A supplementary X MEAN check used the same Taiwan data and `u*u` expression,
+with Y/Z retained. Previous/current DISPLAY medians at 1/4/8 cores were
+52.66/1.84 s, 39.79/1.27 s and 41.60/1.52 s. Current DEFINE medians were
+1.84/1.26/1.53 s; its complete output was compared with the preceding DISPLAY,
+not a timed preceding DEFINE. The check matched another **1,271,808 exported
+float32 positions bitwise**. Commands and measurements are recorded in
+`tmp/spatial-prototype/X-AVERAGE.md` and `bench-x.json` during development.
+
+Additional checks used the supplied sea_grass_mountain HDF5 data (1024x64x69)
+and Puerto Rico NetCDF data (1024x1024x69). Staging small full-plane HDF5 Z/area
+reductions and NetCDF XYZ data increased time and memory, so default selection
+keeps those preceding read paths. X/Y expression sections remain eligible.
+The completed three-dataset 1/4/8-core runs compared **14,476,299 float32 output
+positions bitwise** with the preceding executable, including automatic fallback.
+
+An evolved-time check at T=17 used `qvsat(270+qv*500,90000)` inside latitude-
+weighted Y AVE, Z MEAN and AAVE profiles. Complete printed doubles were checked,
+not only probes: BP5 at 1/4/8 cores, HDF5 and NetCDF at four cores compared
+**4,613,465 double positions**, with masks agreeing and maximum absolute
+difference **2.7755575615628914e-17**. This expression tests the nonlinear
+built-in implementation; it is not a physical temperature diagnostic.
+
+`TestSpatialReductions.sh` compares all proposed built-in stages in forced,
+default and disabled modes at 1/4/8 threads on binary/HDF5/NetCDF/NetCDF-4/BP5
+fixtures. It covers 2,176,263 positions with finite maximum difference zero,
+along with masks, nonfinite values, fractional/relative bounds, short variables,
+native singleton profiles, coordinate-name precedence and alias collisions.
+Four formats also passed ASan/UBSan with legacy process leak checking disabled.
+Optional compilation passed without OpenMP, without ADIOS2, and with the optional
+grid readers disabled. Existing numerical, reduction-I/O and worker lifecycle
+regressions passed, including HDF5/NetCDF-4/BP5 cross-file and spatial suites.
+
+Development build products, complete commands, logs, hashes and numerical
+results are under `tmp/spatial-prototype`; the executable launcher is
+`tmp/opengrads-spatial`. Reusable tests and support limits are committed with
+the implementation.
+
+The current worker allowlist covers 47 of the 67 built-ins, including spatial
+neighbors, extrema, pressure integrals, indexed vertical slices and IF. BP5
+complete expressions can use isolated time workers; unqualified native fields and
+ADIOS2 step batching keep their existing reader paths. Each BP5 worker uses
+one ADIOS2 data/metadata reader thread. See [TIME_WORKERS.md](TIME_WORKERS.md)
+for shape restrictions and the numerical/worker-recovery regression commands.
+The dated measurements below describe the versions and workloads stated in
+each section; their earlier 24/26-function counts are historical.
+
+The 1.0.14 time-worker implementation introduced eligible classic NetCDF,
 compressed NetCDF-4 and HDF5 expressions, including bounded static DEFINE
 inputs. The historical HDF5 measurements below describe their stated commits
 and hardware; they do not measure the later NetCDF or DEFINE-input extensions.
@@ -15,6 +100,82 @@ vendor compiler.
 The November 5 measurements below were collected on the shared Derecho host.
 The November 6 RLL profile diagnosis uses the new Xeon machine and different
 data; its timings are recorded separately below.
+
+## Cross-file worker validation (2026-11-09)
+
+The common expression evaluator now accepts native `.N` operands for all 46
+allowed built-ins. `TestTimeFileInputs.sh` compares 1/4/8-core execution with
+the committed serial evaluator on HDF5, classic NetCDF, compressed NetCDF-4
+and BP5 fixtures. Distinct descriptors sharing a dataset remain separate;
+source coordinates and clocks retain native mapping. Tests cover shifted
+clocks, reversed axes, binary T=1 profiles, mixed open methods, defined-name
+shadowing, bounded source counts, cancellation and failed workers.
+
+On the three supplied datasets, cross-file pointwise, ZINT and input-time SUM
+calculations at t=1..32 were compared with the preceding committed executable.
+The domain was 512x512 for Taiwan BP5 and Puerto Rico NetCDF, and 512x64 for
+sea_grass_mountain HDF5, whose Y dimension is 64. New 1/4/8-core runs compared
+108,625,920 complete float32 output positions with identical hashes and masks;
+1,557 finite double-precision probes had maximum absolute difference zero.
+This checks every exported float32 value, with double precision checked only
+at the sampled spatial positions.
+
+The Taiwan test opened the main descriptor as default file 3 and its native
+profile descriptor as file 4, then evaluated `zint(qv*rhobar.4)`. One local
+observation took 4.883 / 1.484 / 0.989 seconds with 1 / 4 / 8 cores, including
+DEFINE, reads and worker setup. Cache state was not controlled and the host
+was shared, so these measurements establish the tested behavior rather than
+a general scaling guarantee. Build products, commands, logs, output hashes
+and timings for this check are under `tmp/real-crossfile` in the development
+workspace; the reusable synthetic regression is committed under `pytests`.
+
+## ROLL and terrain integration (2026-11-09)
+
+The current 47-function worker allowlist includes the new X/Y
+[`roll`](ROLL.md) built-in. It copies doubles and missing masks without
+arithmetic, keeping coordinates fixed and wrapping within the evaluated
+grid. Arbitrary signed decimal shifts are reduced modulo the axis length.
+Singleton X/Y axes retain their values. DEFINE and input-time reductions use
+the existing isolated workers; direct native X/T and Y/T DISPLAY keep their
+normal grids.
+
+`TestRoll.sh` checks 19,572 analytic values at 1/4/8 threads and complete
+parallel-grid float32 bit patterns, including missing cells, signed zero and
+nonfinite values. An additional NumPy 1.17.3 oracle agreed on 260 value/mask
+permutations. `TestTimeRoll.sh` and the expanded 47-function cross-file suite
+passed with HDF5, classic NetCDF, compressed NetCDF-4 and BP5. These include
+output/input-time shapes, static snapshots, missing template steps, parent
+fallback, cancellation, killed workers and failed startup/retry. ASan/UBSan
+passed the unit suite and HDF5/NetCDF-4/BP5 worker suites; optional-feature
+compile checks covered builds without OpenMP, POSIX workers and ADIOS2.
+
+On the three supplied datasets, t=1..32 tests covered X, Y, nested X/Y,
+cross-file shifts and an input-time SUM. Domains were 512x512 for Taiwan BP5
+and Puerto Rico NetCDF, and 512x64 for sea_grass_mountain HDF5. New 1/4/8-core
+outputs matched independent NumPy permutations of unshifted exports from the
+preceding executable: 215,580,672 complete float32 positions agreed bitwise.
+Another 3,483 finite double probes, taken at the corresponding unshifted
+source positions, had maximum absolute difference zero. Full precision is
+checked only at these sampled positions; every float32 output is checked.
+
+The periodic paths of `vvmtopo` now use ROLL and IF, removing scalar boundary
+queries and subtraction/addition reconstruction. All three complete native
+terrain domains matched the original script at four cores, and the analytic
+suite includes finite neighbors with widely separated magnitudes. A local
+Taiwan 1024x1024 series measured these medians over five runs:
+
+| Script | Cores | Seconds |
+| --- | ---: | ---: |
+| Previous CDIFF script | 4 | 0.1052 |
+| ROLL script | 1 | 0.1125 |
+| ROLL script | 4 | 0.0860 |
+| ROLL script | 8 | 0.1062 |
+
+These timings include source reads and definitions and exclude startup,
+exports and graphics. They were collected on a shared host with warm file
+cache; more cores did not consistently help this short, memory-bound job.
+Commands, hashes and timing records are under `tmp/roll` in the development
+workspace.
 
 ## Height-coordinate column integrals
 
@@ -1557,3 +1718,49 @@ This is an end-to-end result for one synthetic workload, not a universal
 scaling promise. File access, parsing, allocation, and other legacy global
 state remain serial, so pure arithmetic kernels can scale better while
 I/O-heavy scripts can scale less.
+
+### Twenty additional built-ins and BP5 expression workers (November 2026)
+
+The allowlist now covers 46 built-ins. The twenty additions use the original
+per-time evaluator for spatial diagnostics, conditions, extrema, pressure
+integrals and indexed Z slices. BP5 complete expressions can use the same
+isolated processes as NetCDF/HDF5; unmodified native fields and ADIOS2 step
+batches retain their existing optimized readers. CTL and BPOPEN restart,
+one data/metadata reader thread per worker, progress, cancellation and
+killed-worker recovery are covered by the new regression suite.
+
+All twenty additions were compared with the frozen `7609345` one-core build
+on the three supplied model datasets, over T=1:32 at 1, 4 and 8 calculation
+cores. Each process tree was pinned to its stated CPU count. The domain was
+512 x 512 for Taiwan VVM BP5 and Puerto Rico NetCDF; sea/grass/mountain HDF5
+has only 64 Y cells and was tested at 512 x 64. Pressure-specific diagnostics
+used private descriptors with reference-profile pressure coordinates; source
+data were unchanged.
+
+Across the new 1/4/8-core configurations, all 481,716,192 exported
+float32 values matched the frozen output byte-for-byte (SHA256). The
+11,520 finite double-precision spatial probes also matched exactly, including
+missing masks and non-finite classifications. A separate small-domain run
+compared every sampled result of all twenty functions in double precision
+at the same CPU counts, with maximum absolute difference zero.
+
+The additional 512-domain `qv*qv`, `zint(qv)` and
+`sum(qv*qv,t=1,t=32)` cases checked output-time and input-time dispatch.
+All 108,625,920 exported float32 values and
+1,755 finite double probes matched, with zero maximum probe difference.
+Full exported-array agreement is at float32 output precision; the double
+checks are spatial probes, not a full double-array export.
+
+The 23 regression-suite invocations passed; the NetCDF aggregate includes
+twelve format-specific sub-suites. The new spatial suite additionally checks
+fractional bounds, cyclic seams, missing data, first-hit extrema ties,
+spatial-Z input reductions, native DISPLAY fallback and static BPOPEN inputs.
+ASan/UBSan passed IF and HDF5/BP5 spatial tests, including worker recovery.
+No-OpenMP, no-POSIX-worker and no-ADIOS2 compile checks passed. IF also has
+independent analytic scalar/X/Z/XY checks for its corrected condition storage.
+
+Reproducible local drivers and numeric manifests are in
+`tmp/real-workers20/`; the summary is `tmp/workers20-verification.txt`.
+The large-case timings are single observations with uncontrolled cache state
+and are not a general scaling claim. Use the committed
+`pytests/TestTimeSpatialFunctions.sh` for the portable regression fixtures.

@@ -31,10 +31,11 @@ struct gahelp {
 
 static const struct gahelp cmds[] = {
   {"bpopen",   "bpopen path.bp", "bpopen ~/run/output.bp", NULL},
-  {"c",        "clear <norset|graphics|events|hbuff|button n|rband n|dropmenu n|sdfwrite|mask|shp>", NULL,
-               "norset graphics events hbuff button rband dropmenu sdfwrite mask shp"},
-  {"clear",    "clear <norset|graphics|events|hbuff|button n|rband n|dropmenu n|sdfwrite|mask|shp>", NULL,
-               "norset graphics events hbuff button rband dropmenu sdfwrite mask shp"},
+  {"c",        "clear <canvas|norset|graphics|events|hbuff|button n|rband n|dropmenu n|sdfwrite|mask|shp>", NULL,
+               "canvas norset graphics events hbuff button rband dropmenu sdfwrite mask shp"},
+  {"cc",       "cc", "clear canvas", NULL},
+  {"clear",    "clear <canvas|norset|graphics|events|hbuff|button n|rband n|dropmenu n|sdfwrite|mask|shp>", NULL,
+               "canvas norset graphics events hbuff button rband dropmenu sdfwrite mask shp"},
   {"close",    "close file#", "close 2", NULL},
   {"collect",  "collect number expression | free", "collect 1 ts", NULL},
   {"d",        "display expression", "d ts    d u;v    d ave(ts,t=1,t=12)", NULL},
@@ -72,6 +73,7 @@ static const struct gahelp cmds[] = {
   {"swap",     "swap", NULL, NULL},
   {"undefine", "undefine name", NULL, NULL},
   {"undo",     "undo <steps>", "undo 2", NULL},
+  {"x",        "x", "clear canvas", NULL},
   {"xdfopen",  "xdfopen descriptor.ctl", NULL, NULL},
   {NULL,NULL,NULL,NULL}
 };
@@ -317,6 +319,7 @@ static const struct gahelp funcs[] = {
   {"oabin",    "oabin(grid_expr, stn_expr <,-flag>)", NULL, NULL},
   {"oacres",   "oacres(grid_expr, stn_expr <,radii>)", NULL, NULL},
   {"pow",      "pow(expr1, expr2)", "pow(u, 2)", NULL},
+  {"roll",     "roll(expr, integer_shift, x|y)", "roll(ts, -1, x)", NULL},
   {"s2g1d",    "s2g1d(stn_expr)", NULL, NULL},
   {"scorr",    "scorr(expr1, expr2, xdim1, xdim2, ydim1, ydim2)", "scorr(ts, ts.2, lon=0, lon=360, lat=-90, lat=90)", NULL},
   {"sin",      "sin(expr)", NULL, NULL},

@@ -95,6 +95,7 @@ if extension=='nc':
 core=['f','surface','rho','surface+rho','f+g','f-g','f*g','f/g','2-f','2/f','-(f-g)',
       '(f+g)*0.5-surface/rho','f/(f-f)','pow(1000-f,0.5)','mag(f,g)',
       'sqrt(f*f+g*g)','maskout(f,(f>2000)-0.5)',
+      'if(f>1000,f,g)','if(1,f,g)','if(-1,f,g)',
       '(f>1000)&(g<20000)','(f<1000)||(g>20000)','f!=g']
 maths=['pow(f,2)','abs(-f)','exp(f/10000)','log(f)','log10(f)',
        'sin(f/10000)','cos(f/10000)','tan(f/10000)',
@@ -159,8 +160,11 @@ command=zt+'define answer=f+g\nd answer\nd const(f,0)+g\nd esat(150+f/200)\nd qv
 compare(parse(run(ctls[1],command,missing=True)),parse(run(ctls[1],command,1,True,missing=True)))
 saved.rename(piece)
 
-# File/dimension qualifiers and unsupported functions stay local.
-for expr in ('f.1+g','f(t=2)+g','if(f>1000,f,g)'):
+# File qualifiers use workers; dimension qualifiers and unsupported functions stay local.
+command=zt+'define answer=f.1+g\nd answer\nd f.1+g\n'
+text=run(ctls[0],command);assert len(groups(text))==2
+compare(parse(text),parse(run(ctls[0],command,1,True)))
+for expr in ('f(t=2)+g','skip(f,2)'):
     command=zt+'define answer='+expr+'\nd answer\n'+('set t 1\n' if '(t=' in expr else '')+'d '+expr+'\n'
     text=run(ctls[0],command);assert not groups(text),expr
     compare(parse(text),parse(run(ctls[0],command,1,True)))
@@ -220,7 +224,7 @@ for expr in ('f+g','mag(f,g)','pow(f,2)','esat(150+f/200)',
     run(ctls[0],zt+'set gxout shaded\nd '+expr+'\nprintim '+str(c)+' x640 y480\n',1,True)
     assert a.read_bytes()==b.read_bytes()==c.read_bytes(),('expression graphics differ',expr)
 
-heavy='('+ '+'.join(['sin(f)']*32)+')/32+pow(g,2)*0.000001+qvsat(150+f/200,100000)+esat(150+g/200)*0.0001'
+heavy='('+ '+'.join(['sin(f)']*32)+')/32+pow(g,2)*0.000001+qvsat(150+f/200,100000)+esat(150+g/200)*0.0001+if(f>1000,1,0)'
 def terminal(cancel=False,fail=False,off=False):
     e=dict(env,GA_PROGRESS='off' if off else '.000001',GA_TIME_WORKERS='auto',LANG='C',LC_ALL='C',LC_TERMINAL='iTerm2')
     e.pop('TMUX',None)

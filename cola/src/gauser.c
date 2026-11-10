@@ -663,7 +663,7 @@ FILE *pdefid=NULL;
 #endif
 
   /* if command is NOT clear ...*/
-  if (!(cmpwrd("clear",cmd) || cmpwrd("c",cmd) || cmpwrd("cc",cmd))) {
+  if (!(cmpwrd("clear",cmd) || cmpwrd("c",cmd) || cmpwrd("cc",cmd) || cmpwrd("x",cmd))) {
     gxfrme (9);  /* ... clear the X request buffer */
   }
 
@@ -942,8 +942,8 @@ FILE *pdefid=NULL;
     gaprnt (2,pout);
     goto retrn;
   }
-  else if (cmpwrd("clear",cmd) || cmpwrd("c",cmd) || cmpwrd("cc",cmd)) {
-    keepcanvas = cmpwrd("cc",cmd);
+  else if (cmpwrd("clear",cmd) || cmpwrd("c",cmd) || cmpwrd("cc",cmd) || cmpwrd("x",cmd)) {
+    keepcanvas = cmpwrd("cc",cmd) || cmpwrd("x",cmd);
     canvasaa = pcm->aaflg;
     rc = keepcanvas ? 1 : 0;
     if ((cmd=nxtwrd(cmd)) != NULL) {
