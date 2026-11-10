@@ -44,7 +44,10 @@ jobs:
       - name: Build, test, and package
         env:
           OPENGRADS_BUILD_JOBS: 4
-        run: ./release/build-release.sh
+        run: |
+          export PATH="/opt/python/cp311-cp311/bin:$PATH"
+          python3 --version
+          ./release/build-release.sh
 
       - name: Verify archive
         run: |
