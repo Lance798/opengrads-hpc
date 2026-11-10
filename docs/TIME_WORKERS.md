@@ -141,7 +141,7 @@ reduce spatially inside each worker return far less data.
 
 ## Cross-file expressions
 
-File qualifiers use the shared expression path for all 46 supported built-ins,
+File qualifiers use the shared expression path for all 47 supported built-ins,
 in DEFINE, eligible T/Z-T DISPLAY and input-time reductions. For example, in a
 fresh session:
 
@@ -183,16 +183,44 @@ the incomplete output and preserves an existing DEFINE. Cancellation and
 progress follow the same rules as single-file expressions.
 
 `GA_TIME_TRACE=1` adds `Time file inputs: count=... default=...` when more than
-one descriptor is reopened. `TestTimeFileInputs.sh` compares all 46 functions
+one descriptor is reopened. `TestTimeFileInputs.sh` compares all 47 functions
 at 1/4/8 cores across HDF5, classic NetCDF, compressed NetCDF-4 and BP5. It also
 checks ordinal remapping, changed defaults, equal data paths with distinct
 axes/clocks, native binary profiles, mixed open methods, source limits,
 DEFINE shadowing, cancellation and killed-worker recovery.
 
+## Circular X/Y shifts
+
+`roll(expr, integer_shift, x|y)` moves values and their missing mask within the
+evaluated grid; coordinates stay unchanged. DEFINE workers retain each XY
+plane, including output Z/T series. Input-time workers retain their XY/XZ/YZ
+shape. Singleton X/Y axes are unchanged, so ordinary T/ZT profile DISPLAY
+also keeps its native behavior. Existing outer spatial reductions evaluate
+ROLL within the grid they establish. Native X/T or Y/T DISPLAY continues
+through the ordinary evaluator. See [ROLL.md](ROLL.md) for shift direction,
+selected-domain boundaries and nested calls.
+
+```text
+set x 1 512
+set y 1 512
+set z 1
+set t 1 32
+define west=roll(qv,1,x)
+set t 1
+define accumulated=sum(roll(qv,-1,x)*qv,t=1,t=32)
+```
+
+`TestRoll.sh` verifies independent permutations, bit-preserving copies and
+optional NumPy comparisons. `TestTimeRoll.sh` checks serial versus 4/8 workers
+on HDF5, NetCDF/NetCDF-4 and BP5, including file-qualified inputs, static
+snapshots, templates, missing times, parent fallback, cancellation and failure
+recovery. Parent profile fallback retains original file numbers when no
+workers start; compact worker ordinals are published only for worker jobs.
+
 ## Built-in function audit
 
-The `rtnprs` registry in `cola/src/gafunc.c` contains 66 built-in names.
-The time-worker allowlist contains 46 of them. Eligibility depends on the
+The `rtnprs` registry in `cola/src/gafunc.c` contains 67 built-in names.
+The time-worker allowlist contains 47 of them. Eligibility depends on the
 complete expression and command shape; it does not imply that every argument
 or dimension combination is parallelized.
 
@@ -205,7 +233,7 @@ or dimension combination is parallelized.
 | Averages and sums | `ave`, `mean`, `sum`, `sumg`, `aave`, `amean`, `asum`, `asumg`, `atot` |
 | Dimension extrema | `min`, `max`, `minloc`, `maxloc` |
 | Area extrema | `amin`, `amax`, `aminlocx`, `aminlocy`, `amaxlocx`, `amaxlocy` |
-| Spatial neighbors | `hdivg`, `hcurl`, `smth9`, `cdiff` |
+| Spatial neighbors | `hdivg`, `hcurl`, `smth9`, `cdiff`, `roll` |
 | Vertical operations | `zint`, `vint`, `zslice` |
 
 The twenty additional names use the existing evaluator in each process.
@@ -312,7 +340,7 @@ Native input-time reads retain their batching/work thresholds, while whole
 input expressions require at least 32 requested times. These rules are shared
 with HDF5. Short commands and `GA_TIME_WORKERS=off` keep ordinary evaluation.
 
-All 46 functions listed above are supported for both formats under the same
+All 47 functions listed above are supported for both formats under the same
 expression/environment restrictions. This does not extend worker eligibility
 to every GrADS built-in. Static session-defined inputs such as
 `define rho=rho.2` can accompany native fields in workers. Native file-qualified
@@ -340,7 +368,7 @@ native fields in the default NC descriptor, such as
 does not calculate CWV. Native NC profiles with absent X/Y/T axes are
 broadcast from their actual shape, including missing masks and unpacking.
 
-`TestNetCDFTimeWorkers.sh` runs seven time-worker suites, including
+`TestNetCDFTimeWorkers.sh` runs eight time-worker suites, including
 `TestTimeFileInputs.sh`, against
 both classic and compressed NetCDF-4, including regular/template/reversed
 files, all supported functions, packed data, missing template times, progress,

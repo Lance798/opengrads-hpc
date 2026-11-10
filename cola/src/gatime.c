@@ -186,7 +186,7 @@ static int time_expression(char *expr, struct gastat *pst,struct time_inputs *in
     "asum","atot","maskout","zint","abs","sqrt","exp","log","log10",
     "sin","cos","tan","asin","acos","atan2","pow","mag","const",
     "esat","qvsat","if","hdivg","hcurl","vint","zslice",
-    "tvrh2q","tvrh2t","smth9","cdiff","asumg",
+    "tvrh2q","tvrh2t","smth9","cdiff","roll","asumg",
     "min","max","minloc","maxloc","amin","amax",
     "aminlocx","aminlocy","amaxlocx","amaxlocy",NULL};
   static const char *words[]={"x","y","z","t","e","lon","lat","lev","ens","auto","global",
@@ -651,11 +651,13 @@ static int time_parallel(struct time_config *c,int t1,int t2,int incr,double *va
       if(sources.files[j]->adios2flg)c->cache_bytes+=64.0*1024*1024;
     }
     c->sources=sources.count-1;
-    memcpy(c->expression,sources.expression,strlen(sources.expression)+1);
   }
   c->definitions=inputs.count;c->definition_bytes=inputs.bytes;
   n=time_workers(c,nt);if(!n)return -1;
   if(time_spawn(n))return -1;
+  /* Parent profile fallbacks still evaluate against the original file list.
+     Publish compact child ordinals only after committing to worker execution. */
+  if(pst)memcpy(c->expression,sources.expression,strlen(sources.expression)+1);
   pool_active=n;
   if(getenv("GA_TIME_TRACE")) {
     offset=(size_t)snprintf(trace,sizeof(trace),"Time workers: workers=%d inner=1 times=%d levels=%d pids=",n,nt,c->z2-c->z1+1);

@@ -15,6 +15,7 @@
 #endif /* HAVE_CONFIG_H */
 
 #include <limits.h>
+#include <stdint.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -80,6 +81,7 @@ gaint ffsmax   (struct gafunc *, struct gastat *);
 gaint ffskip   (struct gafunc *, struct gastat *);
 gaint ffcnst   (struct gafunc *, struct gastat *);
 gaint ffcdif   (struct gafunc *, struct gastat *);
+gaint ffroll   (struct gafunc *, struct gastat *);
 gaint ffmn     (struct gafunc *, struct gastat *);
 gaint ffamn    (struct gafunc *, struct gastat *);
 gaint ffsum    (struct gafunc *, struct gastat *);
@@ -178,6 +180,7 @@ gaint (*fpntr)(struct gafunc *, struct gastat *);
   if (cmpwrd("skip",name)) fpntr = ffskip;
   if (cmpwrd("const",name)) fpntr = ffcnst;
   if (cmpwrd("cdiff",name)) fpntr = ffcdif;
+  if (cmpwrd("roll",name)) fpntr = ffroll;
   if (cmpwrd("mean",name)) fpntr = ffmn;
   if (cmpwrd("amean",name)) fpntr = ffamn;
   if (cmpwrd("sum",name)) fpntr = ffsum;
@@ -8298,6 +8301,85 @@ gaint ival;
 
    *iv = ival;
    return (0);
+}
+
+/* Roll the evaluated grid, including its mask, within the selected X/Y
+   extent. Coordinates and all other metadata stay in place. A fixed or
+   absent axis is a singleton. Decimal shifts are reduced digit by digit so
+   even values outside the machine integer range cannot overflow. */
+gaint ffroll (struct gafunc *pfc, struct gastat *pst) {
+  struct gagrid *grid;
+  char *digits,*end,*axis,*tail,*mask=NULL;
+  gadouble *values=NULL;
+  gaint dim,n,shift,row,source_row,rc,negative=0;
+  size_t count,width,at,source;
+  unsigned long long reduced=0;
+
+  if(pfc->argnum!=3)goto usage;
+  axis=pfc->argpnt[2];while(*axis==' ')axis++;
+  if(*axis!='x' && *axis!='y')goto usage;
+  dim=*axis++=='x' ? 0 : 1;
+  while(*axis==' ')axis++;
+  if(*axis)goto usage;
+  digits=pfc->argpnt[1];while(*digits==' ')digits++;
+  if(*digits=='-' || *digits=='+')negative=*digits++=='-';
+  end=digits;while(*end>='0' && *end<='9')end++;
+  if(end==digits)goto usage;
+  tail=end;while(*tail==' ')tail++;
+  if(*tail)goto usage;
+
+  rc=gaexpr(pfc->argpnt[0],pst);if(rc)return rc;
+  if(pst->type!=1) {
+    gaprnt(0,"ROLL error: expression must return a grid\n");
+    gafree(pst);return 1;
+  }
+  grid=pst->result.pgr;
+  if(dim==grid->idim)n=grid->isiz;
+  else if(dim==grid->jdim)n=grid->jsiz;
+  else return 0;
+  if(n<=1)return 0;
+  while(digits<end)reduced=(reduced*10+(unsigned)(*digits++-'0'))%(unsigned)n;
+  if(negative && reduced)reduced=(unsigned)n-reduced;
+  shift=(gaint)reduced;
+  if(!shift)return 0;
+  if(grid->isiz<1 || grid->jsiz<1 ||
+     (size_t)grid->isiz>SIZE_MAX/(size_t)grid->jsiz)goto size_error;
+  count=(size_t)grid->isiz*grid->jsiz;
+  if(count>SIZE_MAX/sizeof(*values))goto size_error;
+  values=galloc(count*sizeof(*values),"rollvalues");
+  mask=galloc(count,"rollmask");
+  if(!values || !mask) {
+    if(values)gree(values,"rollvalues");
+    if(mask)gree(mask,"rollmask");
+    gaprnt(0,"ROLL error: unable to allocate result grid\n");
+    gafree(pst);return 1;
+  }
+  width=(size_t)grid->isiz;
+#if USEOPENMP == 1
+#pragma omp parallel for schedule(static) private(at,source,source_row) if(grid->jsiz>1 && ga_omp_parallelize(count>INT_MAX ? INT_MAX : (gaint)count))
+#endif
+  for(row=0;row<grid->jsiz;row++) {
+    at=(size_t)row*width;
+    if(dim==grid->idim) {
+      source=at+width-shift;
+      memcpy(values+at,grid->grid+source,(size_t)shift*sizeof(*values));
+      memcpy(mask+at,grid->umask+source,(size_t)shift);
+      memcpy(values+at+shift,grid->grid+at,(width-shift)*sizeof(*values));
+      memcpy(mask+at+shift,grid->umask+at,width-shift);
+    } else {
+      source_row=row>=shift ? row-shift : row+(n-shift);
+      source=(size_t)source_row*width;
+      memcpy(values+at,grid->grid+source,width*sizeof(*values));
+      memcpy(mask+at,grid->umask+source,width);
+    }
+  }
+  gree(grid->grid,"rollsource");gree(grid->umask,"rollsource");
+  grid->grid=values;grid->umask=mask;
+  return 0;
+size_error:
+  gaprnt(0,"ROLL error: grid is too large\n");gafree(pst);return 1;
+usage:
+  gaprnt(0,"ROLL error: expected roll(expr, integer_shift, x|y)\n");return 1;
 }
 
 gaint ffcdif (struct gafunc *pfc, struct gastat *pst) {

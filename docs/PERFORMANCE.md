@@ -1,6 +1,6 @@
 # Calculation performance
 
-The current worker allowlist covers 46 of the 66 built-ins, including spatial
+The current worker allowlist covers 47 of the 67 built-ins, including spatial
 neighbors, extrema, pressure integrals, indexed vertical slices and IF. BP5
 complete expressions can use isolated time workers; unqualified native fields and
 ADIOS2 step batching keep their existing reader paths. Each BP5 worker uses
@@ -52,6 +52,54 @@ was shared, so these measurements establish the tested behavior rather than
 a general scaling guarantee. Build products, commands, logs, output hashes
 and timings for this check are under `tmp/real-crossfile` in the development
 workspace; the reusable synthetic regression is committed under `pytests`.
+
+## ROLL and terrain integration (2026-11-09)
+
+The current 47-function worker allowlist includes the new X/Y
+[`roll`](ROLL.md) built-in. It copies doubles and missing masks without
+arithmetic, keeping coordinates fixed and wrapping within the evaluated
+grid. Arbitrary signed decimal shifts are reduced modulo the axis length.
+Singleton X/Y axes retain their values. DEFINE and input-time reductions use
+the existing isolated workers; direct native X/T and Y/T DISPLAY keep their
+normal grids.
+
+`TestRoll.sh` checks 19,572 analytic values at 1/4/8 threads and complete
+parallel-grid float32 bit patterns, including missing cells, signed zero and
+nonfinite values. An additional NumPy 1.17.3 oracle agreed on 260 value/mask
+permutations. `TestTimeRoll.sh` and the expanded 47-function cross-file suite
+passed with HDF5, classic NetCDF, compressed NetCDF-4 and BP5. These include
+output/input-time shapes, static snapshots, missing template steps, parent
+fallback, cancellation, killed workers and failed startup/retry. ASan/UBSan
+passed the unit suite and HDF5/NetCDF-4/BP5 worker suites; optional-feature
+compile checks covered builds without OpenMP, POSIX workers and ADIOS2.
+
+On the three supplied datasets, t=1..32 tests covered X, Y, nested X/Y,
+cross-file shifts and an input-time SUM. Domains were 512x512 for Taiwan BP5
+and Puerto Rico NetCDF, and 512x64 for sea_grass_mountain HDF5. New 1/4/8-core
+outputs matched independent NumPy permutations of unshifted exports from the
+preceding executable: 215,580,672 complete float32 positions agreed bitwise.
+Another 3,483 finite double probes, taken at the corresponding unshifted
+source positions, had maximum absolute difference zero. Full precision is
+checked only at these sampled positions; every float32 output is checked.
+
+The periodic paths of `vvmtopo` now use ROLL and IF, removing scalar boundary
+queries and subtraction/addition reconstruction. All three complete native
+terrain domains matched the original script at four cores, and the analytic
+suite includes finite neighbors with widely separated magnitudes. A local
+Taiwan 1024x1024 series measured these medians over five runs:
+
+| Script | Cores | Seconds |
+| --- | ---: | ---: |
+| Previous CDIFF script | 4 | 0.1052 |
+| ROLL script | 1 | 0.1125 |
+| ROLL script | 4 | 0.0860 |
+| ROLL script | 8 | 0.1062 |
+
+These timings include source reads and definitions and exclude startup,
+exports and graphics. They were collected on a shared host with warm file
+cache; more cores did not consistently help this short, memory-bound job.
+Commands, hashes and timing records are under `tmp/roll` in the development
+workspace.
 
 ## Height-coordinate column integrals
 

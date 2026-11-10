@@ -71,6 +71,17 @@ for name,nx,ny,data,cyclic in cases:
             assert grids(text)==expected,(name,command,n,grids(text),expected)
             count+=sum(map(len,expected))
     print('vvmtopo analytic/defaults/library lookup passed:',name,flush=True)
+# Periodic neighbors are copied without subtract/add reconstruction, even
+# when neighboring finite heights have very different magnitudes.
+wide=[-1e30,1.,1e30,0.,2.,-1e30,4.,1.,1e30,3.,-1e30,2.]
+wide=list(struct.unpack('=12f',struct.pack('=12f',*wide)))
+ctl=root/'wide.ctl';ctl.write_text((root/'small.ctl').read_text().replace('^small.dat','^wide.dat'))
+(root/'wide.dat').write_bytes(struct.pack('=12f',*wide))
+c=[1. if h==0 else h for h in wide]
+u=[max(c[y*4+x],c[y*4+(x+1)%4]) for y in range(3) for x in range(4)]
+v=[max(c[y*4+x],c[((y+1)%3)*4+x]) for y in range(3) for x in range(4)]
+for n in (1,4,8):
+    assert grids(run(ctl,'vvmtopo topo',n))==[u,v,c,c,wide]
 # Calls from another .gs script use the same installed command lookup.
 driver=root/'caller.gs';driver.write_text("'vvmtopo topo'\nsay result\n")
 text=run(root/'small.ctl','run '+str(driver))

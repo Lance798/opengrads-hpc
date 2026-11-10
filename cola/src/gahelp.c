@@ -317,6 +317,7 @@ static const struct gahelp funcs[] = {
   {"oabin",    "oabin(grid_expr, stn_expr <,-flag>)", NULL, NULL},
   {"oacres",   "oacres(grid_expr, stn_expr <,radii>)", NULL, NULL},
   {"pow",      "pow(expr1, expr2)", "pow(u, 2)", NULL},
+  {"roll",     "roll(expr, integer_shift, x|y)", "roll(ts, -1, x)", NULL},
   {"s2g1d",    "s2g1d(stn_expr)", NULL, NULL},
   {"scorr",    "scorr(expr1, expr2, xdim1, xdim2, ydim1, ydim2)", "scorr(ts, ts.2, lon=0, lon=360, lat=-90, lat=90)", NULL},
   {"sin",      "sin(expr)", NULL, NULL},

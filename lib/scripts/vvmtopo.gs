@@ -7,12 +7,13 @@
 * topou=max(this,right), topov=max(this,next-row), topow=toposrc.
 * Uses the full native default-file grid at Z=1,T=1 and leaves that domain set.
 * Input must be finite, fully defined terrain elevations/level indices.
-* CDIFF reconstructs neighbors with double subtraction/addition; validated
-* on the small integer VVM terrain indices. Missing/nonfinite data and huge
-* differences in magnitude are outside this script's input contract.
+* Periodic neighbors are copied exactly by ROLL. Closed boundaries use
+* forward CDIFF, validated on small integer VVM terrain indices.
+* Missing/nonfinite data and huge magnitude differences with closed edges
+* are outside this script's input contract.
 * Replaces the four result variables above; the input field is preserved
 * unless it has one of those reserved result names.
-* Bulk grid operations use OpenMP when available; loops only visit edges.
+* Bulk grid operations use OpenMP when available; no per-cell script loops.
 function main(args)
   fld = subwrd(args,1)
   px = subwrd(args,2)
@@ -54,62 +55,51 @@ function main(args)
     say 'Error: could not define topow.'
     return
   endif
-  if (nx > 1)
-    'define topou = const(cdiff(toposrc,xp),0,-u)'
+  if (px = 1)
+    'define topou = roll(toposrc,-1,x)'
     if (rc != 0)
-      say 'Error: could not compute X neighbors.'
+      say 'Error: could not roll X neighbors.'
       return
     endif
-    'define topou = toposrc+if(topou>0,topou,0)'
+    'define topou = if(toposrc>topou,toposrc,topou)'
   else
-    'define topou = toposrc'
+    if (nx > 1)
+      'define topou = const(cdiff(toposrc,xp),0,-u)'
+      if (rc != 0)
+        say 'Error: could not compute X neighbors.'
+        return
+      endif
+      'define topou = toposrc+if(topou>0,topou,0)'
+    else
+      'define topou = toposrc'
+    endif
   endif
   if (rc != 0)
     say 'Error: could not define topou.'
     return
   endif
-  if (ny > 1)
-    'define topov = const(cdiff(toposrc,yp),0,-u)'
+  if (py = 1)
+    'define topov = roll(toposrc,-1,y)'
     if (rc != 0)
-      say 'Error: could not compute Y neighbors.'
+      say 'Error: could not roll Y neighbors.'
       return
     endif
-    'define topov = toposrc+if(topov>0,topov,0)'
+    'define topov = if(toposrc>topov,toposrc,topov)'
   else
-    'define topov = toposrc'
+    if (ny > 1)
+      'define topov = const(cdiff(toposrc,yp),0,-u)'
+      if (rc != 0)
+        say 'Error: could not compute Y neighbors.'
+        return
+      endif
+      'define topov = toposrc+if(topov>0,topov,0)'
+    else
+      'define topov = toposrc'
+    endif
   endif
   if (rc != 0)
     say 'Error: could not define topov.'
     return
-  endif
-* CDIFF deliberately leaves the last point missing; CONST above makes its
-* increment zero. This preserves self-neighbors at nonperiodic boundaries,
-* including cyclic longitude grids. Explicit wrapping is applied only here.
-  if (px = 1 & nx > 1)
-    j = 1
-    while (j <= ny)
-      'q defval toposrc 1 'j
-      first = subwrd(result,3)
-      'q defval toposrc 'nx' 'j
-      last = subwrd(result,3)
-      if (first > last)
-        'set defval topou 'nx' 'j' 'first
-      endif
-      j = j+1
-    endwhile
-  endif
-  if (py = 1 & ny > 1)
-    i = 1
-    while (i <= nx)
-      'q defval toposrc 'i' 1'
-      first = subwrd(result,3)
-      'q defval toposrc 'i' 'ny
-      last = subwrd(result,3)
-      if (first > last)
-        'set defval topov 'i' 'ny' 'first
-      endif
-      i = i+1
-    endwhile
   endif
   say 'Created topou, topov, and topow from 'fld' (topo=0 treated as 1)'
   say 'Grid: 'nx' x 'ny' ; periodic_x='px' periodic_y='py

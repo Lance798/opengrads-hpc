@@ -56,8 +56,13 @@ libraries are available.
   scalars, profiles and masks can accompany native fields.
   `set threads N` controls the CPU budget; worker count and buffers are
   bounded. BP5 expressions can use workers while unqualified bare fields retain native
-  batching. The expression allowlist covers 46 built-ins. See
+  batching. The expression allowlist covers 47 built-ins. See
   [time-worker support and limits](docs/TIME_WORKERS.md).
+
+- **Circular grid shifts.** `roll(expr, shift, x|y)` moves values and missing
+  masks within the selected grid, preserving coordinates and exact stored
+  values. X/Y roll supports time workers and OpenMP. See
+  [ROLL usage](docs/ROLL.md).
 
 - **Restored self-describing-file access.** Release builds require NetCDF and
   UDUNITS support, so `sdfopen` and `xdfopen` remain available for compatible

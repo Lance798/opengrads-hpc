@@ -6,8 +6,8 @@ After opening a terrain dataset with the project's `opengrads` launcher, type:
 vvmtopo topo
 ```
 
-The launcher includes `lib/scripts` in `GASCRP`, so no script path, `.gs`
-extension or rebuild is needed. `run vvmtopo topo` also works, including
+The launcher includes `lib/scripts` in `GASCRP`, so no script path or `.gs` extension is needed. Use an executable with the
+ROLL built-in; restart GrADS after upgrading the executable. `run vvmtopo topo` also works, including
 inside another GrADS script. Release archives include the script library.
 The current directory and user-supplied `GASCRP` directories retain priority.
 
@@ -40,19 +40,26 @@ of these reserved result names. Input must contain fully defined, finite
 terrain values. These are obstruction envelopes for monotonically increasing
 terrain masks, rather than full ITYPE masks.
 
-Whole-grid IF and forward CDIFF operations replace per-cell interpreter
-commands. Only periodic edges use scalar queries. Grid calculations can use
-OpenMP via `set threads N`; the fixed single time does not use time workers.
-Neighbor reconstruction uses double subtraction/addition and is validated
-for the small integer VVM terrain indices; extreme magnitude differences
-and missing/nonfinite input are outside the script's contract.
+Whole-grid IF and [ROLL](ROLL.md) operations handle periodic neighbors with
+exact copies, including the boundary, without per-cell interpreter commands.
+Closed boundaries use forward CDIFF with a zero increment at the final cell.
+Grid calculations can use OpenMP via `set threads N`; the fixed single time
+does not use time workers. The closed-edge CDIFF path reconstructs neighbors
+with double subtraction/addition and is validated for the small integer VVM
+terrain indices. Extreme magnitude differences on that path and
+missing/nonfinite input are outside the script's contract.
 
-The underlying algorithm was compared with the original `itype_topo.gs` on
-all three supplied terrain datasets at 1/4/8 cores. Full U/V/W float32 outputs
-agreed. A Taiwan 1024x1024 benchmark with periodic X/Y boundaries measured
-12.02 s for the original script and 0.084 s for the vectorized script with
-four cores (medians of 3 and 5 runs, respectively). Timing includes source
+The ROLL script was compared with the original `itype_topo.gs` on all three
+supplied terrain datasets at four cores. Full U/V/W float32 outputs agreed.
+Its analytic tests also cover 1/4/8 threads, all boundary modes and periodic
+neighbors with widely separated finite magnitudes. A Taiwan 1024x1024 benchmark with periodic X/Y boundaries measured
+12.02 s for the original script and 0.084 s for the preceding CDIFF script with
+four cores (medians of 3 and 5 runs, respectively). Those measurements predate
+the ROLL integration. Timing includes source
 reads and definitions, excludes startup/export/graphics, and depends on host
 and cache conditions. `pytests/TestVVMTopo.sh` independently verifies numeric
 results, periodic defaults, explicit overrides and library lookup from a
 different working directory.
+
+See [ROLL performance validation](PERFORMANCE.md#roll-and-terrain-integration-2026-11-09)
+for the current script timings and worker numerical checks.

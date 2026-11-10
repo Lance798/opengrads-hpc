@@ -80,11 +80,11 @@ xy='set x 2 9\nset y 2 7\nset z 2\nset t 1 32\n'
 point='set x 5\nset y 3\nset z 2\nset t 1 32\n'
 zt='set x 5\nset y 3\nset z 1 4\nset t 1 32\n'
 area='x=2,x=9,y=2,y=7'
-maths=['abs(-f)','sqrt(abs(f))','exp(f/10000)','log(abs(f))','log10(abs(f))','sin(f/10000)','cos(f/10000)','tan(f/10000)','asin(sin(f/10000))','acos(cos(f/10000))','atan2(f,g)','pow(f,2)','mag(f,g)','const(f,0)','maskout(f,g-2000)','esat(150+f/200)','qvsat(150+f/200,100000)','zint(f*rho)']
+maths=['abs(-f)','sqrt(abs(f))','exp(f/10000)','log(abs(f))','log10(abs(f))','sin(f/10000)','cos(f/10000)','tan(f/10000)','asin(sin(f/10000))','acos(cos(f/10000))','atan2(f,g)','pow(f,2)','mag(f,g)','const(f,0)','maskout(f,g-2000)','esat(150+f/200)','qvsat(150+f/200,100000)','zint(f*rho)','roll(f,-1,x)']
 planes=['if(f>2000,f,g)','hdivg(f/10000,g/10000)','hcurl(f/10000,g/10000)','zslice(f,kmap)','smth9(f)','cdiff(f,x)']
 reductions=[fn+'(f,x=2,x=9)' for fn in ('ave','mean','sum','sumg','min','max','minloc','maxloc')]+[fn+'(f,'+area+')' for fn in ('aave','amean','asum','atot','asumg','amin','amax','aminlocx','aminlocy','amaxlocx','amaxlocy')]
 pressure=['vint(1000+surface/10000,f/1000000,100)','tvrh2q(250+f/10000,50+g/100000)','tvrh2t(250+f/10000,50+g/100000)']
-assert len(maths+planes+reductions+pressure)==46
+assert len(maths+planes+reductions+pressure)==47
 # Make every expression use two distinct source descriptors; the second
 # reverses stored Y/Z, so wrong ordinal mappings cannot accidentally agree.
 def qualify(expr):
@@ -110,6 +110,12 @@ body=zt+'define answer=f.3+g.4\nd answer\nclose 4\nopen '+str(ctls[False,False])
 expected=grids(run(body,1));text=run(body,4)
 assert len(groups(text))==2 and groups(text)[0][1]!=groups(text)[1][1]
 compare(grids(text),expected)
+# A serial profile fallback must keep the parent's original file ordinals.
+for last in (31,32):
+    area='aave(f.3+g.4,x=2,x=9,y=2,y=7)'
+    body=point.replace('1 32','1 '+str(last))+'define expected='+area+'\nd expected\nd '+area+'\n'
+    for n in (1,4,8):
+        values=grids(run(body,n));assert len(values)==2;compare(values[:1],values[1:])
 # Equal paths are separate descriptors; clocks map through world time.
 shift=root/'shift.ctl';shift.write_text(ctls[False,False].read_text().replace('00z01jan2000','01z01jan2000'))
 body=zt+'define answer=f.3+g.5\nd answer\nd f.3+g.5\n'
