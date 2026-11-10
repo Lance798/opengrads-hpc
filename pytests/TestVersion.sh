@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory(prefix='opengrads-version-') as tmp:
     (root/'cola/src').mkdir(parents=True,exist_ok=True);(root/'cola/src/VERSION').write_text(base+'\n')
    else:(root/'VERSION').write_text(f'opengrads-hpc {version}\nGrADS base {base}\n')
   def run(args,settings=env):
-   p=subprocess.run([str(root/'opengrads'),*args],env=settings,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=20)
+   p=subprocess.run([str(root/'opengrads'),*args],env=settings,universal_newlines=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=20)
    assert p.returncode==0,(kind,p.stdout,p.stderr)
    return p.stdout
   for version in (current,'73.21.9'):

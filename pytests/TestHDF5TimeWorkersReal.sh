@@ -40,7 +40,7 @@ def grids(text):
 def run(n):
     script=f'open {ctl}\nset threads {n}\nset gxout print\nset prnopts %.17g 32 1\n'+commands+'\nquit\n'
     start=time.monotonic()
-    p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','gxdummy'],input=script,text=True,
+    p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','gxdummy'],input=script,universal_newlines=True,
         stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=dict(env,GA_TIME_WORKERS='off' if n==1 else 'auto'),timeout=600)
     assert p.returncode==0 and not re.search(r'Error|ERROR|Time evaluation failed',p.stdout),p.stdout[-4000:]
     assert not any(int(x)>0 for x in re.findall(r'<RC> (-?\d+) </RC>',p.stdout)),p.stdout[-4000:]

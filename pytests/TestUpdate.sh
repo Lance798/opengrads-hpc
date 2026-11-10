@@ -64,16 +64,16 @@ sha256()
 mkdir -p "$work/site/releases/download"
 cat > "$work/server.py" <<'PYTHON'
 import http.server, os, socketserver, sys, time
-site = sys.argv[1]
-class Server(http.server.ThreadingHTTPServer):
+site = os.path.abspath(sys.argv[1])
+os.chdir(site)
+class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
     # Without the name lookup of 127.0.0.1 (socket.getfqdn) that
     # HTTPServer does at start, which can take long on macOS runners.
     def server_bind(self):
         socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[:2]
 class Handler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *a, **k):
-        super().__init__(*a, directory=site, **k)
     def log_message(self, fmt, *args):
         with open(os.path.join(site, 'requests.log'), 'a') as f:
             f.write(self.path + '\n')

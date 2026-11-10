@@ -97,7 +97,7 @@ def run(ctl,commands,n=4,off=False,missing=False,mem_kib=None):
     if mem_kib is not None:e.update(LD_PRELOAD=str(root/'slow.so'),GA_TEST_MEM_KIB=str(mem_kib))
     p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','Cairo'],
         input=f'open {ctl}\nset threads {n}\nset cachesf 2\nset gxout print\nset prnopts %.17g 32 1\n'+commands+'\nquit\n',
-        text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+        universal_newlines=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
         env=e,timeout=180)
     fatal=r'DEFINE error|DISPLAY error|Time evaluation failed|Syntax Error|Operation Error' if missing else r'Error|ERROR|Time evaluation failed'
     assert p.returncode==0 and not re.search(fatal,p.stdout) and not any(int(v)>0 for v in re.findall(r'<RC> (-?\d+) </RC>',p.stdout)),p.stdout[-3000:]

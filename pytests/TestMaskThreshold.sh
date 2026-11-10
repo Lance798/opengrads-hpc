@@ -58,7 +58,7 @@ def run(ctl,commands,n=1,probe=False,error=False,graphics=False):
     if probe:e['LD_PRELOAD']=str(root/'probe.so')
     p=subprocess.run([str(repo/'opengrads'),'-blu','-d','gxdummy','-h','Cairo' if graphics else 'gxdummy'],
         input=f'open {ctl}\nset threads {n}\nset x 1 64\nset y 1 64\nset z 1\nset t 1\nset gxout print\nset prnopts %.17g 32 1\n'+commands+'\nquit\n',
-        text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=e,timeout=120)
+        universal_newlines=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=e,timeout=120)
     fatal=bool(re.search(r'Error|ERROR|failed',p.stdout))
     assert p.returncode==0 and fatal==error,p.stdout[-3000:]
     if not error:assert not any(int(v)>0 for v in re.findall(r'<RC> (-?\d+) </RC>',p.stdout)),p.stdout[-3000:]

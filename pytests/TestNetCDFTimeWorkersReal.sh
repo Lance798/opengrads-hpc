@@ -27,7 +27,7 @@ def run(commands,workers=True):
     script=f'open {ctl}\nset threads {4 if workers else 1}\nset gxout print\nset prnopts %.17g 32 1\n'+commands+'\nquit\n'
     start=time.monotonic()
     result=subprocess.run([launcher,'-blu','-d','gxdummy','-h','gxdummy'],input=script,
-        text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+        universal_newlines=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
         env=dict(env,GA_TIME_WORKERS='auto' if workers else 'off'),timeout=600)
     text=result.stdout
     assert result.returncode==0 and not re.search(r'Error|ERROR|Time evaluation failed',text),text[-4000:]

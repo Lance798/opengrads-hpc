@@ -66,7 +66,7 @@ def groups(text):return re.findall(r'Time workers: workers=(\d+) inner=1 .*?pids
 def run(body,n=4,pressure=False,expect_error=False,extra='',missing=False):
  ctl=ctls[pressure,False];other=ctls[pressure,True]
  commands=f'open {other}\nopen {other}\nopen {ctl}\nopen {other}\nset dfile 3\n'+extra+f'\nset threads {n}\nset gxout print\nset prnopts %.17g 32 1\n'+body+'\nquit\n'
- p=subprocess.run([reference if n==1 else launcher,'-blu','-d','gxdummy','-h','Cairo'],input=commands,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=dict(env,GA_TIME_WORKERS='off' if n==1 else 'auto'),timeout=180)
+ p=subprocess.run([reference if n==1 else launcher,'-blu','-d','gxdummy','-h','Cairo'],input=commands,universal_newlines=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=dict(env,GA_TIME_WORKERS='off' if n==1 else 'auto'),timeout=180)
  fatal=r'DEFINE error|DISPLAY error|Time evaluation failed|Syntax Error|Operation Error|runtime error|AddressSanitizer' if missing else r'Error|ERROR|Time evaluation failed|runtime error|AddressSanitizer'
  bad=bool(re.search(fatal,p.stdout))
  assert p.returncode==0 and bad==expect_error,p.stdout[-6000:]
