@@ -67,7 +67,10 @@ libraries are available.
 - **Advanced scripts and extensions.** The bundled OpenGrADS script
   collection in [lib/scripts](lib/scripts) provides reusable plotting and
   analysis tools, including maps, panels, colour bars, meteorograms,
-  trajectories, and interpolation helpers. Plotting scripts from Bin Guan's
+  trajectories, and interpolation helpers. `vvmtopo topo` builds VVM terrain
+  obstruction fields `topou`, `topov`, and `topow`, with periodic X/Y boundaries
+  by default; `vvmtopo topo 0 0` disables wrapping. See
+  [vvmtopo usage](docs/VVMTOPO.md). Plotting scripts from Bin Guan's
   bGASL add 1-D graphs, shading with contours, vertical cross-sections,
   vectors, multi-panel layouts, legends, and publication-ready output.
   Chihiro Kodama's [gscript](lib/scripts/gscript) adds colour tables
