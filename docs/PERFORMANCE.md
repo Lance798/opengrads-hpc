@@ -21,6 +21,7 @@ using more than 16 CPUs. The four-core comparison was:
 
 | Operation | Previous executable | Current executable |
 | --- | ---: | ---: |
+| X MEAN displayed as YZ | 39.79 s | 1.27 s |
 | Y MEAN displayed as XZ | 21.55 s | 1.31 s |
 | Y MEAN defined across Z | exceeded the 180 s test cap | 1.30 s |
 | Z MEAN producing XY | 5.67 s | 0.83 s |
@@ -37,6 +38,14 @@ Current Y DISPLAY / Z MEAN / area-profile medians at 1, 4 and 8 cores were
 respectively. Eight cores were not consistently faster than four. Peak RSS
 across these cases was about 291-410 MiB, including native reader buffers.
 These warm-cache, shared-host observations are not a general scaling promise.
+
+A supplementary X MEAN check used the same Taiwan data and `u*u` expression,
+with Y/Z retained. Previous/current DISPLAY medians at 1/4/8 cores were
+52.66/1.84 s, 39.79/1.27 s and 41.60/1.52 s. Current DEFINE medians were
+1.84/1.26/1.53 s; its complete output was compared with the preceding DISPLAY,
+not a timed preceding DEFINE. The check matched another **1,271,808 exported
+float32 positions bitwise**. Commands and measurements are recorded in
+`tmp/spatial-prototype/X-AVERAGE.md` and `bench-x.json` during development.
 
 Additional checks used the supplied sea_grass_mountain HDF5 data (1024x64x69)
 and Puerto Rico NetCDF data (1024x1024x69). Staging small full-plane HDF5 Z/area
@@ -76,7 +85,7 @@ for shape restrictions and the numerical/worker-recovery regression commands.
 The dated measurements below describe the versions and workloads stated in
 each section; their earlier 24/26-function counts are historical.
 
-The 1.0.14 time-worker implementation now covers eligible classic NetCDF,
+The 1.0.14 time-worker implementation introduced eligible classic NetCDF,
 compressed NetCDF-4 and HDF5 expressions, including bounded static DEFINE
 inputs. The historical HDF5 measurements below describe their stated commits
 and hardware; they do not measure the later NetCDF or DEFINE-input extensions.
