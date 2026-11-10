@@ -1,6 +1,6 @@
 # Clear Canvas
 
-`clear canvas` (or `cc`, Clear Canvas) clears the whole picture and lets the
+`clear canvas` (or `cc` / `x`, Clear Canvas) clears the whole picture and lets the
 next display reuse your explicit plot settings. The plot, title, annotations, and color bar all
 disappear. Open files, defined variables, dimension selections, color
 definitions, map projection, plotting area, and axis options remain available.
@@ -19,8 +19,15 @@ d th
 
 The second plot uses the same levels and colors. Repeat `cc`, select another
 time or height, and display again without repeating the style commands.
-Both `clear canvas` and `cc` work as commands and in scripts. Neither accepts
-additional arguments. Tab completion includes `cc` and `clear canvas`.
+All three forms work as commands and in scripts and take no arguments. At the
+`ga->` prompt, enter `x` and press Enter; it is not a graphics-window key binding.
+Tab completion includes `x`, `cc`, and `clear canvas`. The dimension command
+`set x`, expressions such as `d x`, and definitions such as `x=ts+1` keep their
+existing meanings.
+
+As a built-in command, bare `x` takes precedence over implicitly running a
+same-named script. Use `run x.gs` to run such a script explicitly. A registered
+user-defined command named `x` retains its existing priority.
 
 ## Settings and automatic scaling
 
@@ -56,7 +63,7 @@ or `stat`) does not replace the remembered graphical style.
 | --- | --- |
 | `c` / `clear` | Clear the picture and reset the usual per-frame user options. |
 | `clear norset` | Clear the picture while keeping options that are still live; does not restore options already consumed by `display`. |
-| `clear canvas` / `cc` | Clear the picture, keep live options, and restore explicit one-display settings for reuse. |
+| `clear canvas` / `cc` / `x` | Clear the picture, keep live options, and restore explicit one-display settings for reuse. |
 
 The existing commands are unchanged: two displays without `cc` still use the
 normal one-display option lifecycle. Ordinary clears, `reset`, `reinit`, and
