@@ -99,7 +99,9 @@ def grids(text):
 def run(launcher,n,mode):
     p=subprocess.run([str(launcher),'-blu','-d','gxdummy','-h','gxdummy'],
        input='set threads '+str(n)+'\n'+script,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,
-       env=dict(os.environ,GA_TIME_WORKERS='off',GA_SPATIAL_BATCH=mode),timeout=180)
+       env=dict(os.environ,GA_TIME_WORKERS='off',GA_SPATIAL_BATCH=mode,
+                OPENGRADS_COLOR='0',GA_PROGRESS='off',OPENGRADS_UPDATE_CHECK='0'),
+       timeout=180)
     (work/(Path(launcher).name+'-'+str(n)+'-'+mode+'.log')).write_text(p.stdout)
     assert p.returncode==0 and not re.search(r'Error|ERROR|AddressSanitizer|runtime error',p.stdout),p.stdout[-6000:]
     return grids(p.stdout)
