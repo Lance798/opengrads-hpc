@@ -37,7 +37,7 @@ def same(a,b):
 
 def run(body,n=4,path=ctl,error=False):
     text=f'open {path}\nset threads {n}\nset gxout print\nset prnopts %.17g 32 1\n'+body+'\nquit\n'
-    p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','gxdummy'],input=text,text=True,
+    p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','gxdummy'],input=text,universal_newlines=True,
         stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env,timeout=90)
     assert p.returncode==0,p.stdout[-3000:]
     assert bool(re.search(r'Error|ERROR|ROLL error|AddressSanitizer|runtime error',p.stdout))==error,p.stdout[-4000:]
@@ -118,7 +118,7 @@ for r in req:
  out.append(b.ravel().tolist())
 json.dump(out,sys.stdout)
 '''
-    p=subprocess.run([os.environ['GA_TEST_NUMPY_PYTHON'],'-c',code],input=json.dumps(requests),text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=60)
+    p=subprocess.run([os.environ['GA_TEST_NUMPY_PYTHON'],'-c',code],input=json.dumps(requests),universal_newlines=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=60)
     assert p.returncode==0,p.stderr
     for r,a in zip(requests,json.loads(p.stdout)):
         same(a,expected(r['data'],r['shape'],r['axis'],int(r['shift'])))

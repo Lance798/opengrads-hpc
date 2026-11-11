@@ -74,7 +74,7 @@ def compare(a,b):
             assert e<=1e-8+2e-12*abs(y),(x,y)
 def groups(text):return re.findall(r'Time workers: workers=(\d+) inner=1 .*?pids=([0-9,]+)',text)
 def run(ctl,body,n=4,error=False,opener="open"):
-    p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','Cairo'],input=f'{opener} {ctl}\nset threads {n}\nset gxout print\nset prnopts %.17g 32 1\n'+body+'\nquit\n',text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=dict(env,GA_TIME_WORKERS='off' if n==1 else 'auto'),timeout=180)
+    p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','Cairo'],input=f'{opener} {ctl}\nset threads {n}\nset gxout print\nset prnopts %.17g 32 1\n'+body+'\nquit\n',universal_newlines=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=dict(env,GA_TIME_WORKERS='off' if n==1 else 'auto'),timeout=180)
     bad=bool(re.search(r'Error|ERROR|Time evaluation failed|runtime error|AddressSanitizer',p.stdout))
     assert p.returncode==0 and bad==error,p.stdout[-6000:]
     for count,pids in groups(p.stdout):

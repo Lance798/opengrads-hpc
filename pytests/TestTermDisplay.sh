@@ -656,7 +656,7 @@ if where == 'direct':
     def keys(c):
         os.write(fd, (c + '\r').encode())
 else:
-    subprocess.run(tm + ['kill-server'], capture_output=True, env=env)
+    subprocess.run(tm + ['kill-server'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     subprocess.run(tm + ['new-session', '-d', '-s', 'k', '-x', str(COLS), '-y', str(ROWS),
                    launcher + ' -l -d Term; sleep 30'], env=env, check=True)
     fd, slave = pty.openpty()
@@ -707,8 +707,8 @@ def pump(most, idle):
 def screen():
     if where == 'direct':
         return out.decode('utf-8', 'replace')
-    return subprocess.run(tm + ['capture-pane', '-p', '-J', '-t', 'k:0.0'], capture_output=True,
-                          text=True, env=env).stdout
+    return subprocess.run(tm + ['capture-pane', '-p', '-J', '-t', 'k:0.0'], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          universal_newlines=True, env=env).stdout
 def prompts():
     return screen().count('ga->')
 end = time.time() + 30
@@ -739,7 +739,7 @@ if where == 'direct':
         print('exit hung')
 else:
     client.terminate()
-    subprocess.run(tm + ['kill-server'], capture_output=True, env=env)
+    subprocess.run(tm + ['kill-server'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
 d = bytes(out)
 print('asked', ' '.join(sorted(set(asked))) or 'nothing')
 
@@ -955,24 +955,24 @@ def when(i):
         t = at
     return '%.2f' % (t - t0) if t else '?'
 def fmt(f):
-    return subprocess.run(tm + ['display-message', '-p', '-t', 't:0.0', f], capture_output=True,
-                          text=True, env=env).stdout.strip()
+    return subprocess.run(tm + ['display-message', '-p', '-t', 't:0.0', f], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          universal_newlines=True, env=env).stdout.strip()
 def keys(*k):
     subprocess.run(tm + ['send-keys', '-t', 't:0.0'] + list(k), check=True, env=env)
 pump(3, 3)
 panes = subprocess.run(tm + ['list-panes', '-t', 't', '-F', '#{pane_id} #{pane_left} #{pane_top}'],
-                       capture_output=True, text=True, env=env).stdout.split()
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=env).stdout.split()
 keys('open ' + ctl, 'Enter'); pump(2, 1)
 t0 = time.time()
 keys('run ' + root + '/dbuffloop.gs', 'Enter'); pump(120, 3)
 print('pumped %.2f' % (time.time() - t0))
 discarded = fmt('#{client_discarded}')
 keys('quit', 'Enter'); pump(3, 1)
-version = subprocess.run([tmux, '-V'], capture_output=True, text=True, env=env).stdout.strip()
-after = subprocess.run(tm + ['list-panes', '-t', 't'], capture_output=True, text=True,
+version = subprocess.run([tmux, '-V'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=env).stdout.strip()
+after = subprocess.run(tm + ['list-panes', '-t', 't'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
                        env=env).stdout
 client.terminate()
-subprocess.run(tm + ['kill-server'], capture_output=True, env=env)
+subprocess.run(tm + ['kill-server'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
 d = bytes(out)
 print('panes', len(panes) // 3)
 if len(panes) != 6:
@@ -1089,7 +1089,7 @@ subprocess.run(tm + ['select-window', '-t', 'h:0'], env=env, check=True); pump(3
 print('back', pics() - n)
 keys('quit', 'Enter'); pump(1)
 client.terminate()
-subprocess.run(tm + ['kill-server'], capture_output=True, env=env)
+subprocess.run(tm + ['kill-server'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
 PYTHON
 result="$(python3 "$test_root/hidden.py" "$launcher" "$model_ctl" "$test_root" \
   "$viewer" "$build_root" "$tmux_bin" 2>&1)" || \

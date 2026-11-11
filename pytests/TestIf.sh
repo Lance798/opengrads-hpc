@@ -34,13 +34,13 @@ with tempfile.TemporaryDirectory(prefix='opengrads-if.') as directory:
         setup=f'open {ctl}\nset x 1 {nx}\nset y 1 {ny}\nset z 1 {nz}\nset gxout print\nset prnopts %.17g 32 1\n'
         for n in (1,4,16):
             body=setup+f'set threads {n}\n'+''.join('d '+expr+'\n' for expr,wanted in cases)+'d if(1,7,9)\nd if(-1,7,9)\nquit\n'
-            p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','gxdummy'],input=body,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env,timeout=60)
+            p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','gxdummy'],input=body,universal_newlines=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env,timeout=60)
             assert p.returncode==0 and not re.search(r'Error|ERROR|Invalid expression|AddressSanitizer|runtime error',p.stdout),p.stdout
             actual=grids(p.stdout);wanted=[w for expr,w in cases]+[[7.],[9.]]
             assert actual==wanted,(name,n,actual,wanted)
             count+=sum(map(len,actual))
         # A failed branch must release temporary grids without poisoning reuse.
-        p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','gxdummy'],input=setup+'d if(f>0,f,notavariable)\nd if(f>0,f,-f)\nquit\n',text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env,timeout=60)
+        p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','gxdummy'],input=setup+'d if(f>0,f,notavariable)\nd if(f>0,f,-f)\nquit\n',universal_newlines=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env,timeout=60)
         assert p.returncode==0 and 'Error' in p.stdout,p.stdout
         assert grids(p.stdout)==[[3.,2.,1.,0.,1.,2.,3.,None]],p.stdout
 print(f'IF regression passed: {count} analytic scalar/X/Z/XY values; masks, scalar branches, nested conditions and error recovery; 1/4/16 threads.')

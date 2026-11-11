@@ -81,7 +81,7 @@ def compare(a,b):
 def run(ctl,commands,n=4,off=False,missing=False):
     p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','Cairo'],
         input=f'open {ctl}\nset threads {n}\nset gxout print\nset prnopts %.17g 32 1\n'+commands+'\nquit\n',
-        text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+        universal_newlines=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
         env=dict(env,GA_TIME_WORKERS='off' if off else 'auto'),timeout=180)
     fatal=r'DEFINE error|DISPLAY error|Time evaluation failed|Syntax Error|Operation Error' if missing else r'Error|ERROR|Time evaluation failed'
     assert p.returncode==0 and not re.search(fatal,p.stdout),p.stdout[-5000:]

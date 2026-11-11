@@ -64,7 +64,7 @@ def assert_dead(text):
 def run(ctl,commands,n=4,off=False,missing=False,error=False,opener='open'):
     e=dict(env,GA_TIME_WORKERS='off' if off else 'auto')
     text=f'{opener} {ctl}\nset threads {n}\nset gxout print\nset prnopts %.17g 32 1\n'+commands+'\nquit\n'
-    p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','Cairo'],input=text,text=True,
+    p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','Cairo'],input=text,universal_newlines=True,
         stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=e,timeout=180)
     # A missing template produces HDF5 diagnostics but remains a successful
     # GrADS command with missing values. Still reject every nonzero command RC.

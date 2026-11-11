@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  # Push a branch, then select it under Actions > CI > Run workflow.
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    uses: ./.github/workflows/build.yml
+    with:
+      skip-artifact-upload: true
+
+  ci-passed:
+    # Use this stable check name in the main branch's required status checks.
+    name: CI passed
+    if: ${{ always() }}
+    needs: [build-and-test]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Require all builds and tests to pass
+        env:
+          BUILD_RESULT: ${{ needs.build-and-test.result }}
+        run: |
+          if [[ "$BUILD_RESULT" != success ]]; then
+            printf 'Build and test result: %s\n' "$BUILD_RESULT" >&2
+            exit 1
+          fi

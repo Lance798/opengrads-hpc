@@ -32,7 +32,7 @@ import math,os,pty,re,select,signal,subprocess,sys,time
 from pathlib import Path
 repo,root=map(Path,sys.argv[1:]);env=dict(os.environ,OPENGRADS_COLOR='0',GA_PROGRESS='off',GA_ZINT_TRACE='1')
 launcher=str(repo/'opengrads')
-config=subprocess.run([launcher,'-blu','-d','gxdummy','-h','gxdummy'],input='q config\nquit\n',text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env,timeout=30).stdout
+config=subprocess.run([launcher,'-blu','-d','gxdummy','-h','gxdummy'],input='q config\nquit\n',universal_newlines=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env,timeout=30).stdout
 version=re.search(r'hdf5-(\d+)\.',config)
 if not version or int(version[1])<2 or not re.search(r'^Config:.*\bopenmp\b',config,re.M):
     print('SKIP: parallel raw decoding needs HDF5 2 and OpenMP');sys.exit(0)
@@ -60,7 +60,7 @@ def compare(a,b):
 def run(ctl,commands,n=4,off=False,error=False,graphics=False):
     p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','Cairo' if graphics else 'gxdummy'],
         input=f'open {ctl}\nset threads {n}\nset gxout print\nset prnopts %.17g 32 1\nset z 1\nset t 1\n'+commands+'\nquit\n',
-        text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=dict(env,GA_H5_DECODE='off' if off else 'auto'),timeout=180)
+        universal_newlines=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=dict(env,GA_H5_DECODE='off' if off else 'auto'),timeout=180)
     assert p.returncode==0,p.stdout[-2000:]
     bad=bool(re.search(r'Error|ERROR|failed',p.stdout))
     assert bad==error,p.stdout[-2000:]

@@ -31,7 +31,7 @@ def run(ctl,command,n=4):
     if ctl:
         body+='\n'.join('d '+f for f in ('topou','topov','topow','toposrc','topo'))+'\n'
     p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','gxdummy'],
-        input=body+'quit\n',text=True,cwd=root,env=env,
+        input=body+'quit\n',universal_newlines=True,cwd=root,env=env,
         stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=60)
     assert p.returncode==0 and not re.search(r'Error|ERROR|Unknown command|Syntax Error',p.stdout),p.stdout[-5000:]
     assert 'Time workers:' not in p.stdout
