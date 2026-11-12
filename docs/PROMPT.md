@@ -11,7 +11,8 @@ build (`q config` lists `readline`; the release archives have it).
 
 | Where | Tab offers |
 |---|---|
-| start of the line | commands (`display`, `set`, `q`, ...) |
+| empty line | files and directories in the current directory |
+| start of the line, with a prefix | commands (`display`, `set`, `q`, ...), local file names, and `.gs` scripts along `GASCRP`; `run` is optional |
 | `set ` | the set options |
 | `set gxout `, `set grads `, ... | that option's keywords: `on`/`off`, the kinds of `gxout`, the `mpdset` resolutions, the `sdfwrite` flags, ... |
 | `set dfile `, `close `, `q file ` | the numbers of the open files |
@@ -21,6 +22,27 @@ build (`q config` lists `readline`; the release archives have it).
 | `undefine `, `sdfwrite `, `q define ` | defined variables |
 | `run ` | scripts (`.gs`) in the current directory and along `GASCRP` |
 | `open `, `sdfopen `, `bpopen `, `printim `, ... | file names, `~` included |
+| `!` or `! ` followed by a command prefix | executable files along `PATH`, plus local file names |
+| arguments after `!ls`, `! ls`, or another shell escape | file names and directories |
+| arguments of a script or an unknown command | file names and directories |
+
+Directories complete with a trailing `/`, so another Tab can continue into
+them. Explicit paths such as `./`, `../`, and `~/` work at the start of a
+line as well as after file commands. Hidden names appear when the file-name
+prefix starts with `.`. With no matches, the input stays as typed; known
+command options and expressions retain their own completions.
+
+Candidates are sorted and duplicates removed. A command and a script with
+the same base name remain separate: `clea<Tab><Tab>` offers both `clear`
+and `clear.gs` when that script exists. Completion retains the `.gs`
+extension; execution keeps its usual order (a built-in command takes
+priority over an implicit script, and scripts are found locally before
+`GASCRP`). Completing in the middle of a line preserves the later arguments.
+
+Shell escapes support command names, file arguments, and commands after
+`|`, `&&`, or `;`. This is filename completion inside GrADS, not Bash's
+programmable completion: it does not run a shell or completion scripts to
+discover candidates, or supply command-specific flags.
 
 ```text
 ga-> set gxout sh<Tab><Tab>
@@ -28,6 +50,23 @@ shade1   shade2   shade2b  shaded   shp
 ga-> d ave(t<Tab><Tab>
 t=       ta       tan(     tcorr(   time=    tloop(   tmave(   tregr(   ts ...
 ```
+
+### Directory cache
+
+Completion caches sorted directory contents for the current directory,
+explicit paths, `GASCRP`, and `PATH`. Prefix searches use a binary lookup;
+duplicate removal sorts once instead of comparing every pair of names.
+The cache retains up to 32 directories and evicts the least recently used.
+Directory metadata is checked at most once every two seconds; unchanged
+directories are not reread. Matching file types and executable permissions
+are also reused within that interval. A newly added or removed file or a
+permission change may therefore take up to two seconds to appear (plus any
+filesystem metadata caching). The first search still reads the directory.
+
+Set `GA_COMPLETION_CACHE=0` before starting GrADS to disable caching and
+refresh directory contents on every completion. `PATH` and `GASCRP` are
+read for each completion, and relative paths are resolved against the
+current working directory.
 
 ## Usage after an error
 

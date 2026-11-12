@@ -220,3 +220,5 @@ tab 'undefine tm\t' 'undefine tmean'
 
 printf 'Prompt checks passed: ~ in file names, %d usage hints, %d names known, 11 Tab completions\n' \
   "$hints" "$counted"
+
+OPENGRADS_BUILD_ROOT="$build_root" python3 "$repo_root/pytests/prompt_completion.py" "$launcher" "$work"

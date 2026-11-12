@@ -47,8 +47,11 @@
 #if READLINE ==1
 #include <time.h>
 #include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <readline/readline.h>
 #include <readline/history.h>
+#include <readline/tilde.h>
 extern gaint history_length;
 void write_command_log(char *logfile);
 static void ga_readline_init(void);
@@ -633,7 +636,8 @@ gaint gaqsig (void) {
 /* Tab completion. What is offered depends on where the cursor is:
 
 
-     at the start            commands
+     empty line              current directory contents
+     at the start            commands, scripts and file names
      set _                   set options; after one, its keywords
                              (on|off, the kinds of gxout, ...)
      q _, draw _, clear _    their options
@@ -642,6 +646,7 @@ gaint gaqsig (void) {
                              inside one's parentheses the dimensions
      run _                   scripts, in the current directory and GASCRP
      open, sdfopen, ...      file names (~ for the home directory)
+     !command, ! command     executables along PATH, then file names
 
    The names come from gahelp.c, which also prints the usage hints. */
 
@@ -649,11 +654,9 @@ static char **cands;                     /* the candidates of this completion */
 static int ncand, maxcand;
 
 static void cand (const char *w, const char *text) {
-int i;
 size_t n = strlen(text);
 char **more;
   if (w==NULL || strncmp(w,text,n)) return;
-  for (i=0; i<ncand; i++) if (!strcmp(cands[i],w)) return;
   if (ncand==maxcand) {
     more = (char **)realloc(cands,sizeof(char *)*(maxcand ? 2*maxcand : 64));
     if (more==NULL) return;
@@ -715,33 +718,222 @@ static const char *dims[] = {"x=","y=","z=","t=","e=","lon=","lat=","lev=","time
   if (inparens) for (i=0; dims[i]; i++) cand(dims[i],text);
 }
 
-static void candscripts (const char *text) {             /* .gs files along GASCRP */
-char *path,*dir,*save=NULL,w[300];
-DIR *d;
+static int ga_namecmp(const void *a, const void *b) {
+  return strcmp(*(const char *const *)a,*(const char *const *)b);
+}
+
+/* Cache directory names and short-lived file-type checks. Repeated Tabs use a
+   sorted snapshot and a binary prefix lookup. Recheck directory metadata
+   at most once every two seconds, and reread only changed directories.
+   Bound retained directories with LRU eviction; relative paths are keyed
+   by the current working directory. No background threads or shell hooks. */
+#define GA_COMPLETION_DIRS 32
+struct ga_compdir {
+  char *path,**names;
+  unsigned char *types;
+  size_t count;
+  struct stat stamp;
+  int valid;
+  time_t checked;
+  unsigned long used;
+};
+static struct ga_compdir compdirs[GA_COMPLETION_DIRS];
+static unsigned long compclock;
+
+static void ga_dirclear(struct ga_compdir *c) {
+size_t i;
+  for (i=0; i<c->count; i++) free(c->names[i]);
+  free(c->names);
+  free(c->types);
+  c->names = NULL;
+  c->types = NULL;
+  c->count = 0;
+  c->valid = 0;
+}
+
+static int ga_dirstamp(const struct stat *a, const struct stat *b) {
+  if (a->st_dev!=b->st_dev || a->st_ino!=b->st_ino ||
+      a->st_mtime!=b->st_mtime || a->st_ctime!=b->st_ctime) return 0;
+#if defined(__APPLE__)
+  if (a->st_mtimespec.tv_nsec!=b->st_mtimespec.tv_nsec ||
+      a->st_ctimespec.tv_nsec!=b->st_ctimespec.tv_nsec) return 0;
+#elif defined(__linux__)
+  if (a->st_mtim.tv_nsec!=b->st_mtim.tv_nsec ||
+      a->st_ctim.tv_nsec!=b->st_ctim.tv_nsec) return 0;
+#endif
+  return 1;
+}
+
+static struct ga_compdir *ga_cachedir(const char *dir) {
+char *path,*cwd,*absolute,**more;
+const char *setting = getenv("GA_COMPLETION_CACHE");
+struct ga_compdir *c=NULL;
+struct stat st;
 struct dirent *e;
-size_t n;
+DIR *d;
+time_t now = time(NULL);
+size_t size,capacity=0;
+int i,slot=0,cache = setting==NULL || strcmp(setting,"0");
+  path = tilde_expand(dir);
+  if (path==NULL) return NULL;
+  if (*path!='/') {
+    cwd = getcwd(NULL,0);
+    if (cwd==NULL) { free(path); return NULL; }
+    size = strlen(cwd)+strlen(path)+2;
+    absolute = (char *)malloc(size);
+    if (absolute) snprintf(absolute,size,"%s/%s",cwd,path);
+    free(cwd);
+    free(path);
+    if (absolute==NULL) return NULL;
+    path = absolute;
+  }
+  for (i=0; i<GA_COMPLETION_DIRS; i++) {
+    if (compdirs[i].path && !strcmp(compdirs[i].path,path)) { c=compdirs+i; break; }
+    if (compdirs[i].used<compdirs[slot].used) slot=i;
+  }
+  if (c) free(path);
+  else {
+    c = compdirs+slot;
+    ga_dirclear(c);
+    free(c->path);
+    c->path = path;
+    c->checked = 0;
+  }
+  c->used = ++compclock;
+  if (cache && c->checked && now>=c->checked && now-c->checked<2) return c;
+  c->checked = now;
+  if (stat(c->path,&st)!=0 || !S_ISDIR(st.st_mode)) { ga_dirclear(c); return c; }
+  if (cache && c->valid && ga_dirstamp(&c->stamp,&st)) {
+    if (c->types) memset(c->types,0,c->count);
+    return c;
+  }
+  ga_dirclear(c);
+  if ((d=opendir(c->path))==NULL) return c;
+  while ((e=readdir(d))!=NULL) {
+    if (!strcmp(e->d_name,".") || !strcmp(e->d_name,"..")) continue;
+    if (c->count==capacity) {
+      size = capacity ? capacity*2 : 64;
+      more = (char **)realloc(c->names,size*sizeof(char *));
+      if (more==NULL) break;
+      c->names = more;
+      capacity = size;
+    }
+    if ((c->names[c->count]=strdup(e->d_name))==NULL) break;
+    c->count++;
+  }
+  closedir(d);
+  if (c->count>1) qsort(c->names,c->count,sizeof(char *),ga_namecmp);
+  c->types = (unsigned char *)calloc(c->count,sizeof(unsigned char));
+  c->stamp = st;
+  c->valid = 1;
+  return c;
+}
+
+static size_t ga_dirprefix(const struct ga_compdir *c, const char *text) {
+size_t lo=0,hi=c->count,mid;
+  while (lo<hi) {
+    mid = lo+(hi-lo)/2;
+    if (strcmp(c->names[mid],text)<0) lo=mid+1;
+    else hi=mid;
+  }
+  return lo;
+}
+
+/* kind: all file names (0), scripts and directories (1), GASCRP scripts
+   (2), or PATH executables (3). Filter names before touching file metadata. */
+static void canddir(const char *dir, const char *prefix, const char *text, int kind) {
+struct ga_compdir *c = ga_cachedir(dir);
+struct stat st;
+char *name,*word;
+const char *entry;
+size_t i,n=strlen(text),len,size;
+int script,checked,matched;
+  if (c==NULL) return;
+  for (i=ga_dirprefix(c,text); i<c->count; i++) {
+    entry = c->names[i];
+    if (strncmp(entry,text,n)) break;
+    if (entry[0]=='.' && text[0]!='.') continue;
+    len = strlen(entry);
+    script = len>3 && !strcmp(entry+len-3,".gs");
+    if (kind==2 && !script) continue;
+    if (kind==3 || (kind==1 && !script)) {
+      checked = kind==3 ? 4 : 1;
+      matched = kind==3 ? 8 : 2;
+      if (!c->types || !(c->types[i]&checked)) {
+        size = strlen(c->path)+len+2;
+        name = (char *)malloc(size);
+        if (name==NULL) continue;
+        snprintf(name,size,"%s/%s",c->path,entry);
+        if (kind==3) script = access(name,X_OK)==0 && stat(name,&st)==0 && S_ISREG(st.st_mode);
+        else script = stat(name,&st)==0 && S_ISDIR(st.st_mode);
+        free(name);
+        if (c->types) c->types[i] |= checked | (script ? matched : 0);
+      }
+      else script = c->types[i]&matched;
+      if (!script) continue;
+    }
+    size = strlen(prefix)+len+1;
+    word = (char *)malloc(size);
+    if (word==NULL) continue;
+    snprintf(word,size,"%s%s",prefix,entry);
+    cand(word,"");
+    free(word);
+  }
+}
+
+static void candscripts(const char *text) {
+char *path,*dir,*save=NULL;
   if (strchr(text,'/')) return;
   path = getenv("GASCRP");
   if (path==NULL || (path=strdup(path))==NULL) return;
-  for (dir=strtok_r(path," :;,",&save); dir; dir=strtok_r(NULL," :;,",&save)) {
-    if ((d=opendir(dir))==NULL) continue;
-    while ((e=readdir(d))!=NULL) {
-      n = strlen(e->d_name);
-      if (n>3 && !strcmp(e->d_name+n-3,".gs")) { snprintf(w,sizeof(w),"%s",e->d_name); cand(w,text); }
-    }
-    closedir(d);
+  for (dir=strtok_r(path," :;,",&save); dir; dir=strtok_r(NULL," :;,",&save))
+    canddir(dir,"",text,2);
+  free(path);
+}
+
+static void candpathkind(const char *text, int scripts) {
+const char *base = strrchr(text,'/');
+char *dir;
+size_t n;
+  if (base) {
+    n = base-text+1;
+    dir = (char *)malloc(n+1);
+    if (dir==NULL) return;
+    memcpy(dir,text,n);
+    dir[n] = '\0';
+    canddir(dir,dir,base+1,scripts);
+    free(dir);
+  }
+  else canddir(".","",text,scripts);
+  rl_filename_completion_desired = 1;
+}
+
+static void candpaths(const char *text) {
+  candpathkind(text,0);
+}
+
+static void candscriptpaths(const char *text) {
+  candscripts(text);
+  candpathkind(text,1);
+}
+
+static void candshellcommands(const char *text) {
+char *path,*dir,*next;
+  if (strchr(text,'/')) return;
+  path = getenv("PATH");
+  if (path==NULL || (path=strdup(path))==NULL) return;
+  for (dir=path; dir; dir=next) {
+    next = strchr(dir,':');
+    if (next) *next++ = '\0';
+    canddir(*dir ? dir : ".","",text,3);
   }
   free(path);
 }
 
-static void candpaths (const char *text) {               /* file names, ~ too */
-char *f;
-int state;
-  for (state=0; (f=rl_filename_completion_function(text,state))!=NULL; state++) {
-    cand(f,text[0]=='~' ? "" : text);
-    free(f);
-  }
-  rl_filename_completion_desired = 1;
+static int ga_shell_start(void) {
+int i=0;
+  while (isspace((unsigned char)rl_line_buffer[i])) i++;
+  return rl_line_buffer[i]=='!' ? i+1 : 0;
 }
 
 
@@ -775,10 +967,23 @@ char *w;
   return args;
 }
 
+static int ga_knowncommand(const char *word) {
+const char *name;
+int i;
+  for (i=0; (name=gahelpname(GAHELP_CMD,i))!=NULL; i++)
+    if (!strcmp(name,word)) return 1;
+  return 0;
+}
+
 static int ga_isexpr (const char *w1) {
-  return !strcmp(w1,"d") || !strcmp(w1,"display") || !strcmp(w1,"define") ||
-         (strchr(rl_line_buffer,'=') && gahelpwords(GAHELP_CMD,w1)==NULL &&
-          strcmp(w1,"set") && strcmp(w1,"q") && strcmp(w1,"query") && strcmp(w1,"draw"));
+const char *p=rl_line_buffer;
+int n=0;
+  if (!strcmp(w1,"d") || !strcmp(w1,"display") || !strcmp(w1,"define")) return 1;
+  while (isspace((unsigned char)*p)) p++;
+  if (!isalpha((unsigned char)*p)) return 0;
+  while (isalnum((unsigned char)*p) || *p=='_') { p++; if (++n>16) return 0; }
+  while (isspace((unsigned char)*p)) p++;
+  return *p=='=';
 }
 
 /* Inside an expression, a name ends at an operator or a parenthesis; in
@@ -786,6 +991,7 @@ static int ga_isexpr (const char *w1) {
 
 static char *ga_wordbreaks(void) {
 char w1[32],w2[32];
+  if (ga_shell_start()) return (char *)" \t\n!|&;<>";
   lineargs(rl_point,w1,w2,sizeof(w1));
   if (ga_isexpr(w1)) return (char *)" \t\n,;()=+-*/<>^|&\"'";
   return (char *)" \t\n";
@@ -797,15 +1003,45 @@ static const char *filecmds[] = {"open","sdfopen","xdfopen","bpopen","exec","gxp
 static char **ga_attempted_completion(const char *text, int start, int end) {
 char w1[32],w2[32];
 const char *words,**f;
-int args,depth,i;
+int args,depth,i,j,shell,command;
   (void)end;
 
   for (i=0; i<ncand; i++) free(cands[i]);
   ncand = 0;
+  rl_attempted_completion_over = 1;
+  rl_filename_completion_desired = 0;
   rl_completion_append_character = ' ';
   args = lineargs(start,w1,w2,sizeof(w1));
 
-  if (args==0) candtable(GAHELP_CMD,text);
+  shell = ga_shell_start();
+  if (shell) {
+    command = 1;
+    for (i=shell; i<start; i++) {
+      if (strchr("|&;",rl_line_buffer[i])) command = 1;
+      else if (!isspace((unsigned char)rl_line_buffer[i])) command = 0;
+    }
+    if (command) candshellcommands(text);
+    candpaths(text);
+  }
+  else if (args==0) {
+    if (*text) {
+      candtable(GAHELP_CMD,text);
+      if (gcmn.impcmd) candscripts(text);
+    }
+    candpaths(text);
+  }
+  else if (ga_isexpr(w1)) {
+    for (depth=0, i=0; i<start; i++) {
+      if (rl_line_buffer[i]=='(') depth++;
+      else if (rl_line_buffer[i]==')' && depth>0) depth--;
+    }
+    if (!strcmp(w1,"define") && args==1) {             /* the new name */
+      rl_attempted_completion_over = 1;
+      return NULL;
+    }
+    candexpr(text,depth>0);
+    rl_completion_append_character = '\0';
+  }
   else if (!strcmp(w1,"set")) {
     if (args==1) candtable(GAHELP_SET,text);
     else if (!strcmp(w2,"dfile")) candfiles(text);
@@ -828,20 +1064,9 @@ int args,depth,i;
     if (args==1) candtable(GAHELP_DRAW,text);
     else if (!strcmp(w2,"shp")) candpaths(text);
   }
-  else if (ga_isexpr(w1)) {
-    for (depth=0, i=0; i<start; i++) {
-      if (rl_line_buffer[i]=='(') depth++;
-      else if (rl_line_buffer[i]==')' && depth>0) depth--;
-    }
-    if (!strcmp(w1,"define") && args==1) {             /* the new name */
-      rl_attempted_completion_over = 1;
-      return NULL;
-    }
-    candexpr(text,depth>0);
-    rl_completion_append_character = '\0';
-  }
   else if (!strcmp(w1,"run")) {
-    if (args==1) { candscripts(text); candpaths(text); }
+    if (args==1) candscriptpaths(text);
+    else candpaths(text);
   }
   else if (!strcmp(w1,"close")) candfiles(text);
   else if (!strcmp(w1,"undefine") || !strcmp(w1,"sdfwrite")) canddefined(text);
@@ -853,11 +1078,21 @@ int args,depth,i;
   else {
     for (f=filecmds; *f && strcmp(*f,w1); f++) ;
     if (*f) candpaths(text);
+    else if (!ga_knowncommand(w1)) candpaths(text);
     else if (args==1) candwords(gahelpwords(GAHELP_CMD,w1),text);
 
   }
   rl_attempted_completion_over = 1;
   if (ncand==0) return NULL;
+  /* Deduplicate once, after sorting, rather than comparing every name
+     with every preceding candidate in a large directory. clear and
+     clear.gs remain distinct choices; duplicate GASCRP names do not. */
+  qsort(cands,ncand,sizeof(char *),ga_namecmp);
+  for (i=1,j=1; i<ncand; i++) {
+    if (!strcmp(cands[j-1],cands[i])) free(cands[i]);
+    else cands[j++] = cands[i];
+  }
+  ncand = j;
   return rl_completion_matches(text,ga_completion_generator);
 }
 
