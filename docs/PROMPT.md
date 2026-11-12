@@ -39,6 +39,21 @@ extension; execution keeps its usual order (a built-in command takes
 priority over an implicit script, and scripts are found locally before
 `GASCRP`). Completing in the middle of a line preserves the later arguments.
 
+Lists are grouped by type, with a heading and count for each nonempty group.
+At the start of a line the order is **Commands, Scripts, Directories, Files**;
+an empty line lists only the current directory's Scripts, Directories, and
+Files. Expressions list **Variables, Functions, Dimensions**. Defined and
+file variables share the Variables group; command keywords use Options and
+open-file identifiers use File numbers. Names are sorted within each group.
+Grouping keeps all candidates, including ordinary files beside matching
+commands or scripts; labels are never inserted into the command line.
+
+Commands and variables are green, scripts and functions magenta, directories
+and dimensions blue, and ordinary files use the terminal's default color.
+The labels also distinguish categories when color is disabled with
+`OPENGRADS_COLOR=0`. Large lists use Readline's confirmation threshold;
+each category uses Readline's column layout and paging.
+
 Shell escapes support command names, file arguments, and commands after
 `|`, `&&`, or `;`. This is filename completion inside GrADS, not Bash's
 programmable completion: it does not run a shell or completion scripts to
