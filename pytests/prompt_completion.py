@@ -19,7 +19,8 @@ for name in ('localplot.gs', 'clear.gs', 'localdata.txt', '.hidden.gs',
              'localdir/nested.gs', 'scripts1/remoteplot.gs',
              'scripts1/dupcase.gs', 'scripts2/dupcase.gs',
              'scripts1/dupcase_other.gs', 'option=value.gs', 'UpperPlot.gs',
-             'clear_data.txt'):
+             'clear_data.txt', 'solo.gs', 'solo.nc',
+             'zzplain_one.dat', 'zzplain_two.dat'):
     (work / name).write_text("say 'COMPLETION_SCRIPT_OK'\n")
 tool = work / 'bin' / 'tabprobe-tool'
 tool.write_text('#!/bin/sh\nprintf "COMPLETION_TOOL_OK\\n"\n')
@@ -97,10 +98,17 @@ def complete(keys, expected=(), absent=()):
 
 def ordered(parts, labels):
     listings = [part for part in parts if all(label + ' (' in part for label in labels)]
-    assert listings, 'missing group headings: ' + repr(parts)
+    assert listings, 'missing category legend: ' + repr(parts)
     for part in listings:
         positions = [part.index(label + ' (') for label in labels]
         assert positions == sorted(positions), 'incorrect group order: ' + part
+        lines = part.splitlines()
+        legend = [line for line in lines if all(label + ' (' in line for label in labels)]
+        assert len(legend) == 1, 'categories were not combined into one line: ' + part
+        legend_index = lines.index(legend[0])
+        assert all(not line.strip() or line.startswith('ga-> ')
+                   for line in lines[legend_index+1:]), 'candidate appeared below legend: ' + part
+        assert ' | ' in legend[0], 'missing legend separators: ' + part
 
 
 def reap(child, terminal):
@@ -128,9 +136,38 @@ try:
     complete('clear', ['clear.gs'])
     parts = complete('clea', ['clear.gs'])
     ordered(parts, ['Commands', 'Scripts', 'Directories', 'Files'])
+    assert 'Suggested 3/4' in parts[1] and 'Tab: all matches' in parts[1], parts
+    assert 'clear_data.txt' not in parts[1] and 'Files (' not in parts[1], parts
+    for part in parts[2:]:
+        assert 'All 4' in part and 'clear_data.txt' in part and 'Files (' in part, parts
+    for part in parts:
+        if 'Commands (' in part:
+            assert part.index('clear.gs') < part.index('Commands ('), part
+            if 'Files (' in part:
+                assert part.index('clear_data.txt') < part.index('Commands ('), part
     assert 'clear/' in ''.join(parts) and 'clear//' not in ''.join(parts), parts
     assert 'clear_data.txt' in ''.join(parts), 'grouping unexpectedly filtered file candidates'
     assert any('clear' in part.split() and 'clear.gs' in part.split() for part in parts), parts
+    parts = complete('sol', ['solo.gs', 'solo.nc'])
+    assert 'Suggested 1/2' in parts[1] and 'ga-> solo.' in parts[1], parts
+    assert 'ga-> solo.gs' not in parts[1], 'a sole suggestion concealed another match: ' + parts[1]
+    parts = complete('zzplain', ['zzplain_one.dat', 'zzplain_two.dat'])
+    assert 'Files (2)' in parts[1] and 'Suggested' not in parts[1], parts
+
+    # Editing back to exactly the same text and moving the cursor both reset
+    # suggestions; comparing the line alone would incorrectly stay expanded.
+    os.write(fd, b'clea\t')
+    assert 'Suggested 3/4' in clean(pump(0.25))
+    os.write(fd, b'\t')
+    assert 'All 4' in clean(pump(0.25))
+    os.write(fd, b'\x7fr\t')
+    assert 'Suggested 3/4' in clean(pump(0.25))
+    os.write(fd, b'\t')
+    assert 'All 4' in clean(pump(0.25))
+    os.write(fd, b'\x01\x05\t')
+    assert 'Suggested 3/4' in clean(pump(0.25))
+    os.write(fd, b'\x01\x0b')
+    pump(0.1)
     complete('./localp', ['./localplot.gs'])
     complete('../completion/localp', ['../completion/localplot.gs'])
     complete('~/localp', ['localplot.gs'])
@@ -198,7 +235,7 @@ try:
     large.mkdir()
     for i in range(3000):
         (large / ('plot%04d.gs' % i)).touch()
-    os.write(fd, b'large/plot\t\t')
+    os.write(fd, b'large/plot\t')
     question = ''
     deadline = time.monotonic() + 10
     while 'possibilities by type?' not in question and time.monotonic() < deadline:
@@ -236,7 +273,7 @@ try:
     assert 'COMPLETION_SCRIPT_OK' in out, 'explicit clear.gs did not run the script: ' + out
     os.write(fd, b'quit\r')
     pump(0.3)
-    print('Extended Tab checks passed: %d cases, ordered groups, collisions, refresh, 3000 files, execution and cursor suffix' % count)
+    print('Extended Tab checks passed: %d cases, staged suggestions, footer legend, collisions, refresh, 3000 files, execution and cursor suffix' % count)
 finally:
     reap(pid, fd)
 
@@ -266,3 +303,40 @@ try:
     print('Completion color checks passed: distinct category colors and color=0')
 finally:
     reap(colorpid, colorfd)
+
+# Inputrc is loaded before deciding whether to replace the default Tab.
+# User commands remain intact; the default vi insertion map and the named
+# completion command both support the staged behavior.
+for name, contents, staged in (
+        ('custom', '"\\C-i": self-insert\n', False),
+        ('vi', 'set editing-mode vi\n', True),
+        ('named', '"\\C-i": opengrads-complete\n', True)):
+    inputrc = work / ('inputrc-' + name)
+    inputrc.write_text(contents)
+    bindingpid, bindingfd = pty.fork()
+    if bindingpid == 0:
+        os.chdir(work)
+        os.environ.update(HOME=str(work), TERM='dumb', INPUTRC=str(inputrc),
+                          OPENGRADS_COLOR='0', OPENGRADS_UPDATE_CHECK='0', GA_PROGRESS='off')
+        os.execv(launcher, [launcher, '-bl', '-d', 'gxdummy', '-h', 'gxdummy'])
+    try:
+        startup = ''
+        deadline = time.monotonic() + 15
+        while 'ga-> ' not in startup and time.monotonic() < deadline:
+            startup += pump(0.1, bindingfd)
+        assert 'ga-> ' in startup, name + ': ' + startup
+        os.write(bindingfd, b'clea\t')
+        out = clean(pump(0.3, bindingfd))
+        if staged:
+            assert 'Suggested 3/4' in out and 'clear.gs' in out, name + ': ' + out
+            os.write(bindingfd, b'\t')
+            expanded = clean(pump(0.3, bindingfd))
+            assert 'All 4' in expanded and 'clear_data.txt' in expanded, name + ': ' + expanded
+        else:
+            assert 'Suggested' not in out and 'clear.gs' not in out, name + ': ' + out
+        os.write(bindingfd, b'\x15quit\r')
+        out = pump(0.3, bindingfd)
+        assert 'GX Package Terminated' in out, name + ': ' + out
+    finally:
+        reap(bindingpid, bindingfd)
+print('Completion binding checks passed: custom Tab preserved, vi insertion, named inputrc function')

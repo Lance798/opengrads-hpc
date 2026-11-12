@@ -662,6 +662,8 @@ struct ga_candidate {
 };
 static struct ga_candidate *cands;        /* retained until the next completion */
 static int ncand, maxcand;
+static int suggest_context,tab_active,tab_full,tab_point;
+static char *tab_line;
 
 static void cand (const char *w, const char *text, int kind) {
 size_t n = strlen(text);
@@ -1008,10 +1010,22 @@ static char *colors[] = {"green","magenta","blue",NULL,
 char **group;
 const char *word,*part;
 unsigned int *kinds;
-int kind,i,n,max,width,filename=rl_filename_completion_desired,key;
-  rl_crlf();
-  if (rl_completion_query_items>0 && count>=rl_completion_query_items) {
-    fprintf(rl_outstream,"Display all %d possibilities by type? (y or n)",count);
+int kind,i,n,max,width,filename=rl_filename_completion_desired,key,shown=0,filtered;
+int counts[GA_COMP_KINDS] = {0};
+unsigned int display_mask=(1U<<GA_COMP_KINDS)-1;
+  /* Suggestions only affect presentation. Readline always computes the
+     common prefix from every match, so a lone suggestion cannot hide a
+     competing file by completing past it. Explicit paths/arguments retain
+     their full context-specific list from the first Tab. */
+  if (tab_active && !tab_full && suggest_context) {
+    display_mask = (1U<<GA_COMP_COMMAND)|(1U<<GA_COMP_SCRIPT)|(1U<<GA_COMP_DIRECTORY);
+    for (i=1; i<=count; i++) if (ga_matchkind(matches[i])&display_mask) shown++;
+  }
+  if (!shown || shown==count) { display_mask=(1U<<GA_COMP_KINDS)-1; shown=count; }
+  filtered = shown<count;
+  if (rl_completion_query_items>0 && shown>=rl_completion_query_items) {
+    rl_crlf();
+    fprintf(rl_outstream,"Display all %d possibilities by type? (y or n)",shown);
     fflush(rl_outstream);
     key = rl_read_key();
     rl_crlf();
@@ -1031,6 +1045,7 @@ int kind,i,n,max,width,filename=rl_filename_completion_desired,key;
   else {
     for (i=1; i<=count; i++) kinds[i] = ga_matchkind(matches[i]);
     for (kind=0; kind<GA_COMP_KINDS; kind++) {
+      if (!(display_mask&(1U<<kind))) continue;
       n = max = 0;
       group[0] = matches[0];
       /* Directory matches already carry /. Filename display would add
@@ -1046,12 +1061,23 @@ int kind,i,n,max,width,filename=rl_filename_completion_desired,key;
         if (width>max) max=width;
       }
       if (!n) continue;
+      counts[kind] = n;
       group[n+1] = NULL;
-      fprintf(rl_outstream,"%s%s (%d)%s",gatxtc(colors[kind]),labels[kind],n,gatxtc(NULL));
       fputs(gatxtc(colors[kind]),rl_outstream);
       rl_display_match_list(group,n,max);
       fputs(gatxtc(NULL),rl_outstream);
     }
+    /* Keep category names together below all candidates. The color of
+       each legend entry matches its candidate group; matching is unchanged. */
+    n = 0;
+    if (filtered) fprintf(rl_outstream,"Suggested %d/%d | ",shown,count);
+    else if (tab_active && tab_full) fprintf(rl_outstream,"All %d | ",count);
+    for (kind=0; kind<GA_COMP_KINDS; kind++) if (counts[kind]) {
+      fprintf(rl_outstream,"%s%s%s (%d)%s",n++ ? " | " : "",
+              gatxtc(colors[kind]),labels[kind],counts[kind],gatxtc(NULL));
+    }
+    if (filtered) fputs(" | Tab: all matches",rl_outstream);
+    rl_crlf();
     rl_filename_completion_desired = filename;
     free(group);
     free(kinds);
@@ -1059,6 +1085,23 @@ int kind,i,n,max,width,filename=rl_filename_completion_desired,key;
   fflush(rl_outstream);
   rl_on_new_line();
   rl_forced_update_display();
+}
+
+static int ga_tab_complete(int count, int key) {
+int rc;
+  (void)count;
+  (void)key;
+  tab_full = rl_last_func==ga_tab_complete && tab_line &&
+             tab_point==rl_point && !strcmp(tab_line,rl_line_buffer);
+  tab_active = 1;
+  /* Public Readline mode: insert only the common prefix and immediately
+     list ambiguous matches. Repeated Tabs regenerate the full match set. */
+  rc = rl_complete_internal('!');
+  tab_active = 0;
+  free(tab_line);
+  tab_line = strdup(rl_line_buffer);
+  tab_point = rl_point;
+  return rc;
 }
 
 /* The words of the line before the cursor, in lower case: how many there
@@ -1128,6 +1171,7 @@ unsigned int kinds=0;
   rl_attempted_completion_over = 1;
   rl_filename_completion_desired = 0;
   rl_completion_append_character = ' ';
+  suggest_context = 0;
   args = lineargs(start,w1,w2,sizeof(w1));
 
   shell = ga_shell_start();
@@ -1137,10 +1181,14 @@ unsigned int kinds=0;
       if (strchr("|&;",rl_line_buffer[i])) command = 1;
       else if (!isspace((unsigned char)rl_line_buffer[i])) command = 0;
     }
-    if (command) candshellcommands(text);
+    if (command) {
+      suggest_context = strchr(text,'/')==NULL;
+      candshellcommands(text);
+    }
     candpaths(text);
   }
   else if (args==0) {
+    suggest_context = strchr(text,'/')==NULL;
     if (*text) {
       candtable(GAHELP_CMD,text);
       if (gcmn.impcmd) candscripts(text);
@@ -1222,10 +1270,24 @@ unsigned int kinds=0;
 }
 
 static void ga_readline_init(void) {
+static const char *maps[] = {"emacs-standard","vi-insert",NULL};
+Keymap map;
+rl_command_func_t *binding;
+int i,type;
   rl_readline_name = "opengrads";
+  rl_add_defun("opengrads-complete",ga_tab_complete,-1);
+  rl_initialize();
   rl_attempted_completion_function = ga_attempted_completion;
   rl_completion_word_break_hook = ga_wordbreaks;
   rl_completion_display_matches_hook = ga_display_matches;
+  /* Read inputrc first and replace only the ordinary completion binding.
+     Explicit user bindings such as menu-complete remain intact. */
+  for (i=0; maps[i]; i++) {
+    map = rl_get_keymap_by_name(maps[i]);
+    if (map==NULL) continue;
+    binding = rl_function_of_keyseq("\t",map,&type);
+    if (binding==rl_complete && type==ISFUNC) rl_bind_key_in_map('\t',ga_tab_complete,map);
+  }
 }
 
 /* write command history to log file */

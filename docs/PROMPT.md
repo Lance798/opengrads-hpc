@@ -5,9 +5,26 @@ a command that fails says how it is used, and file names may start with `~`.
 
 ## Tab completion
 
-Tab completes the word under the cursor from what fits there; a second Tab
-lists the choices when there are several. It needs GNU Readline in the
+Tab completes the word under the cursor from what fits there and immediately
+lists choices when there are several. It needs GNU Readline in the
 build (`q config` lists `readline`; the release archives have it).
+
+At the start of a line, the first Tab suggests matching commands, `.gs`
+scripts, and directories. The next consecutive Tab shows all matching
+candidates, including ordinary files; later Tabs keep the full list visible.
+The bottom legend says `Suggested 3/4` and `Tab: all matches` when some
+matches are hidden, or `All 4` after expansion. Editing the line or moving
+the cursor resets the suggestions. If there are no suggested types, the
+first Tab falls back to all matches. The same rule applies to shell command
+names after `!`.
+
+Explicit paths (`./`, `../`, `~/`) and command arguments retain their full
+context-specific list from the first Tab. There is no arbitrary top-N
+cutoff. Completion always computes the common prefix from the full match
+set: a sole suggestion does not automatically select itself when other
+matches exist. Only a sole match in the full set completes on its own.
+If the visible list exceeds Readline's confirmation threshold (100 by
+default), it asks before displaying it.
 
 | Where | Tab offers |
 |---|---|
@@ -39,14 +56,20 @@ extension; execution keeps its usual order (a built-in command takes
 priority over an implicit script, and scripts are found locally before
 `GASCRP`). Completing in the middle of a line preserves the later arguments.
 
-Lists are grouped by type, with a heading and count for each nonempty group.
+Lists are grouped by type and color. A single legend below all candidates
+names the nonempty categories and their counts; there are no group headings
+between candidate rows.
 At the start of a line the order is **Commands, Scripts, Directories, Files**;
 an empty line lists only the current directory's Scripts, Directories, and
 Files. Expressions list **Variables, Functions, Dimensions**. Defined and
 file variables share the Variables group; command keywords use Options and
 open-file identifiers use File numbers. Names are sorted within each group.
-Grouping keeps all candidates, including ordinary files beside matching
-commands or scripts; labels are never inserted into the command line.
+All candidates remain available in the expanded list, including ordinary
+files beside matching commands or scripts; labels are never inserted into
+the command line. Explicit user Tab bindings such as `menu-complete` are
+preserved; the two-stage behavior replaces the default completion binding
+in Emacs and vi insertion mode. The named Readline function
+`opengrads-complete` is also available to bind in `~/.inputrc`.
 
 Commands and variables are green, scripts and functions magenta, directories
 and dimensions blue, and ordinary files use the terminal's default color.
