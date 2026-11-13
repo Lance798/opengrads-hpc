@@ -22,8 +22,11 @@ each defaults to `1`. A `0` keeps the last column/row's own height at that
 boundary. Periodic boundaries instead compare against the first column/row.
 
 The command selects the full native X/Y domain of the default open file,
-fixes Z=1 and T=1, and leaves that dimension environment active. Use
-`set dfile N` first if another file should supply the grid. The first argument
+fixes Z=1 and T=1, then restores the original X/Y/Z/T/E dimension environment,
+including after a calculation error. The defined fields retain the full X/Y
+domain, so a later subdomain selection still uses the correct neighbors at
+its edges. Periodic/closed boundary rules apply at the full domain's edges.
+Use `set dfile N` first if another file should supply the grid. The first argument
 is the terrain field, such as `topo` or `topo.2` on a compatible grid.
 
 It creates or replaces four defined variables:
@@ -59,7 +62,8 @@ the ROLL integration. Timing includes source
 reads and definitions, excludes startup/export/graphics, and depends on host
 and cache conditions. `pytests/TestVVMTopo.sh` independently verifies numeric
 results, periodic defaults, explicit overrides and library lookup from a
-different working directory.
+different working directory. It also checks dimension restoration on success
+and calculation errors, full-domain storage, and subdomain `zslice` values.
 
 See [ROLL performance validation](PERFORMANCE.md#roll-and-terrain-integration-2026-11-09)
 for the current script timings and worker numerical checks.
