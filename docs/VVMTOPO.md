@@ -54,7 +54,7 @@ missing/nonfinite input are outside the script's contract.
 
 The ROLL script was compared with the original `itype_topo.gs` on all three
 supplied terrain datasets at four cores. Full U/V/W float32 outputs agreed.
-Its analytic tests also cover 1/4/8 threads, all boundary modes and periodic
+Its analytic tests also cover 1/4 threads, all boundary modes and periodic
 neighbors with widely separated finite magnitudes. A Taiwan 1024x1024 benchmark with periodic X/Y boundaries measured
 12.02 s for the original script and 0.084 s for the preceding CDIFF script with
 four cores (medians of 3 and 5 runs, respectively). Those measurements predate

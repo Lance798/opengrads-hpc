@@ -216,12 +216,13 @@ g=groups(text);assert len(g)==3 and g[0]==g[1]==g[2],g
 value=parse(text);compare(value[:1],parse(run(ctls[0],zt+'d f+g',1,True)))
 
 # Compare both worker graphics with the original evaluator's graphics.
+# Exclude the wall-clock label so crossing a minute cannot change the PNG.
 for expr in ('f+g','mag(f,g)','pow(f,2)','esat(150+f/200)',
              'qvsat((150+f/200)*rho,100000*pow(rho,1004/287))'):
     a=root/'defined.png';b=root/'direct.png';c=root/'serial.png'
-    run(ctls[0],zt+'define answer='+expr+'\nset gxout shaded\nd answer\nprintim '+str(a)+
+    run(ctls[0],zt+'define answer='+expr+'\nset timelab off\nset gxout shaded\nd answer\nprintim '+str(a)+
         ' x640 y480\nclear canvas\nd '+expr+'\nprintim '+str(b)+' x640 y480\n')
-    run(ctls[0],zt+'set gxout shaded\nd '+expr+'\nprintim '+str(c)+' x640 y480\n',1,True)
+    run(ctls[0],zt+'set timelab off\nset gxout shaded\nd '+expr+'\nprintim '+str(c)+' x640 y480\n',1,True)
     assert a.read_bytes()==b.read_bytes()==c.read_bytes(),('expression graphics differ',expr)
 
 heavy='('+ '+'.join(['sin(f)']*32)+')/32+pow(g,2)*0.000001+qvsat(150+f/200,100000)+esat(150+g/200)*0.0001+if(f>1000,1,0)'

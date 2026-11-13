@@ -184,7 +184,7 @@ progress follow the same rules as single-file expressions.
 
 `GA_TIME_TRACE=1` adds `Time file inputs: count=... default=...` when more than
 one descriptor is reopened. `TestTimeFileInputs.sh` compares all 47 functions
-at 1/4/8 cores across HDF5, classic NetCDF, compressed NetCDF-4 and BP5. It also
+at 1/2/4 cores across HDF5, classic NetCDF, compressed NetCDF-4 and BP5. It also
 checks ordinal remapping, changed defaults, equal data paths with distinct
 axes/clocks, native binary profiles, mixed open methods, source limits,
 DEFINE shadowing, cancellation and killed-worker recovery.
@@ -211,7 +211,7 @@ define accumulated=sum(roll(qv,-1,x)*qv,t=1,t=32)
 ```
 
 `TestRoll.sh` verifies independent permutations, bit-preserving copies and
-optional NumPy comparisons. `TestTimeRoll.sh` checks serial versus 4/8 workers
+optional NumPy comparisons. `TestTimeRoll.sh` checks serial versus 2/4 workers
 on HDF5, NetCDF/NetCDF-4 and BP5, including file-qualified inputs, static
 snapshots, templates, missing times, parent fallback, cancellation and failure
 recovery. Parent profile fallback retains original file numbers when no
@@ -288,7 +288,7 @@ The remaining 20 names retain their earlier paths:
 
 `TestIf.sh` checks independent analytic scalar/X/Z/XY values and branch-error
 recovery. `TestTimeSpatialFunctions.sh` checks all twenty additions against the
-one-thread evaluator at 4 and 16 calculation cores, including regular/template
+one-thread evaluator at 2 and 4 calculation cores, including regular/template
 and reversed HDF5/NetCDF, raw/compressed BP5, masks, ties, spatial-Z input
 reductions, legal direct DISPLAY, native fallbacks, pool reuse and cleanup.
 Its BP5 mode also checks CTL/BPOPEN progress, cancellation, killed-worker
@@ -399,13 +399,13 @@ one thread and 3.43 seconds with four workers. This is a validation sample,
 not a general scaling guarantee; storage and cache state affect timings.
 
 `TestHDF5TimeWorkersReal.sh /path/to/rcemip_45l_large/vvm.ctl` additionally
-checks the provided 45-level VVMex HDF5 template with 1, 4, 8 and 16 calculation
+checks the provided 45-level VVMex HDF5 template with 1 and 4 calculation
 cores. It compares native expressions and static scalar/profile/XY/XYZ inputs,
 including saturation, wind speed, column integrals and all eight input-time
 reduction selectors. Coverage uses the first 32 times, cropped horizontal
-areas, Z/T profiles and all levels for column integrals. All 2,976 compared
-values at each parallel CPU count had identical masks and zero maximum
-absolute difference from the one-core evaluator.
+areas, Z/T profiles and all levels for column integrals. Earlier validation at
+1/4/8/16 cores compared 2,976 values at each parallel CPU count with identical
+masks and zero maximum absolute difference from the one-core evaluator.
 
 ## Static DEFINE inputs
 
@@ -479,8 +479,11 @@ interrupt a deliberately delayed large transfer, verify preservation of an old
 DEFINE and recovery, and check that workers are reaped. The established
 TimeWorkers/TimeExpressionReductions terminal suites also exercise profile and
 scalar inputs during calculation cancellation and killed-worker recovery.
-Their pool-shrink regression uses 16 workers followed by a 14-worker batch,
-keeping validation within 16 calculation cores.
+The expression-reduction pool-shrink regression uses four workers followed by
+a two-time tail batch. The native-reader regression uses cache-memory estimates
+to reduce the active pool from four to two workers and then restore the same
+four PIDs, including partial batches. Validation stays within four calculation
+cores.
 
 ## Existing HDF5 regression coverage
 

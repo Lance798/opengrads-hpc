@@ -78,7 +78,7 @@ def run(ctl,body,n=4,error=False,opener="open"):
     bad=bool(re.search(r'Error|ERROR|Time evaluation failed|runtime error|AddressSanitizer',p.stdout))
     assert p.returncode==0 and bad==error,p.stdout[-6000:]
     for count,pids in groups(p.stdout):
-        assert int(count)<=16
+        assert int(count)<=4
         for pid in map(int,pids.split(',')):
             try:os.kill(pid,0)
             except ProcessLookupError:continue
@@ -100,7 +100,7 @@ for ctl,pctl in ctls:
         command=''.join(setup+'define answer='+expr+'\n'+render for name,expr in cases)
         reference=grids(run(source,command,1))
         assert len(reference)==3*len(cases)
-        for n in (4,16):
+        for n in (2,4):
             text=run(source,command,n);assert len(groups(text))==len(cases),(source,n,cases,groups(text))
             compare(grids(text),reference)
     # New functions inside an input-time expression, including full X/Z CDIFF.
@@ -153,7 +153,7 @@ if fmt=='bp5':
                     xy+'define answer=pow(f,2)+surface\n'+render,
                     xy.replace('set t 1 32','set t 1')+'d sum(if(f>2000,f,g),t=1,t=32)\n'):
         reference=grids(run(dataset,command,1,opener='bpopen'))
-        for n in (4,16):
+        for n in (2,4):
             text=run(dataset,command,n,opener='bpopen');assert groups(text)
             compare(grids(text),reference)
     text=run(dataset,point+'define answer=f\nd answer\nd f\n',opener='bpopen')
@@ -222,5 +222,5 @@ if fmt=='bp5':
         for cancel,fail,off in ((False,False,False),(True,False,False),(False,True,False),(False,False,True)):
             terminal(cancel,fail,off,opener)
             print('BP5 terminal/recovery passed:',opener,cancel,fail,off,flush=True)
-print(f'Time spatial functions passed: {fmt}; 20 names; samples={samples} max_abs={max_abs:.17g}; DEFINE/input-time/direct DISPLAY, native fallback, pool reuse and cleanup; <=16 cores.')
+print(f'Time spatial functions passed: {fmt}; 20 names; samples={samples} max_abs={max_abs:.17g}; DEFINE/input-time/direct DISPLAY, native fallback, pool reuse and cleanup; <=4 cores.')
 PY

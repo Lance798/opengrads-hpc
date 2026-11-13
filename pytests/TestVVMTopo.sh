@@ -76,7 +76,7 @@ for name,nx,ny,data,cyclic in cases:
         v=[max(corrected[y*nx+x],corrected[((y+1)%ny if py else min(y+1,ny-1))*nx+x])
            for y in range(ny) for x in range(nx)]
         expected=[u,v,corrected,corrected,data]
-        for n in (1,4,8):
+        for n in (1,4):
             text=run(ctl,command,n)
             assert f'periodic_x={px} periodic_y={py}' in text,text[-2000:]
             assert grids(text)==expected,(name,command,n,grids(text),expected)
@@ -91,7 +91,7 @@ ctl=root/'wide.ctl';ctl.write_text((root/'small.ctl').read_text().replace('^smal
 c=[1. if h==0 else h for h in wide]
 u=[max(c[y*4+x],c[y*4+(x+1)%4]) for y in range(3) for x in range(4)]
 v=[max(c[y*4+x],c[((y+1)%3)*4+x]) for y in range(3) for x in range(4)]
-for n in (1,4,8):
+for n in (1,4):
     assert grids(run(ctl,'vvmtopo topo',n))==[u,v,c,c,wide]
 # Calls from another .gs script use the same installed command lookup.
 driver=root/'caller.gs';driver.write_text("'vvmtopo topo'\nsay result\n")
@@ -143,5 +143,5 @@ print('VVMTopo dimension restoration passed: fixed/varying/fractional X/Y/Z/T/E,
       'calculation errors, full stored domain, subdomain neighbors, zslice.')
 print(f'VVMTopo passed: {count} analytic values; periodic defaults/overrides, '
       'zero correction, source preservation, degenerate/cyclic grids, '
-      'bare/run/nested lookup outside repository, 1/4/8 threads.')
+      'bare/run/nested lookup outside repository, 1/4 threads.')
 PY

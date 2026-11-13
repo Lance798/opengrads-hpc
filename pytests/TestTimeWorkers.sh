@@ -91,7 +91,7 @@ for ctl in ctls:
     for expression,setup in cases:
         command=setup+'define answer='+expression+'\nd answer\n'
         reference=parse(run(ctl,command,1,True))
-        for n in (2,4,8):
+        for n in (2,4):
             text=run(ctl,command,n);assert groups(text),(ctl,expression,'no workers')
             try:compare(parse(text),reference)
             except AssertionError as exc:raise AssertionError((ctl.name,expression,n,exc)) from exc

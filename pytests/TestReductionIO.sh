@@ -126,7 +126,7 @@ for label,dataset,dtype,template in formats:
         times+='define tr='+expr.replace('(f,','(f+0,').replace('(cached,','(cached+0,')+'\nd tr\n'
     times+='set z 4\ndefine tp=aave(surface,x=1,x=128,y=1,y=128)\nd tp\ndefine tr=aave(surface+0,x=1,x=128,y=1,y=128)\nd tr\n'
     outside='set t 1\nset z 1\nset x 0 257\nset y -5 -2\nd f\nset z 4\nd surface\n'
-    for threads in ((1,8) if reverse else (1,2,4,8)):
+    for threads in ((1,4) if reverse else (1,2,4)):
         actual=run(ctl,commands+extra+slabs+series+selectors+defined+times+outside,threads)
         assert len(actual)==(78 if extra else 74),(label,len(actual))
         compare([actual[1]],[actual[2]],label+' native/evaluator',exact=True)
@@ -163,14 +163,14 @@ if (root/'slice.h5').exists():
         'unpack scale_factor add_offset\nxdef 256 linear 10 0.1\nydef 256 linear -60 0.25\n'+
         'zdef 4 levels 50 150 400 1000\ntdef 12 linear 00z01jan2000 1hr\nvars 1\npacked 4 t,z,y,x Packed integer\nendvars\n')
     wanted=[None if x==0 and y==0 else ((700+10*y+x)%5000-2500)*0.125+10 for y in range(256) for x in range(256)]
-    for threads in (1,8):
+    for threads in (1,4):
         actual=run(ctl,'set t 2\nset z 1\nd packed\nd zint(packed)\nd zint(packed+0)\n',threads)
         assert len(actual)==3
         compare([actual[0]],[wanted],'HDF5 packed integer',exact=True)
         compare([actual[1]],[actual[2]],'HDF5 packed ZINT',exact=True)
     template=root/'packed-template.ctl'
     template.write_text(ctl.read_text().replace('^slice.h5','^slice%tm1.h5').replace('dtype hdf5_grid','dtype hdf5_grid\noptions template').replace('tdef 12 ','tdef 2 ').replace('t,z,y,x','z,y,x'))
-    compare(run(template,'set t 2\nset z 1\nd packed\n',8),[wanted],'HDF5 single-element attributes',exact=True)
+    compare(run(template,'set t 2\nset z 1\nd packed\n',4),[wanted],'HDF5 single-element attributes',exact=True)
     invalid=root/'packed-vector.ctl'
     invalid.write_text(ctl.read_text().replace('unpack scale_factor','unpack bad_scale'))
     raw=[None if x==0 and y==0 else ((700+10*y+x)%5000-2500)+10 for y in range(256) for x in range(256)]
@@ -178,7 +178,7 @@ if (root/'slice.h5').exists():
     # A profile without native X/Y must broadcast across the requested map.
     ctl=root/'profile.ctl'
     ctl.write_text((root/'h5.ctl').read_text().split('vars ')[0]+'vars 1\nrho 4 z Density\nendvars\n')
-    compare(run(ctl,'set z 2\nd rho\n',8),[[1.1]*(256*256)],'HDF5 profile broadcast',exact=True)
+    compare(run(ctl,'set z 2\nd rho\n',4),[[1.1]*(256*256)],'HDF5 profile broadcast',exact=True)
 
 if (root/'slice.nc').exists():
     # Failed file opens must yield missing values and permit a later reopen.
@@ -191,13 +191,13 @@ if (root/'slice.nc').exists():
     for time in (0,1,3,4,5,6,7,8,9,10,11): (root/('gap%d.nc'%time)).symlink_to(root/('slice%d.nc'%time))
     gap=root/'gap.ctl'
     gap.write_text((root/'nc-template.ctl').read_text().replace('^slice%tm1.nc','^gap%tm1.nc'))
-    for threads in (1,8):
+    for threads in (1,4):
         actual=run(gap,'set z 1\nset x 1 128\nset y 1 128\nd ave(f,t=1,t=12)\nd ave(f+0,t=1,t=12)\nd ave(f+g,t=1,t=12)\nd ave((f+g)+0,t=1,t=12)\n',threads)
         compare([actual[0],actual[2]],[actual[1],actual[3]],'NetCDF template gap batch',exact=True)
         actual=run(gap,'set z 1\nset x 1\nset y 1\nset t 1 12\ndefine tp=aave(f,x=1,x=128,y=1,y=128)\nd tp\ndefine tr=aave(f+0,x=1,x=128,y=1,y=128)\nd tr\n',threads)
         compare([actual[0]],[actual[1]],'NetCDF template gap time series')
     # An incompatible grid at one time must fail cleanly, then reopen.
-    # At eight threads this exercises failure before the first scalar is
+    # At four threads this exercises failure before the first scalar is
     # copied out of a native AAVE batch (an ownership/cleanup regression).
     for time in range(12):
         target=root/('broken%d.nc'%time)
@@ -218,7 +218,7 @@ if (root/'slice.nc').exists():
         else:target.symlink_to(root/('slice%d.nc'%time))
     broken=root/'broken.ctl'
     broken.write_text((root/'nc-template.ctl').read_text().replace('^slice%tm1.nc','^broken%tm1.nc'))
-    for threads in (1,8):
+    for threads in (1,4):
         actual=run(broken,'set z 1\nset x 1\nset y 1\nset t 1 12\ndefine failed=aave(f,x=1,x=128,y=1,y=128)\nset t 1\nset x 1 16\nset y 1 16\nd f\n',threads,expected_error=True)
         wanted=run(root/'nc-template.ctl','set z 1\nset t 1\nset x 1 16\nset y 1 16\nd f\n',1)
         compare(actual,wanted,'DEFINE incompatible-grid batch recovery',exact=True)

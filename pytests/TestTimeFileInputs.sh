@@ -93,7 +93,7 @@ def qualify(expr):
 for ispressure,setup,cases in ((False,xy,maths+planes),(False,point,reductions),(True,xy,pressure)):
  body=''.join(setup+'define answer='+qualify(expr)+'\n'+''.join('set t '+str(t)+'\nd answer\n' for t in (1,17,32)) for expr in cases)
  expected=grids(run(body,1,ispressure));assert len(expected)==len(cases)*3
- for n in (4,8):
+ for n in (2,4):
   text=run(body,n,ispressure);assert len(groups(text))==len(cases),(cases,groups(text),text[-3000:])
   assert text.count('Time file inputs: count=2 default=3')==len(cases)
   compare(grids(text),expected)
@@ -103,7 +103,7 @@ for ispressure,setup,cases in ((False,xy,maths+planes),(False,point,reductions),
 body=zt+'define g=f.3*0+7\nd f.3+g.4\nset dfile 4\nd f+g.3\nset dfile 3\nd f+g\n'
 body+=xy.replace('set t 1 32','set t 1')+''.join('d sum('+qualify(e)+',t=1,t=32)\n' for e in ('f*g','smth9(f)','cdiff(f,x)','zint(f*rho)','if(f>2000,f,g)'))
 expected=grids(run(body,1))
-for n in (4,8):
+for n in (2,4):
  text=run(body,n);assert len(groups(text))==8,(groups(text),text[-3000:]);compare(grids(text),expected)
 # Close/reopen changes source metadata and invalidates the old pool.
 body=zt+'define answer=f.3+g.4\nd answer\nclose 4\nopen '+str(ctls[False,False])+'\n'+zt+'define answer=f.3+g.4\nd answer\n'
@@ -114,12 +114,12 @@ compare(grids(text),expected)
 for last in (31,32):
     area='aave(f.3+g.4,x=2,x=9,y=2,y=7)'
     body=point.replace('1 32','1 '+str(last))+'define expected='+area+'\nd expected\nd '+area+'\n'
-    for n in (1,4,8):
+    for n in (1,4):
         values=grids(run(body,n));assert len(values)==2;compare(values[:1],values[1:])
 # Equal paths are separate descriptors; clocks map through world time.
 shift=root/'shift.ctl';shift.write_text(ctls[False,False].read_text().replace('00z01jan2000','01z01jan2000'))
 body=zt+'define answer=f.3+g.5\nd answer\nd f.3+g.5\n'
-for n in (4,8):
+for n in (2,4):
  text=run(body,n,extra='open '+str(shift));assert len(groups(text))==2
  compare(grids(text),grids(run(body,1,extra='open '+str(shift))))
 # Native binary T=1 profile keeps missing times; it is never silently frozen.

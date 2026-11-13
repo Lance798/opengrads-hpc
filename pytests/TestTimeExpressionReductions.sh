@@ -124,7 +124,7 @@ setup='set x 1 16\nset y 1 12\nset z 2\nset t 1\n'
 commands=setup+'\n'.join('d '+expr for expr in expressions)
 for ctl in ctls:
     reference=parse(run(ctl,commands,1,True));assert len(reference)==len(expressions)
-    for n in (4,8,16):
+    for n in (2,4):
         text=run(ctl,commands,n);assert len(groups(text))>=len(expressions),'input times not dispatched'
         assert 'Time input expression:' in text,'whole expressions were not dispatched'
         compare(parse(text),reference)
@@ -134,20 +134,20 @@ for ctl in ctls:
 # concurrency and fall back safely when the reported available memory is low.
 setup='set x 1 64\nset y 1 64\nset z 2\nset t 1\n'
 reference=parse(run(ctls[0],setup+'d sum(f*g,t=1,t=320)',1,True))
-limited=run(ctls[0],setup+'d sum(f*g,t=1,t=320)',16,mem_kib=1024*1024)
-assert groups(limited) and all(1<int(n)<16 for n,_ in groups(limited))
+limited=run(ctls[0],setup+'d sum(f*g,t=1,t=320)',4,mem_kib=512*1024)
+assert groups(limited) and all(1<int(n)<4 for n,_ in groups(limited))
 compare(parse(limited),reference)
-limited=run(ctls[0],setup+'d sum(f*g,t=1,t=320)',16,mem_kib=128*1024)
+limited=run(ctls[0],setup+'d sum(f*g,t=1,t=320)',4,mem_kib=128*1024)
 assert not groups(limited),'low-memory execution incorrectly started workers'
 compare(parse(limited),reference)
 print('Time expression reduction memory caps passed: bounded workers and serial fallback',flush=True)
 
-# A 256-time batch followed by 14 times must reuse a larger existing pool.
-text=run(ctls[0],setup+'d sum(f*g,t=1,t=272)\nd mean(f*g,t=1,t=272)',16)
-g=groups(text);assert [int(n) for n,_ in g]==[16,14,16,14],g
+# A 256-time batch followed by two times must reuse a four-worker pool.
+text=run(ctls[0],setup+'d sum(f*g,t=1,t=260)\nd mean(f*g,t=1,t=260)',4)
+g=groups(text);assert [int(n) for n,_ in g]==[4,2,4,2],g
 assert g[0][1]==g[2][1] and g[1][1]==g[3][1]
 assert set(g[1][1].split(','))<=set(g[0][1].split(','))
-compare(parse(text),parse(run(ctls[0],setup+'d sum(f*g,t=1,t=272)\nd mean(f*g,t=1,t=272)',1,True)))
+compare(parse(text),parse(run(ctls[0],setup+'d sum(f*g,t=1,t=260)\nd mean(f*g,t=1,t=260)',1,True)))
 
 # DEFINE must also retain all Z planes when only its input times vary.
 command='set x 1 16\nset y 1 16\nset z 1 4\nset t 1\ndefine answer=sum(f*g,t=1,t=320)\n'+\

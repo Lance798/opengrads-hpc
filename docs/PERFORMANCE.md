@@ -1,5 +1,8 @@
 # Calculation performance
 
+Current regression suites use at most four calculation cores. The dated
+validation and benchmark results below retain their original CPU counts.
+
 ## Fixed-time spatial reductions (2026-11-09)
 
 The [shared spatial planner](SPATIAL_REDUCTIONS.md) extends expression sections,
