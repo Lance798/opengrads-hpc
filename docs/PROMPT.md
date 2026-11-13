@@ -3,28 +3,36 @@
 Three conveniences at the `ga->` prompt: Tab completes what can come next,
 a command that fails says how it is used, and file names may start with `~`.
 
+## Default color and history
+
+`opengrads` starts with color enabled (`OPENGRADS_COLOR=1`); no environment
+prefix is needed. Set `OPENGRADS_COLOR=0` to disable it. The same defaults
+apply to the development and release-test launchers.
+
+An interactive terminal session automatically loads `$HOME/.grads.log` and
+saves its command history on normal exit, including Ctrl-D. Startup keeps
+the most recent 256 entries. Previous sessions can be recalled with the up
+arrow or Ctrl-P and inspected with `history`. Set `OPENGRADS_HISTORY=0` to
+disable automatic loading and saving. An explicit `-H path` takes priority
+and selects that history file instead.
+
+Piped input/output, `-E`, `-u`, and one-shot `-x` execution do not enable
+history automatically. Explicit `-H` remains available when desired.
+Writing history preserves earlier commands when a startup command exits
+before entering the interactive prompt.
+
 ## Tab completion
 
 Tab completes the word under the cursor from what fits there and immediately
 lists choices when there are several. It needs GNU Readline in the
 build (`q config` lists `readline`; the release archives have it).
 
-At the start of a line, the first Tab suggests matching commands, `.gs`
-scripts, and directories. The next consecutive Tab shows all matching
-candidates, including ordinary files; later Tabs keep the full list visible.
-The bottom legend says `Suggested 3/4` and `Tab: all matches` when some
-matches are hidden, or `All 4` after expansion. Editing the line or moving
-the cursor resets the suggestions. If there are no suggested types, the
-first Tab falls back to all matches. The same rule applies to shell command
-names after `!`.
-
-Explicit paths (`./`, `../`, `~/`) and command arguments retain their full
-context-specific list from the first Tab. There is no arbitrary top-N
-cutoff. Completion always computes the common prefix from the full match
-set: a sole suggestion does not automatically select itself when other
-matches exist. Only a sole match in the full set completes on its own.
-If the visible list exceeds Readline's confirmation threshold (100 by
-default), it asks before displaying it.
+The first Tab shows every match for the current context, including ordinary
+files beside commands and scripts. Repeated Tabs show the same complete
+list; there is no suggestion stage or top-N cutoff. Completion computes the
+common prefix from all matches, and a sole match completes on its own.
+At Readline's confirmation threshold (100 by default), it asks before
+displaying the list.
 
 | Where | Tab offers |
 |---|---|
@@ -43,6 +51,15 @@ default), it asks before displaying it.
 | arguments after `!ls`, `! ls`, or another shell escape | file names and directories |
 | arguments of a script or an unknown command | file names and directories |
 
+Function completion includes all built-ins, including `zslice`, `zint`,
+`esat`, `qvsat`, and `grarea`. Complete them in an expression, for example
+`d zs<Tab>`, `define column = zi<Tab>`, or `d zint(qvs<Tab>`. Completion
+inserts the opening `(` so arguments can follow. The prompt regression
+compares the Tab/usage catalog with the evaluator's built-in function list
+to catch missing entries when functions are added. Run the same check
+without building GrADS with `python3 pytests/check_function_catalog.py`;
+see [the new-function checklist](ADDING_FUNCTIONS.md).
+
 Directories complete with a trailing `/`, so another Tab can continue into
 them. Explicit paths such as `./`, `../`, and `~/` work at the start of a
 line as well as after file commands. Hidden names appear when the file-name
@@ -56,26 +73,28 @@ extension; execution keeps its usual order (a built-in command takes
 priority over an implicit script, and scripts are found locally before
 `GASCRP`). Completing in the middle of a line preserves the later arguments.
 
-Lists are grouped by type and color. A single legend below all candidates
-names the nonempty categories and their counts; there are no group headings
-between candidate rows.
+Lists are grouped by type and color, without headings or a summary legend.
+Category rows are consecutive, with no empty lines between them, and the
+prompt follows immediately after the candidates.
 At the start of a line the order is **Commands, Scripts, Directories, Files**;
 an empty line lists only the current directory's Scripts, Directories, and
 Files. Expressions list **Variables, Functions, Dimensions**. Defined and
 file variables share the Variables group; command keywords use Options and
 open-file identifiers use File numbers. Names are sorted within each group.
-All candidates remain available in the expanded list, including ordinary
-files beside matching commands or scripts; labels are never inserted into
-the command line. Explicit user Tab bindings such as `menu-complete` are
-preserved; the two-stage behavior replaces the default completion binding
+All candidates remain available from the first Tab, including ordinary
+files beside matching commands or scripts. Explicit user Tab bindings such
+as `menu-complete` are preserved; immediate full-list display replaces the default completion binding
 in Emacs and vi insertion mode. The named Readline function
 `opengrads-complete` is also available to bind in `~/.inputrc`.
 
 Commands and variables are green, scripts and functions magenta, directories
 and dimensions blue, and ordinary files use the terminal's default color.
-The labels also distinguish categories when color is disabled with
-`OPENGRADS_COLOR=0`. Large lists use Readline's confirmation threshold;
-each category uses Readline's column layout and paging.
+`OPENGRADS_COLOR=0` disables category colors. Large lists use Readline's
+confirmation threshold;
+column widths adapt to the terminal, and paging spans all categories.
+At `--More--`, Space advances a page, Enter advances a line, and `q` stops
+listing. Readline's `page-completions` setting is respected. Control bytes
+in file names are escaped for display and never written as terminal controls.
 
 Shell escapes support command names, file arguments, and commands after
 `|`, `&&`, or `;`. This is filename completion inside GrADS, not Bash's

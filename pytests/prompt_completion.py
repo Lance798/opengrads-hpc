@@ -20,7 +20,8 @@ for name in ('localplot.gs', 'clear.gs', 'localdata.txt', '.hidden.gs',
              'scripts1/dupcase.gs', 'scripts2/dupcase.gs',
              'scripts1/dupcase_other.gs', 'option=value.gs', 'UpperPlot.gs',
              'clear_data.txt', 'solo.gs', 'solo.nc',
-             'zzplain_one.dat', 'zzplain_two.dat'):
+             'zzplain_one.dat', 'zzplain_two.dat', 'control\tfile.txt',
+             'controlXfile.txt', 'escape\x1bfile.txt', 'escapeXfile.txt'):
     (work / name).write_text("say 'COMPLETION_SCRIPT_OK'\n")
 tool = work / 'bin' / 'tabprobe-tool'
 tool.write_text('#!/bin/sh\nprintf "COMPLETION_TOOL_OK\\n"\n')
@@ -88,6 +89,7 @@ def complete(keys, expected=(), absent=()):
     assert '\x1b[' not in ''.join(raw), 'color=0 emitted ANSI escapes'
     parts = [clean(part) for part in raw]
     result = ''.join(parts)
+    assert not re.search(r'\b(?:Commands|Scripts|Directories|Files|Variables|Functions|Dimensions|Options|File numbers) \(\d+\)', result), 'category summary is still visible: ' + result
     for word in expected:
         assert word in result, repr(keys) + ' missing ' + repr(word) + ': ' + result
     for word in absent:
@@ -96,19 +98,18 @@ def complete(keys, expected=(), absent=()):
     return parts
 
 
-def ordered(parts, labels):
-    listings = [part for part in parts if all(label + ' (' in part for label in labels)]
-    assert listings, 'missing category legend: ' + repr(parts)
+def ordered(parts, groups):
+    listings = [part for part in parts if all(word in part.split() for group in groups for word in group)]
+    assert listings, 'missing grouped candidates: ' + repr(parts)
     for part in listings:
-        positions = [part.index(label + ' (') for label in labels]
-        assert positions == sorted(positions), 'incorrect group order: ' + part
+        words = part.split()
+        positions = [[words.index(word) for word in group] for group in groups]
+        assert all(max(a)<min(b) for a,b in zip(positions,positions[1:])), 'incorrect group order: ' + part
         lines = part.splitlines()
-        legend = [line for line in lines if all(label + ' (' in line for label in labels)]
-        assert len(legend) == 1, 'categories were not combined into one line: ' + part
-        legend_index = lines.index(legend[0])
-        assert all(not line.strip() or line.startswith('ga-> ')
-                   for line in lines[legend_index+1:]), 'candidate appeared below legend: ' + part
-        assert ' | ' in legend[0], 'missing legend separators: ' + part
+        prompt_index = next((i for i,line in enumerate(lines) if line.startswith('ga-> ')), len(lines))
+        body = lines[:prompt_index]
+        first = next((i for i, line in enumerate(body) if line.strip()), len(body))
+        assert all(line.strip() for line in body[first:]), 'blank line between candidates and prompt: ' + part
 
 
 def reap(child, terminal):
@@ -127,7 +128,7 @@ try:
     prompt()
     parts = complete('', ['localplot.gs', 'localdata.txt', 'clear.gs', 'localdir/'],
                      ['remoteplot.gs', '.hidden.gs', 'localdir//', 'Commands ('])
-    ordered(parts, ['Scripts', 'Directories', 'Files'])
+    ordered(parts, [['clear.gs','localplot.gs'], ['clear/','localdir/'], ['clear_data.txt','localdata.txt']])
     complete('localp', ['localplot.gs'])
     complete('UpperP', ['UpperPlot.gs'])
     complete('upperp', absent=['UpperPlot.gs'])
@@ -135,39 +136,21 @@ try:
     complete('remotep', ['remoteplot.gs'])
     complete('clear', ['clear.gs'])
     parts = complete('clea', ['clear.gs'])
-    ordered(parts, ['Commands', 'Scripts', 'Directories', 'Files'])
-    assert 'Suggested 3/4' in parts[1] and 'Tab: all matches' in parts[1], parts
-    assert 'clear_data.txt' not in parts[1] and 'Files (' not in parts[1], parts
-    for part in parts[2:]:
-        assert 'All 4' in part and 'clear_data.txt' in part and 'Files (' in part, parts
-    for part in parts:
-        if 'Commands (' in part:
-            assert part.index('clear.gs') < part.index('Commands ('), part
-            if 'Files (' in part:
-                assert part.index('clear_data.txt') < part.index('Commands ('), part
+    ordered(parts, [['clear'], ['clear.gs'], ['clear/'], ['clear_data.txt']])
+    for part in parts[1:]:
+        assert 'clear_data.txt' in part, parts
+        assert 'Suggested' not in part and 'Tab: all' not in part, parts
     assert 'clear/' in ''.join(parts) and 'clear//' not in ''.join(parts), parts
     assert 'clear_data.txt' in ''.join(parts), 'grouping unexpectedly filtered file candidates'
     assert any('clear' in part.split() and 'clear.gs' in part.split() for part in parts), parts
     parts = complete('sol', ['solo.gs', 'solo.nc'])
-    assert 'Suggested 1/2' in parts[1] and 'ga-> solo.' in parts[1], parts
-    assert 'ga-> solo.gs' not in parts[1], 'a sole suggestion concealed another match: ' + parts[1]
+    assert 'solo.nc' in parts[1] and 'ga-> solo.' in parts[1], parts
+    assert 'ga-> solo.gs' not in parts[1], 'completion concealed another match: ' + parts[1]
     parts = complete('zzplain', ['zzplain_one.dat', 'zzplain_two.dat'])
-    assert 'Files (2)' in parts[1] and 'Suggested' not in parts[1], parts
+    assert 'zzplain_one.dat' in parts[1] and 'zzplain_two.dat' in parts[1], parts
 
-    # Editing back to exactly the same text and moving the cursor both reset
-    # suggestions; comparing the line alone would incorrectly stay expanded.
-    os.write(fd, b'clea\t')
-    assert 'Suggested 3/4' in clean(pump(0.25))
-    os.write(fd, b'\t')
-    assert 'All 4' in clean(pump(0.25))
-    os.write(fd, b'\x7fr\t')
-    assert 'Suggested 3/4' in clean(pump(0.25))
-    os.write(fd, b'\t')
-    assert 'All 4' in clean(pump(0.25))
-    os.write(fd, b'\x01\x05\t')
-    assert 'Suggested 3/4' in clean(pump(0.25))
-    os.write(fd, b'\x01\x0b')
-    pump(0.1)
+    complete('control', ['control^Ifile.txt', 'controlXfile.txt'])
+    complete('escape', ['escape^[file.txt', 'escapeXfile.txt'])
     complete('./localp', ['./localplot.gs'])
     complete('../completion/localp', ['../completion/localplot.gs'])
     complete('~/localp', ['localplot.gs'])
@@ -185,6 +168,14 @@ try:
     complete('clear = mea', ['mean('])
     complete('set = mea', ['mean('])
     complete('new_var=mea', ['mean('])
+    complete('d zs', ['zslice('])
+    complete('d zi', ['zint('])
+    complete('d qvs', ['qvsat('])
+    complete('d esa', ['esat('])
+    complete('d grar', ['grarea('])
+    complete('define surface = zsl', ['zslice('])
+    complete('column = zi', ['zint('])
+    complete('d zint(qvs', ['qvsat('])
     complete('! ls localda', ['localdata.txt'])
     complete('!ls localda', ['localdata.txt'])
     complete('!ls --color=auto localda', ['localdata.txt'])
@@ -202,9 +193,9 @@ try:
     prompt()
     os.write(fd, b'define tmean = ave(ts,t=1,t=3)\r')
     prompt()
-    ordered(complete('d t', ['ts', 'tmean', 'tloop(']), ['Variables', 'Functions'])
+    ordered(complete('d t', ['ts', 'tmean', 'tloop(']), [['ts','tmean'], ['tan(','tloop(']])
     ordered(complete('d ave(t', ['ts', 'tmean', 'tloop(', 't=']),
-            ['Variables', 'Functions', 'Dimensions'])
+            [['ts','tmean'], ['tan(','tloop('], ['t=','time=']])
 
     parts = complete('dupc', ['dupcase.gs', 'dupcase_other.gs'])
     for part in parts:
@@ -246,6 +237,23 @@ try:
     assert 'large/plot' in declined and 'Scripts (' not in declined, declined
     os.write(fd, b'\x01\x0b')
     pump(0.1)
+    os.write(fd, b'large/plot0\t')
+    question = ''
+    deadline = time.monotonic() + 10
+    while 'possibilities by type?' not in question and time.monotonic() < deadline:
+        question += pump(0.1)
+    assert 'Display all 1000 possibilities by type?' in question, question
+    os.write(fd, b'y')
+    page = ''
+    deadline = time.monotonic() + 10
+    while '--More--' not in page and time.monotonic() < deadline:
+        page += pump(0.1)
+    assert '--More--' in page and 'Scripts (' not in page, page
+    os.write(fd, b'q')
+    stopped = clean(prompt())
+    assert 'ga-> large/plot0' in stopped and 'Scripts (' not in stopped, stopped
+    os.write(fd, b'\x01\x0b')
+    pump(0.1)
     complete('large/plot299', ['plot2990.gs', 'plot2999.gs'])
     complete('large/plot299', ['plot2990.gs', 'plot2999.gs'])
     complete('large/plot000', ['plot0000.gs', 'plot0009.gs'])
@@ -273,7 +281,7 @@ try:
     assert 'COMPLETION_SCRIPT_OK' in out, 'explicit clear.gs did not run the script: ' + out
     os.write(fd, b'quit\r')
     pump(0.3)
-    print('Extended Tab checks passed: %d cases, staged suggestions, footer legend, collisions, refresh, 3000 files, execution and cursor suffix' % count)
+    print('Extended Tab checks passed: %d cases, full first Tab, compact colored groups without summary, paging, safe display, collisions, refresh, 3000 files and execution' % count)
 finally:
     reap(pid, fd)
 
@@ -293,11 +301,12 @@ try:
     assert 'ga-> ' in startup, startup
     os.write(colorfd, b'clea\t\t\t')
     out = pump(0.6, colorfd)
-    assert '\x1b[32mCommands' in out and '\x1b[35mScripts' in out, out
+    assert '\x1b[32mclear' in out and '\x1b[35mclear.gs' in out, out
     assert '\x01' not in out and '\x02' not in out, 'prompt width markers leaked into output'
     os.write(colorfd, b'\x01\x0bl\t\t\t')
     out = pump(0.6, colorfd)
-    assert '\x1b[34mDirectories' in out, out
+    assert re.search(r'\x1b\[34m[^\x1b]*linkdir/', out), out
+    assert re.search(r'\x1b\[34m[^\x1b]*localdir/', out), out
     os.write(colorfd, b'\x01\x0bquit\r')
     pump(0.3, colorfd)
     print('Completion color checks passed: distinct category colors and color=0')
@@ -306,8 +315,8 @@ finally:
 
 # Inputrc is loaded before deciding whether to replace the default Tab.
 # User commands remain intact; the default vi insertion map and the named
-# completion command both support the staged behavior.
-for name, contents, staged in (
+# completion command both show the full list on the first Tab.
+for name, contents, lists in (
         ('custom', '"\\C-i": self-insert\n', False),
         ('vi', 'set editing-mode vi\n', True),
         ('named', '"\\C-i": opengrads-complete\n', True)):
@@ -327,11 +336,12 @@ for name, contents, staged in (
         assert 'ga-> ' in startup, name + ': ' + startup
         os.write(bindingfd, b'clea\t')
         out = clean(pump(0.3, bindingfd))
-        if staged:
-            assert 'Suggested 3/4' in out and 'clear.gs' in out, name + ': ' + out
+        if lists:
+            assert 'clear_data.txt' in out and 'clear.gs' in out, name + ': ' + out
+            assert 'Suggested' not in out, name + ': ' + out
             os.write(bindingfd, b'\t')
             expanded = clean(pump(0.3, bindingfd))
-            assert 'All 4' in expanded and 'clear_data.txt' in expanded, name + ': ' + expanded
+            assert 'clear_data.txt' in expanded and 'clear.gs' in expanded, name + ': ' + expanded
         else:
             assert 'Suggested' not in out and 'clear.gs' not in out, name + ': ' + out
         os.write(bindingfd, b'\x15quit\r')

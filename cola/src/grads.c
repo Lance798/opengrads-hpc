@@ -49,6 +49,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <wchar.h>
 #include <readline/readline.h>
 #include <readline/history.h>
 #include <readline/tilde.h>
@@ -56,6 +57,9 @@ extern gaint history_length;
 void write_command_log(char *logfile);
 static void ga_readline_init(void);
 char *gatxtc(char *);
+/* POSIX on both release targets; expose it without changing feature macros
+   for the rest of this translation unit. */
+extern int wcwidth(wchar_t);
 #endif
 
 static struct gaupb *upba=NULL;     /* Anchor for user defined plug-in */
@@ -128,7 +132,7 @@ int main (int argc, char *argv[])  {
   logfile= "c:\windows\grads.log";
 #else  /* Unix */
   userhome=getenv("HOME");
-  if (userhome==NULL) {
+  if (userhome==NULL || *userhome=='\0') {
     logfile=NULL;
   }
   else {
@@ -224,6 +228,17 @@ int main (int argc, char *argv[])  {
     }
   }
  
+#if READLINE == 1
+  /* Persist ordinary terminal sessions without requiring -H. Set this
+     after parsing so the default cannot consume a positional argument as
+     a history filename. Explicit -H still wins, including in batch use. */
+  if (!wrhstflg && hstflg && !killflg && logfile!=NULL &&
+      isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)) {
+    const char *history_setting = getenv("OPENGRADS_HISTORY");
+    if (history_setting==NULL || strcmp(history_setting,"0")) wrhstflg = 1;
+  }
+#endif
+
   if (txtcs > -2) gatxti(1,txtcs); /* turn on text colorizing */
   
   if (ratioflg==1) printf ("Note: -a option was specified, but no aspect ratio was provided\n");
@@ -662,8 +677,6 @@ struct ga_candidate {
 };
 static struct ga_candidate *cands;        /* retained until the next completion */
 static int ncand, maxcand;
-static int suggest_context,tab_active,tab_full,tab_point;
-static char *tab_line;
 
 static void cand (const char *w, const char *text, int kind) {
 size_t n = strlen(text);
@@ -1000,32 +1013,90 @@ int lo=0,hi=ncand,mid,cmp;
   return 1U<<(rl_filename_completion_desired ? GA_COMP_FILE : GA_COMP_OPTION);
 }
 
-/* Display categories without putting labels or ANSI escapes into matches.
-   Use Readline's column layout and pager, including its filename escaping. */
+/* Measure/print a display name without allowing control bytes in a file
+   name to affect the terminal. Keep matching and inserted text unchanged. */
+static int ga_comptext(const char *text, int print) {
+mbstate_t state;
+wchar_t wc;
+size_t n,left=strlen(text);
+int width=0,w;
+unsigned char ch;
+  memset(&state,0,sizeof(state));
+  while (left) {
+    ch = (unsigned char)*text;
+    if (ch<32 || ch==127) {
+      if (print) { fputc('^',rl_outstream); fputc(ch==127 ? '?' : ch+64,rl_outstream); }
+      width += 2;
+      n = 1;
+      memset(&state,0,sizeof(state));
+    }
+    else {
+      n = mbrtowc(&wc,text,left,&state);
+      if (n==(size_t)-1 || n==(size_t)-2) {
+        if (print) fprintf(rl_outstream,"\\x%02x",ch);
+        width += 4;
+        n = 1;
+        memset(&state,0,sizeof(state));
+      }
+      else if (!n) break;
+      else {
+        w = wcwidth(wc);
+        if (print) {
+          if (w<0) fputc('?',rl_outstream);
+          else fwrite(text,1,n,rl_outstream);
+        }
+        width += w<0 ? 1 : w;
+      }
+    }
+    text += n;
+    left -= n;
+  }
+  return width;
+}
+
+static const char *ga_compname(const char *word, int kind) {
+const char *end,*name;
+  if (kind!=GA_COMP_SCRIPT && kind!=GA_COMP_DIRECTORY && kind!=GA_COMP_FILE) return word;
+  end = word+strlen(word);
+  while (end>word && end[-1]=='/') end--;
+  name = end;
+  while (name>word && name[-1]!='/') name--;
+  return name;
+}
+
+/* A single pager budget spans all categories, without adding blank lines
+   between them. Respect Readline's page-completions setting. */
+static int ga_comppage(int *lines, int height) {
+int key;
+const char *setting=rl_variable_value("page-completions");
+  if (*lines<height || (setting && !strcmp(setting,"off"))) return 1;
+  fputs(gatxtc(NULL),rl_outstream);
+  fputs("--More--",rl_outstream);
+  fflush(rl_outstream);
+  for (;;) {
+    key = rl_read_key();
+    if (key==' ' || key=='y' || key=='Y' || key=='\n' || key=='\r' ||
+        key=='q' || key=='Q' || key=='n' || key=='N' || key==EOF || key==7) break;
+    rl_ding();
+  }
+  fputs("\r        \r",rl_outstream);
+  if (key=='q' || key=='Q' || key=='n' || key=='N' || key==EOF || key==7) return 0;
+  *lines = key=='\n' || key=='\r' ? height-1 : 0;
+  return 1;
+}
+
+/* All matching candidates are shown in compact, colored groups, without
+   headings, a summary footer, or blank lines between categories. */
 static void ga_display_matches(char **matches, int count, int longest) {
-static const char *labels[] = {"Commands","Scripts","Directories","Files",
-  "Variables","Functions","Dimensions","Options","File numbers"};
 static char *colors[] = {"green","magenta","blue",NULL,
   "green","magenta","blue","blue","cyan"};
-char **group;
-const char *word,*part;
+const char **group;
 unsigned int *kinds;
-int kind,i,n,max,width,filename=rl_filename_completion_desired,key,shown=0,filtered;
-int counts[GA_COMP_KINDS] = {0};
-unsigned int display_mask=(1U<<GA_COMP_KINDS)-1;
-  /* Suggestions only affect presentation. Readline always computes the
-     common prefix from every match, so a lone suggestion cannot hide a
-     competing file by completing past it. Explicit paths/arguments retain
-     their full context-specific list from the first Tab. */
-  if (tab_active && !tab_full && suggest_context) {
-    display_mask = (1U<<GA_COMP_COMMAND)|(1U<<GA_COMP_SCRIPT)|(1U<<GA_COMP_DIRECTORY);
-    for (i=1; i<=count; i++) if (ga_matchkind(matches[i])&display_mask) shown++;
-  }
-  if (!shown || shown==count) { display_mask=(1U<<GA_COMP_KINDS)-1; shown=count; }
-  filtered = shown<count;
-  if (rl_completion_query_items>0 && shown>=rl_completion_query_items) {
-    rl_crlf();
-    fprintf(rl_outstream,"Display all %d possibilities by type? (y or n)",shown);
+int kind,i,n,max,width,key,rows,columns,ncols,nrows,row,col,index,pad,more;
+int lines=0,stop=0,counts[GA_COMP_KINDS] = {0};
+  rl_crlf();
+  if (rl_completion_query_items>0 && count>=rl_completion_query_items) {
+    fprintf(rl_outstream,"Display all %d possibilities by type? (y or n)",count);
     fflush(rl_outstream);
     key = rl_read_key();
     rl_crlf();
@@ -1035,50 +1106,50 @@ unsigned int display_mask=(1U<<GA_COMP_KINDS)-1;
       return;
     }
   }
-  group = (char **)malloc((count+2)*sizeof(char *));
-  kinds = (unsigned int *)malloc((count+1)*sizeof(unsigned int));
+  group = (const char **)malloc(count*sizeof(*group));
+  kinds = (unsigned int *)malloc((count+1)*sizeof(*kinds));
   if (group==NULL || kinds==NULL) {
     free(group);
     free(kinds);
     rl_display_match_list(matches,count,longest);
   }
   else {
-    for (i=1; i<=count; i++) kinds[i] = ga_matchkind(matches[i]);
-    for (kind=0; kind<GA_COMP_KINDS; kind++) {
-      if (!(display_mask&(1U<<kind))) continue;
+    rl_get_screen_size(&rows,&columns);
+    if (rows<4) rows=24;
+    if (columns<2) columns=80;
+    for (i=1; i<=count; i++) {
+      kinds[i] = ga_matchkind(matches[i]);
+      for (kind=0; kind<GA_COMP_KINDS; kind++) if (kinds[i]&(1U<<kind)) counts[kind]++;
+    }
+    for (kind=0; kind<GA_COMP_KINDS && !stop; kind++) {
       n = max = 0;
-      group[0] = matches[0];
-      /* Directory matches already carry /. Filename display would add
-         another slash; command names must not inherit filesystem marks. */
-      rl_filename_completion_desired = kind==GA_COMP_SCRIPT || kind==GA_COMP_FILE;
       for (i=1; i<=count; i++) if (kinds[i]&(1U<<kind)) {
-        word = matches[i];
-        group[++n] = matches[i];
-        part = rl_filename_completion_desired ? strrchr(word,'/') : NULL;
-        /* Directory candidates already end in /. Keep their names visible. */
-        if (part && part[1]) word = part+1;
-        width = strlen(word);
+        group[n] = ga_compname(matches[i],kind);
+        width = ga_comptext(group[n++],0);
         if (width>max) max=width;
       }
       if (!n) continue;
-      counts[kind] = n;
-      group[n+1] = NULL;
-      fputs(gatxtc(colors[kind]),rl_outstream);
-      rl_display_match_list(group,n,max);
+      ncols = (columns-1)/(max+2);
+      if (ncols<1) ncols=1;
+      if (ncols>n) ncols=n;
+      nrows = (n+ncols-1)/ncols;
+      for (row=0; row<nrows; row++) {
+        fputs(gatxtc(colors[kind]),rl_outstream);
+        for (col=0; col<ncols; col++) {
+          index = row+col*nrows;
+          if (index>=n) break;
+          width = ga_comptext(group[index],1);
+          if (row+(col+1)*nrows<n)
+            for (pad=width; pad<max+2; pad++) fputc(' ',rl_outstream);
+        }
+        rl_crlf();
+        lines += ncols==1 ? 1+(width ? (width-1)/columns : 0) : 1;
+        more = row+1<nrows;
+        for (i=kind+1; !more && i<GA_COMP_KINDS; i++) more = counts[i]!=0;
+        if (more && !ga_comppage(&lines,rows-3)) { stop=1; break; }
+      }
       fputs(gatxtc(NULL),rl_outstream);
     }
-    /* Keep category names together below all candidates. The color of
-       each legend entry matches its candidate group; matching is unchanged. */
-    n = 0;
-    if (filtered) fprintf(rl_outstream,"Suggested %d/%d | ",shown,count);
-    else if (tab_active && tab_full) fprintf(rl_outstream,"All %d | ",count);
-    for (kind=0; kind<GA_COMP_KINDS; kind++) if (counts[kind]) {
-      fprintf(rl_outstream,"%s%s%s (%d)%s",n++ ? " | " : "",
-              gatxtc(colors[kind]),labels[kind],counts[kind],gatxtc(NULL));
-    }
-    if (filtered) fputs(" | Tab: all matches",rl_outstream);
-    rl_crlf();
-    rl_filename_completion_desired = filename;
     free(group);
     free(kinds);
   }
@@ -1088,20 +1159,10 @@ unsigned int display_mask=(1U<<GA_COMP_KINDS)-1;
 }
 
 static int ga_tab_complete(int count, int key) {
-int rc;
   (void)count;
   (void)key;
-  tab_full = rl_last_func==ga_tab_complete && tab_line &&
-             tab_point==rl_point && !strcmp(tab_line,rl_line_buffer);
-  tab_active = 1;
-  /* Public Readline mode: insert only the common prefix and immediately
-     list ambiguous matches. Repeated Tabs regenerate the full match set. */
-  rc = rl_complete_internal('!');
-  tab_active = 0;
-  free(tab_line);
-  tab_line = strdup(rl_line_buffer);
-  tab_point = rl_point;
-  return rc;
+  /* Insert the common prefix and immediately list every ambiguous match. */
+  return rl_complete_internal('!');
 }
 
 /* The words of the line before the cursor, in lower case: how many there
@@ -1171,7 +1232,6 @@ unsigned int kinds=0;
   rl_attempted_completion_over = 1;
   rl_filename_completion_desired = 0;
   rl_completion_append_character = ' ';
-  suggest_context = 0;
   args = lineargs(start,w1,w2,sizeof(w1));
 
   shell = ga_shell_start();
@@ -1182,13 +1242,11 @@ unsigned int kinds=0;
       else if (!isspace((unsigned char)rl_line_buffer[i])) command = 0;
     }
     if (command) {
-      suggest_context = strchr(text,'/')==NULL;
       candshellcommands(text);
     }
     candpaths(text);
   }
   else if (args==0) {
-    suggest_context = strchr(text,'/')==NULL;
     if (*text) {
       candtable(GAHELP_CMD,text);
       if (gcmn.impcmd) candscripts(text);
@@ -1293,15 +1351,34 @@ int i,type;
 /* write command history to log file */
 void write_command_log(char *logfile) {
    char QuitLabel[60];
+   char *last;
+   HIST_ENTRY **entries,*entry;
+   int status;
    time_t thetime;
    struct tm *ltime;
+   if (logfile==NULL) return;
    if ((thetime=time(NULL))!=0) {  
       ltime=localtime(&thetime);
       strftime(QuitLabel,59,"quit # (End of session: %d%h%Y, %T)",ltime);
-      remove_history(where_history());
+      /* Only replace an actual trailing quit command. The history cursor
+         can still be at zero after -c quit; removing at that position
+         would delete the first command loaded from the previous session. */
+      entries = history_list();
+      if (history_length>0 && entries) {
+        last = entries[history_length-1]->line;
+        if (!strncmp(last,"quit",4)) {
+          last += 4;
+          while (isspace((unsigned char)*last)) last++;
+          if (!*last) {
+            entry = remove_history(history_length-1);
+            if (entry) free_history_entry(entry);
+          }
+        }
+      }
       add_history(QuitLabel);
    }
-   write_history(logfile);  
+   status = write_history(logfile);
+   if (status) fprintf(stderr,"Could not save command history to %s: %s\n",logfile,strerror(status));
    return;
 }
 #endif

@@ -277,6 +277,8 @@ static const struct gahelp qrys[] = {
   {NULL,NULL,NULL,NULL}
 };
 
+/* Keep this catalog in sync with gafunc.c:rtnprs. Both Tab and usage hints
+   read it; pytests/check_function_catalog.py checks both directions. */
 static const struct gahelp funcs[] = {
   {"aave",     "aave(expr, xdim1, xdim2, ydim1, ydim2)    (weighted by latitude)", "aave(ts, lon=0, lon=360, lat=-90, lat=90)", NULL},
   {"abs",      "abs(expr)", "abs(u)", NULL},
@@ -299,10 +301,12 @@ static const struct gahelp funcs[] = {
   {"const",    "const(expr, value <,-u|-a>)", "const(pr, 0, -u)", NULL},
   {"cos",      "cos(expr)", "cos(lat*3.1416/180)", NULL},
   {"eloop",    "eloop(expr)", NULL, NULL},
+  {"esat",     "esat(T <,phase>)    (T in K; phase defaults to auto)", "esat(ta)", NULL},
   {"exp",      "exp(expr)", NULL, NULL},
   {"fndlvl",   "fndlvl(expr, expr_to_find, lev1, lev2)", "fndlvl(ta, 273.15, lev=1000, lev=100)", NULL},
   {"gint",     "gint(expr, dim1, dim2)", "gint(pr, t=1, t=12)", NULL},
   {"gr2stn",   "gr2stn(grid_expr, stn_expr <,-n>)  or  gr2stn(grid_expr, lon, lat <,-n>)", NULL, NULL},
+  {"grarea",   "grarea(expr)", "grarea(ts)", NULL},
   {"hcurl",    "hcurl(uexpr, vexpr)", "hcurl(u, v)", NULL},
   {"hdivg",    "hdivg(uexpr, vexpr)", "hdivg(u, v)", NULL},
   {"if",       "if(logical_expr, then_expr, else_expr)", "if(ts>273.15, 1, 0)", NULL},
@@ -319,6 +323,7 @@ static const struct gahelp funcs[] = {
   {"oabin",    "oabin(grid_expr, stn_expr <,-flag>)", NULL, NULL},
   {"oacres",   "oacres(grid_expr, stn_expr <,radii>)", NULL, NULL},
   {"pow",      "pow(expr1, expr2)", "pow(u, 2)", NULL},
+  {"qvsat",    "qvsat(T, p <,phase>)    (T in K, p in Pa; phase defaults to auto)", "qvsat(ta, 100000)", NULL},
   {"roll",     "roll(expr, integer_shift, x|y)", "roll(ts, -1, x)", NULL},
   {"s2g1d",    "s2g1d(stn_expr)", NULL, NULL},
   {"scorr",    "scorr(expr1, expr2, xdim1, xdim2, ydim1, ydim2)", "scorr(ts, ts.2, lon=0, lon=360, lat=-90, lat=90)", NULL},
@@ -340,6 +345,8 @@ static const struct gahelp funcs[] = {
   {"tvrh2q",   "tvrh2q(tv_expr, rh_expr)", NULL, NULL},
   {"tvrh2t",   "tvrh2t(tv_expr, rh_expr)", NULL, NULL},
   {"vint",     "vint(ps_expr, expr, top)", "vint(ps, q, 300)", NULL},
+  {"zint",     "zint(expr <,bottom <,top>>)    (height-coordinate bounds)", "zint(qv*rhobar, 0, 5000)", NULL},
+  {"zslice",   "zslice(expr, index_map)    (one-based Z indices)", "zslice(th, topo)", NULL},
   {NULL,NULL,NULL,NULL}
 };
 

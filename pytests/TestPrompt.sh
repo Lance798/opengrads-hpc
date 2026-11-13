@@ -22,6 +22,8 @@ build_root="${OPENGRADS_BUILD_ROOT:-/tmp/opengrads-build-cpu}"
 launcher="${OPENGRADS_LAUNCHER:-$repo_root/opengrads}"
 data="$repo_root/pytests/data"
 
+python3 "$repo_root/pytests/check_function_catalog.py"
+
 tmp="${TMPDIR:-/tmp}"
 work="$(mktemp -d "${tmp%/}/opengrads-prompt-test.XXXXXX")"
 work="$(CDPATH= cd -P -- "$work" && pwd)"
@@ -222,3 +224,4 @@ printf 'Prompt checks passed: ~ in file names, %d usage hints, %d names known, 1
   "$hints" "$counted"
 
 OPENGRADS_BUILD_ROOT="$build_root" python3 "$repo_root/pytests/prompt_completion.py" "$launcher" "$work"
+OPENGRADS_BUILD_ROOT="$build_root" python3 "$repo_root/pytests/prompt_defaults.py" "$launcher" "$work"

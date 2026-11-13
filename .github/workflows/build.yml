@@ -44,6 +44,9 @@ jobs:
             libSM-devel libgeotiff-devel libtiff-devel hdf5-devel \
             libjpeg-turbo-devel netcdf-devel udunits2-devel zlib-devel
 
+      - name: Check built-in function catalog
+        run: python3 pytests/check_function_catalog.py
+
       - name: Build, test, and package
         env:
           OPENGRADS_BUILD_JOBS: 4
@@ -98,6 +101,9 @@ jobs:
           brew install tmux
           # XQuartz's Xvfb lets the packager draw with the X displays.
           brew install --cask xquartz
+
+      - name: Check built-in function catalog
+        run: python3 pytests/check_function_catalog.py
 
       - name: Build, test, and package
         env:

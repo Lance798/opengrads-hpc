@@ -138,6 +138,8 @@ gaint (*fpntr)(struct gafunc *, struct gastat *);
   /* Find the function name and get the function pointer. */
   fpntr=NULL;
 
+  /* New built-ins also need a funcs[] entry in gahelp.c.
+     Checklist: docs/ADDING_FUNCTIONS.md; check: pytests/check_function_catalog.py. */
   /* start with the list of built-in functions */
   if (cmpwrd("sqrt",name)) fpntr = ffsqrt;
   if (cmpwrd("sin",name)) fpntr = ffsin;

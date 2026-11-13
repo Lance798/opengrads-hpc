@@ -148,6 +148,7 @@ Use `q config` to see whether this build includes `adios2-bp5`, `openmp`,
 - [OpenMP controls and benchmark notes](docs/PERFORMANCE.md)
 - [NetCDF/HDF5/BP5 time workers: expressions, support and limits](docs/TIME_WORKERS.md)
 - [Architecture and development roadmap](docs/ARCHITECTURE.md)
+- [Adding a built-in function: registration, Tab/help, tests and checks](docs/ADDING_FUNCTIONS.md)
 
 ## Legacy OpenGrADS documentation
 
