@@ -72,13 +72,19 @@ def pdf_content(path):
     return b'\n'.join(decoded)
 
 
+def svg_properties(item,parent=None):
+    props=dict(parent or {})
+    props.update((k,v) for k,v in item.attrib.items() if k!='style')
+    props.update(pair.strip().split(':',1) for pair in item.attrib.get('style','').split(';') if ':' in pair)
+    return {k:v.strip() for k,v in props.items()}
+
+
 def svg_polygons(path):
     """Read straight SVG subpaths for independent point-coverage checks."""
     result=[]
     number=r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?'
     def visit(item, parent, definition=False):
-        props=dict(parent,**item.attrib)
-        props.update(pair.strip().split(':',1) for pair in props.get('style','').split(';') if ':' in pair)
+        props=svg_properties(item,parent)
         tag=item.tag.rsplit('}',1)[-1]
         definition=definition or tag=='defs'
         fill=props.get('fill','black')
@@ -308,14 +314,19 @@ class VectorExportTests(unittest.TestCase):
             commands+=self.export('interactive',suffix,'white')
         commands+='set line 4\ndraw recf 3 1 4 2\n'+self.export('after','svg','transparent')
         self.run_grads(commands,batch=False)
-        self.assertIn('rgb(11.764706%, 23.529412%, 100%)',(self.work/'after.svg').read_text())
+        colors=[fill for fill,alpha,polygons in svg_polygons(self.work/'after.svg')]
+        self.assertTrue(any(re.search(r'rgb\(11\.76470\d*%,\s*23\.52941\d*%,\s*100%\)',fill) for fill in colors),colors)
 
     def test_hershey_character_paths_keep_strokes_and_png(self):
         def strokes(name):
             result=[]
-            for item in ET.parse(self.work/(name+'.svg')).getroot().iter():
-                if item.tag.endswith('}path') and item.attrib.get('fill')=='none':
-                    result.append(item.attrib)
+            def visit(item,parent):
+                props=svg_properties(item,parent)
+                if item.tag.endswith('}path') and props.get('fill')=='none' and props.get('stroke','none')!='none':
+                    result.append({k:v for k,v in props.items() if k in ('d','stroke','stroke-width','stroke-opacity',
+                                  'stroke-linecap','stroke-linejoin','stroke-dasharray','stroke-dashoffset','transform')})
+                for child in item:visit(child,props)
+            visit(ET.parse(self.work/(name+'.svg')).getroot(),{})
             return result
         for alpha,angle in ((255,0),(125,0),(255,35)):
             with self.subTest(alpha=alpha,angle=angle):
