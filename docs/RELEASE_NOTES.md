@@ -49,6 +49,8 @@ the last analysis command. The GrADS baseline remains `2.2.1.oga.1`.
   fields, including when explicit grid dimensions were supplied.
 - Ctrl-C clears both visible input and saved history-search state. It does
   not restore cancelled drafts or consume the next key.
+- Source and out-of-tree build launchers support color-disabled startup with
+  macOS system Bash 3.2, including the headless release regressions.
 
 Linux x86_64, Linux aarch64 and macOS arm64 remain supported. Existing
 numeric coordinate selections and data calculations keep their behavior;

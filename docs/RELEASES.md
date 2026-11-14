@@ -206,6 +206,8 @@ macOS arm64 build/test matrix as the PR. CI keeps binary uploads disabled.
 CI uses Python 3.11 explicitly: Linux selects the manylinux interpreter at
 `/opt/python/cp311-cp311/bin`, and macOS uses `actions/setup-python`. Each
 platform checks the active interpreter before running the regression suite.
+Launcher argument checks run before compilation, using `/bin/bash` explicitly
+on macOS to cover its system Bash 3.2 with color both enabled and disabled.
 The release publish job also uses Python 3.11 for notes extraction.
 Merging the pull request does not itself publish a release. CI can also be
 started by manual dispatch; pushing a version tag starts the separate release

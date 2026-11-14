@@ -58,8 +58,9 @@ case "$library_variable" in
 esac
 
 export OPENGRADS_COLOR="${OPENGRADS_COLOR:-1}"
-color_args=()
+# Bash 3.2 treats an empty array as unset under nounset. Prepend optional
+# flags to the positional arguments so color-disabled startup works there.
 if [[ "$OPENGRADS_COLOR" != 0 ]]; then
-  color_args=(-C "${OPENGRADS_COLOR_SCHEME:-1}")
+  set -- -C "${OPENGRADS_COLOR_SCHEME:-1}" "$@"
 fi
-exec "$grads_binary" "${color_args[@]}" "$@"
+exec "$grads_binary" "$@"
