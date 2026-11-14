@@ -84,6 +84,7 @@ OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestPrompt.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestGscript.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestVVMTopo.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestClearCanvas.sh"
+OPENGRADS_BUILD_ROOT="$build_root" bash "$repo_root/pytests/TestVectorExport.sh"
 OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
   "$repo_root/pytests/TestZSlice.sh"
 OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \

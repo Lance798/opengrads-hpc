@@ -465,9 +465,11 @@ void gxfrme (gaint action) {
   if (bcol>1) {
     /* If background is not black/white, draw a full page rectangle and populate the metabuffer */
     savcol = lcolor;
+    gxsignal(GX_BACKGROUND_BEGIN);
     gxcolr(bcol);
     gxrecf(0.0, rxsize, 0.0, rysize);
     gxcolr(savcol);
+    gxsignal(GX_BACKGROUND_END);
   }
 }
 

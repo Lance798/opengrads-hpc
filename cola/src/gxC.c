@@ -41,6 +41,8 @@ static gaint filflg=0;                      /* Polygon-Filling flag */
 static gaint brdrflg=0;                     /* Vector graphic border flag */
 static gadouble brdrwid=0.0;                /* Vector graphic border size */
 static gaint rotate=0;                      /* rotate landscape plots for hardcopy output */
+static gadouble borderscale=1.0,borderx=0.0,bordery=0.0;
+static gaint aasave,typesave;
 static gaint width, height;                 /* Drawable size */
 static gaint Xwidth, Xheight;               /* Window size */
 static gaint Bwidth, Bheight;               /* Batch surface size */
@@ -70,6 +72,42 @@ static gaint maskflag;                        /* Masking going on */
 static gaint batch=0;                         /* Batch mode */
 static gadouble clx,cly,clw,clh;              /* current clipping coordinates */
 static gadouble clxsav,clysav,clwsav,clhsav;  /* saved clipping coordinates */
+
+/* Cairo normally crops EPS BoundingBox to the ink. Keep the real canvas,
+   including a transparent background, without inserting a visible shape. */
+static struct {
+  FILE *file;
+  char line[256];
+  size_t length;
+  gaint header;
+  gadouble width,height;
+} psoutput;
+
+static cairo_status_t gxCpswrite(void *closure, const unsigned char *data, unsigned int length) {
+unsigned int i=0;
+int written;
+  (void)closure;
+  while (psoutput.header && i<length) {
+    if (psoutput.length==sizeof(psoutput.line)-1) return CAIRO_STATUS_WRITE_ERROR;
+    psoutput.line[psoutput.length++]=(char)data[i++];
+    if (psoutput.line[psoutput.length-1]!='\n') continue;
+    psoutput.line[psoutput.length]='\0';
+    if (!strncmp(psoutput.line,"%%BoundingBox:",14)) {
+      written=fprintf(psoutput.file,"%%%%BoundingBox: 0 0 %d %d\n",
+                      (int)ceil(psoutput.width),(int)ceil(psoutput.height));
+      if (written<0) return CAIRO_STATUS_WRITE_ERROR;
+    } else if (!strncmp(psoutput.line,"%%HiResBoundingBox:",19)) {
+      written=fprintf(psoutput.file,"%%%%HiResBoundingBox: 0 0 %.9g %.9g\n",psoutput.width,psoutput.height);
+      if (written<0) return CAIRO_STATUS_WRITE_ERROR;
+    } else if (fwrite(psoutput.line,1,psoutput.length,psoutput.file)!=psoutput.length) {
+      return CAIRO_STATUS_WRITE_ERROR;
+    }
+    if (!strncmp(psoutput.line,"%%EndComments",13)) psoutput.header=0;
+    psoutput.length=0;
+  }
+  if (i<length && fwrite(data+i,1,length-i,psoutput.file)!=length-i) return CAIRO_STATUS_WRITE_ERROR;
+  return CAIRO_STATUS_SUCCESS;
+}
 
 
 /* Initialize X interface, allocate cr */
@@ -201,7 +239,37 @@ gaint i;
 }
 
 
-/* Initialize a hardcopy surface and make it the active surface for drawing. 
+/* Restore the display context on both successful and failed exports. */
+static void gxChrestore (void) {
+  Hsurface=NULL;
+  Hcr=NULL;
+  rotate=0;
+  brdrflg=0;
+  brdrwid=0.0;
+  borderscale=1.0;
+  borderx=bordery=0.0;
+  gxdboutbck(-1);
+  gxdbsettransclr(-1);
+  if (batch) {
+    surface=Bsurface; cr=Bcr; width=Bwidth; height=Bheight;
+  } else {
+    surface=Xsurface; cr=Xcr; width=Xwidth; height=Xheight;
+  }
+  surftype=typesave;
+  lcolor=lcolorsave;
+  lwidth=lwidthsave;
+  clx=clxsav; cly=clysav; clw=clwsav; clh=clhsav;
+  xscl=(gadouble)width/xsize;
+  yscl=(gadouble)height/ysize;
+  drawing=maskflag=filflg=0;
+  force=1;
+  if (lcolor>=0) gxCcol(lcolor);
+  gxCwid(lwidth);
+  gxCaa(aasave);
+  force=0;
+}
+
+/* Initialize a hardcopy surface and make it the active surface for drawing.
    Save settings for the interactive surface so they can be restored when we are done.  
    fmtflg == 1  for eps
    fmtflg == 2  for ps
@@ -239,6 +307,8 @@ gaint bgwidth,bgheight,len;
   /* save these settings to restore when hardcopy drawing is finished */
   lcolorsave = lcolor; 
   lwidthsave = lwidth;
+  aasave = aaflg;
+  typesave = surftype;
   clxsav = clx; 
   clysav = cly;
   clwsav = clw;
@@ -247,6 +317,10 @@ gaint bgwidth,bgheight,len;
   /* set page sizes in inches */
   xsize = xsz;
   ysize = ysz;
+  rotate=0;
+  brdrflg=0;
+  borderscale=1.0;
+  borderx=bordery=0.0;
 
   if (fmtflg==5) {  /* Image output */
     /*  Set the image width and height */
@@ -273,25 +347,9 @@ gaint bgwidth,bgheight,len;
   }
 
   if (fmtflg==1 || fmtflg==2 || fmtflg==3 || fmtflg==4) {  /* vector graphic output */
-    /* set page size in points */
-    if (ysize > xsize) {      
-      /* portrait: no rotation needed for any format */
-      psx = xsize * 72.0;
-      psy = ysize * 72.0;
-    }
-    else {
-      /* landscape: ps, eps, and pdf must be rotated to fit on page */
-      if (fmtflg==1 || fmtflg==2 || fmtflg==3) {
-	rotate = 1;         
-	psx = ysize * 72.0;
-	psy = xsize * 72.0;
-      }
-      else {
-	/* landscape: svg doesn't need to be rotated */
-	psx = xsize * 72.0;
-	psy = ysize * 72.0;
-      }
-    }
+    /* Every vector format follows the real canvas, without rotating it. */
+    psx = xsize * 72.0;
+    psy = ysize * 72.0;
     /* page dimensions */
     width = (gaint)psx;
     height = (gaint)psy;
@@ -302,6 +360,9 @@ gaint bgwidth,bgheight,len;
     if (fmtflg<=3) {
       brdrwid = border * xscl;
       brdrflg = 1; 
+      borderscale=fmin((psx-2.0*brdrwid)/psx,(psy-2.0*brdrwid)/psy);
+      borderx=0.5*psx*(1.0-borderscale);
+      bordery=0.5*psy*(1.0-borderscale);
     }
   }
 
@@ -311,10 +372,27 @@ gaint bgwidth,bgheight,len;
   clw = width;
   clh = height;
 
+  /* From here surface only refers to the new output, so failures cannot
+     destroy the saved display surface. */
+  surface=NULL;
+  Hsurface=NULL;
+  Hcr=NULL;
+  if (!(borderscale>0.0)) {
+    printf("Error in gxChinit: edge width leaves no drawable page\n");
+    status=1;
+    goto failure;
+  }
+
   /* Create the hardcopy surface */
   if (fmtflg==1 || fmtflg==2) {            /* PS or EPS */
     surftype = 3;
-    surface = cairo_ps_surface_create (fname,psx,psy);
+    psoutput.file=fopen(fname,"wb");
+    if (!psoutput.file) { status=1; goto failure; }
+    psoutput.length=0;
+    psoutput.header=1;
+    psoutput.width=psx;
+    psoutput.height=psy;
+    surface = cairo_ps_surface_create_for_stream(gxCpswrite,NULL,psx,psy);
     if (fmtflg==1) cairo_ps_surface_set_eps(surface,1);
   }
   else if (fmtflg==3) {                    /* PDF */
@@ -336,7 +414,8 @@ gaint bgwidth,bgheight,len;
       if (len>0) {
 	if (*(bgImage+len+1)!='p' || *(bgImage+len+2)!='n' || *(bgImage+len+3)!='g' ) {
 	  if (*(bgImage+len+1)!='P' || *(bgImage+len+2)!='N' || *(bgImage+len+3)!='G' ) {
-	    return(5);
+          status=5;
+          goto failure;
 	  }
 	}
       }
@@ -346,9 +425,8 @@ gaint bgwidth,bgheight,len;
       if (status) {
 	printf("Error in gxChinit: unable to import background image %s\n",bgImage); 
         printf("Cairo status: %s\n",cairo_status_to_string(status));
-	cairo_surface_finish(surface);
-	cairo_surface_destroy(surface);
-	return(7); 
+	status=7;
+	goto failure;
       }
       /* make sure background image size matches output image size */
       bgwidth = cairo_image_surface_get_width (surface);
@@ -356,9 +434,8 @@ gaint bgwidth,bgheight,len;
       if (bgwidth != width || bgheight != height) {
 	printf(" background image size is %d x %d \n",bgwidth,bgheight);
 	printf("     output image size is %d x %d \n",width,height);
-	cairo_surface_finish(surface);
-	cairo_surface_destroy(surface);
-	return(10);
+	status=10;
+	goto failure;
       }
     }
     else {
@@ -372,15 +449,18 @@ gaint bgwidth,bgheight,len;
   if (status) {
     printf("Error in gxChinit: failed to initialize hardcopy surface \n");
     printf("Cairo status: %s\n",cairo_status_to_string(status));
-    cairo_surface_finish(surface);
-    cairo_surface_destroy(surface);
-    return(1);
+    status=1;
+    goto failure;
   }
  
   /* Set the Cairo context */
   cr = cairo_create (surface);
   Hsurface = surface; 
   Hcr = cr;
+  if (cairo_status(cr)!=CAIRO_STATUS_SUCCESS) {
+    status=1;
+    goto failure;
+  }
 
   /* default drawing settings */
   cairo_set_line_cap(cr,CAIRO_LINE_CAP_ROUND);
@@ -388,38 +468,35 @@ gaint bgwidth,bgheight,len;
   gxCaa(1);                   /* initialize anti-aliasing to be ON */ 
 
   force = 1;             /* force a color change */
-  bcol = gxdbkq();
-  if (bcol>1) {
-    /* User has set the background to be a color other than black/white.
-       The background rectangle is therefore in the metabuffer and will
-       cover whatever we draw here to initalize the output */
-    if (bwin>-900) {
-      printf("Warning: Background color cannot be changed at print time    \n");
-      printf(" if it has been set to a color other than black or white. \n");
-      printf(" The current background color is %d. \n",bcol);
-      if (bwin==1) 
-      printf(" The option \"white\" will be ignored. \n");
-      else
-      printf(" The option \"black\" will be ignored. \n");
-    }
-  }
-  else {
-    if (bwin>-900) 
-      gxdboutbck(bwin);  /* change the background color if user provided an override */
-    gxCcol(0);           /* 0 here means 'background' */
-    cairo_paint(cr);     /* paint it */
+  if (bwin==0 || bwin==1) gxdboutbck(bwin);
+  bcol=gxdbkq();
+  if (bwin!=GX_BG_TRANSPARENT) {
+    /* The page background is independent of the inset plot and of all
+       data polygons, even when they use the same color. */
+    gxCcol(bcol>1 ? bcol : 0);
+    cairo_paint(cr);
   }
 
   gxCcol(1);             /* set the initial color to 'foreground' */
   force = 0;             /* back to unforced color changes */
   return (0);
+
+failure:
+  if (Hcr) cairo_destroy(Hcr);
+  if (surface) {
+    cairo_surface_finish(surface);
+    cairo_surface_destroy(surface);
+  }
+  if (psoutput.file) { fclose(psoutput.file); psoutput.file=NULL; }
+  gxChrestore();
+  return status;
 }
 
 
 /* End the hardcopy drawing and reset drawing to the interactive/batch surface */
 
 gaint gxChend (char *fname, gaint fmtflg, char *fgImage) {
-gaint fgwidth,fgheight,len,status;
+gaint fgwidth,fgheight,len,status,result=0;
 cairo_surface_t *sfc2=NULL;     /* Surface for fgImage */   
 
   gxCflush(1);         /* finish drawing */
@@ -434,7 +511,8 @@ cairo_surface_t *sfc2=NULL;     /* Surface for fgImage */
       if (len>0) {
 	if (*(fgImage+len+1)!='p' || *(fgImage+len+2)!='n' || *(fgImage+len+3)!='g' ) {
 	  if (*(fgImage+len+1)!='P' || *(fgImage+len+2)!='N' || *(fgImage+len+3)!='G' ) {
-	    return(6);
+	    result=6;
+	    goto cleanup;
 	  }
 	}
       }
@@ -444,9 +522,8 @@ cairo_surface_t *sfc2=NULL;     /* Surface for fgImage */
       if (status) {
 	printf("Error in gxChend: unable to import foreground image %s\n",fgImage);
 	printf("Cairo status: %s\n",cairo_status_to_string(status));
-	cairo_surface_finish(sfc2);
-	cairo_surface_destroy(sfc2); 
-	return(8); 
+	result=8;
+	goto cleanup;
       }
       /* check to make sure foreground and output images are the same size */
       fgwidth = cairo_image_surface_get_width (sfc2);
@@ -454,9 +531,8 @@ cairo_surface_t *sfc2=NULL;     /* Surface for fgImage */
       if (fgwidth != width || fgheight != height) {
 	printf(" foreground image size is %d x %d \n",fgwidth,fgheight);
 	printf("     output image size is %d x %d \n",width,height);
-	cairo_surface_finish(sfc2);
-	cairo_surface_destroy(sfc2);
-	return(11);
+	result=11;
+	goto cleanup;
       }
       /* draw the foreground image OVER the hardcopy surface */
       cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
@@ -465,6 +541,7 @@ cairo_surface_t *sfc2=NULL;     /* Surface for fgImage */
       /* clean up */
       cairo_surface_finish(sfc2);
       cairo_surface_destroy(sfc2);
+      sfc2=NULL;
     }
   }
 
@@ -473,48 +550,31 @@ cairo_surface_t *sfc2=NULL;     /* Surface for fgImage */
   if (status) {
     printf("Error in gxChend: an error occured during rendering of hardcopy surface \n");
     printf("Cairo status: %s\n",cairo_status_to_string(status));
-    cairo_surface_finish(surface);
-    cairo_surface_destroy(surface);
-    return(1);
+    result=1;
+    goto cleanup;
   }
 
   /* dump everything to hardcopy output, finish and destroy the surface */
   cairo_surface_show_page (surface);
   if (fmtflg==5) {
-    cairo_surface_write_to_png (surface, fname);  /* for image (png) output only */
+    if (cairo_surface_write_to_png(surface,fname)!=CAIRO_STATUS_SUCCESS) result=1;
   }
-  cairo_destroy(cr);
+cleanup:
+  if (sfc2) {
+    cairo_surface_finish(sfc2);
+    cairo_surface_destroy(sfc2);
+  }
+  cairo_destroy(Hcr);
   cairo_surface_finish(surface);
+  status=cairo_surface_status(surface);
+  if (result==0 && status!=CAIRO_STATUS_SUCCESS) result=1;
   cairo_surface_destroy(surface);
-  rotate=0;             /* unset rotation for landscape hardcopy */
-  brdrflg=0;            /* reset border flag for vector graphic output */
-  brdrwid=0.0;          /* reset border width for vector graphic output */
-  gxdboutbck(-1);       /* unset output background color */
-
-  /* Reset everything back to the interactive/batch surface for drawing */
-  Hsurface=NULL;
-  if (batch) {
-    surface = Bsurface;
-    cr = Bcr;
-    width  = Bwidth; 
-    height = Bheight;
+  if (psoutput.file) {
+    if (fclose(psoutput.file) && !result) result=1;
+    psoutput.file=NULL;
   }
-  else {
-    surface = Xsurface;
-    cr = Xcr;
-    width  = Xwidth; 
-    height = Xheight;
-  }
-  lcolor = lcolorsave; 
-  lwidth = lwidthsave; 
-  clx = clxsav; 
-  cly = clysav;
-  clw = clwsav;
-  clh = clhsav;
-  xscl = (gadouble)(width)/xsize;
-  yscl = (gadouble)(height)/ysize;
-
-  return (0);
+  gxChrestore();
+  return result;
 }
 
 
@@ -685,8 +745,8 @@ void gxCxycnv (gadouble x, gadouble y, gadouble *nx, gadouble *ny) {
     *ny = (gadouble)height - (y*yscl);
   }
   if (brdrflg) {
-    *nx = brdrwid + *nx*(((gadouble)width -brdrwid*2.0)/(gadouble)width);
-    *ny = brdrwid + *ny*(((gadouble)height-brdrwid*2.0)/(gadouble)height);
+    *nx = borderx + *nx*borderscale;
+    *ny = bordery + *ny*borderscale;
   }
 }
 
@@ -835,7 +895,7 @@ char *astr = "A";
   cairo_text_extents (cr, astr, &te);
   awidth = fontsize/te.width; 
   usize = w * awidth * xscl;
-  if (brdrflg) usize = usize*(((gadouble)width-brdrwid*2.0)/(gadouble)width);
+  if (brdrflg) usize *= borderscale;
 
   /* get the text extents of the character */
   str[0] = ch;
@@ -871,8 +931,8 @@ char *astr = "A";
   usize = w * xscl * awidth;
   vsize = h * yscl * aheight;
   if (brdrflg) {
-    usize = usize*(((gadouble)width-brdrwid*2.0)/(gadouble)width);
-    vsize = vsize*(((gadouble)height-brdrwid*2.0)/(gadouble)height);
+    usize *= borderscale;
+    vsize *= borderscale;
   }
   /* Convert the position coordinates and adjust the rotation if necessary */
   gxCxycnv (x,y,&xpage,&ypage);

@@ -13,6 +13,7 @@
 /* local variables */
 static gadouble xsize,ysize;   
 static gaint rc=0;
+static gaint background=0,background_color=1;
 
 /* Report on configuration */
 void gxpcfg (void) {
@@ -60,24 +61,28 @@ gaint gxprint (char *fnout, gaint xin, gaint yin, gaint bwin, gaint fmtflg,
   /* Make sure we don't try to print an unsupported format */
   if (fmtflg!=1 && fmtflg!=2 && fmtflg!=3 && fmtflg!=4 && fmtflg!=5) return (9);
 
-  if (tcolor != -1) gxdbsettransclr (tcolor);   /* tell graphics database about transparent color override */
+  background = 0;
+  gxdbsettransclr (tcolor);
 
   /* initialize the output for vector graphics or image */
   rc = gxChinit (xsize,ysize,xin,yin,bwin,fnout,fmtflg,bgImage,border);
-  if (rc) return (rc); 
+  if (rc) goto cleanup;
 
   /* draw the contents of the metabuffer */
   gxhdrw (0,1);
-  if (rc) return (rc); 
 
   /* finish up */
   rc = gxChend (fnout,fmtflg,fgImage);
 
+cleanup:
+  background = 0;
+  gxdboutbck (-1);
   gxdbsettransclr (-1);    /* unset transparent color override */
   return (rc);
 }
 
 void gxpcol (gaint col) {  /* new color */
+  if (background) { background_color=col; return; }
   gxCcol (col);
 }
 void gxpacol (gaint col) {  /* new color definition */
@@ -87,6 +92,7 @@ void gxpwid (gaint wid) {  /* new line thickness */
   gxCwid (wid);
 }
 void gxprec (gadouble x1, gadouble x2, gadouble y1, gadouble y2) {  /* filled rectangle */ 
+  if (background) return;  /* gxChinit paints the unscaled full-page background */
   gxCrec (x1,x2,y1,y2);
 }
 void gxpbpoly (void) {  /* start a polygon fill */
@@ -106,6 +112,8 @@ void gxpflush (void) { /* finish drawing */
   gxCflush(1);
 }
 void gxpsignal (gaint sig) { 
+  if (sig==GX_BACKGROUND_BEGIN) { gxCflush(1); background=1; }
+  if (sig==GX_BACKGROUND_END) { background=0; gxCcol(background_color); }
   if (sig==1) gxCflush(1);   /* finish drawing */
   if (sig==2) gxCaa(0);      /* disable anti-aliasing */
   if (sig==3) gxCaa(1);      /* enable anti-aliasing */

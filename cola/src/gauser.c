@@ -1192,6 +1192,7 @@ FILE *pdefid=NULL;
       /* set backgroud/foreground colors */
       if      (cmpwrd("black",cmd))  bwin = 0;
       else if (cmpwrd("white",cmd))  bwin = 1;
+      else if (cmpwrd("transparent",cmd)) bwin = GX_BG_TRANSPARENT;
       /* explicit format types -- the union of all possibilities from all rendering engines */
       else if (cmpwrd("eps",cmd))  fmtflg = 1;
       else if (cmpwrd("ps" ,cmd))  fmtflg = 2;
@@ -1339,6 +1340,7 @@ FILE *pdefid=NULL;
     if (rc==9)  gaprnt (0,"GXPRINT error: unsupported output format\n");
     if (rc==10) gaprnt (0,"GXPRINT error: background image must be the same size as output\n");
     if (rc==11) gaprnt (0,"GXPRINT error: foreground image must be the same size as output\n");
+    if (rc==12) gaprnt (0,"GXPRINT error: transparent background requires the Cairo printing backend\n");
     if (rc) retcod = 1;
     else {
       retcod = 0;
