@@ -112,8 +112,8 @@ def svg_polygons(path):
     return result
 
 
-def svg_color_at(shapes,x,y):
-    color=None
+def svg_layers_at(shapes,x,y):
+    layers=[]
     for fill,alpha,polygons in shapes:
         winding=0
         for points in polygons:
@@ -121,8 +121,22 @@ def svg_color_at(shapes,x,y):
                 cross=(bx-ax)*(y-ay)-(x-ax)*(by-ay)
                 if ay<=y<by and cross>0: winding+=1
                 elif by<=y<ay and cross<0: winding-=1
-        if winding and alpha>0: color=(fill,alpha)
-    return color
+        if winding and alpha>0: layers.append((fill,alpha))
+    return layers
+
+
+def svg_color_at(shapes,x,y):
+    layers=svg_layers_at(shapes,x,y)
+    return layers[-1] if layers else None
+
+
+def svg_rgba_at(shapes,x,y):
+    rgba=(0.,0.,0.,0.)
+    for fill,alpha in svg_layers_at(shapes,x,y):
+        rgb=tuple(float(v)/100 for v in re.findall(r'([-\d.]+)%',fill))
+        assert len(rgb)==3, fill
+        rgba=tuple(v*alpha+old*(1-alpha) for v,old in zip(rgb,rgba[:3]))+(alpha+rgba[3]*(1-alpha),)
+    return rgba
 
 
 class VectorExportTests(unittest.TestCase):
@@ -219,6 +233,39 @@ class VectorExportTests(unittest.TestCase):
                         for y in range(17,610,19):
                             self.assertEqual(svg_color_at(legacy,x+.13,y+.21),svg_color_at(compact,x+.13,y+.21),(mode,missing,x,y))
                     self.assertEqual((self.work/'legacy.png').read_bytes(),(self.work/'compact.png').read_bytes())
+
+    def test_partial_alpha_layers_preserve_compositing_and_holes(self):
+        for mode in ('grfill','shaded','shade2b'):
+            with self.subTest(mode=mode):
+                setup=self.grid(True,block=2).replace('set gxout grfill','set gxout '+mode)
+                commands=(setup+'set rgb 30 240 30 80 125\nset rgb 31 20 180 40 125\n'
+                          'set rgb 32 80 40 200 0\nset rgb 33 120 40 80 255\n'
+                          'set ccols 30 31 32 33\nd f\nset rgb 34 10 50 210 125\n'
+                          'set clevs .5 1.5 2.5\nset ccols 34 34 34 34\nd maskout(f,f>1.5)\n')
+                for name,compact in (('legacy','0'),('compact','1')):
+                    self.run_grads(commands+self.export(name,'svg','white')+
+                                   self.export(name,'png','white')+self.export(name,'pdf','white'),
+                                   settings={'OPENGRADS_VECTOR_COMPACT':compact})
+                old=svg_polygons(self.work/'legacy.svg');new=svg_polygons(self.work/'compact.svg')
+                self.assertLess(len(new),len(old))
+                for x in range(23,790,19):
+                    for y in range(17,610,19):
+                        self.assertEqual(svg_rgba_at(old,x+.13,y+.21),svg_rgba_at(new,x+.13,y+.21),(mode,x,y))
+                self.assertEqual((self.work/'legacy.png').read_bytes(),(self.work/'compact.png').read_bytes())
+                self.assertNotRegex(pdf_content(self.work/'compact.pdf'),rb'/Subtype\s*/Image')
+                self.assertRegex(pdf_content(self.work/'compact.pdf'),rb'/ca 0\.49019')
+
+    def test_negative_alpha_and_shade1_keep_legacy_rendering(self):
+        for mode in ('grfill','shaded','shade1'):
+            with self.subTest(mode=mode):
+                setup=self.grid(True,block=2).replace('set gxout grfill','set gxout '+mode)
+                alpha=255 if mode=='shade1' else -125
+                commands=setup+f'set rgb 30 40 80 120 {alpha}\nset ccols 30 30 30 30\nd f\n'
+                for name,compact in (('legacy','0'),('compact','1')):
+                    self.run_grads(commands+self.export(name,'svg','white')+self.export(name,'png','white'),
+                                   settings={'OPENGRADS_VECTOR_COMPACT':compact})
+                for suffix in ('svg','png'):
+                    self.assertEqual((self.work/('legacy.'+suffix)).read_bytes(),(self.work/('compact.'+suffix)).read_bytes())
 
     def test_page_size_follows_canvas(self):
         for portrait, width, height in ((False, 792, 612), (True, 612, 792)):

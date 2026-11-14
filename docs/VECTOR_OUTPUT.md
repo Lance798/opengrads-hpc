@@ -34,7 +34,7 @@ This removes shared interior edges while preserving the original geometry,
 missing cells and drawing order between passes. PNG and screen drawing keep
 their original cell-by-cell rendering. A pass is compacted only when its
 converted rectangles are monotone and non-overlapping. Other projections,
-patterns and transparency keep their existing rendering. The rectangle
+patterns and negative-alpha masks keep their existing rendering. The rectangle
 buffer is capped at 64 MiB; unsupported states or allocation limits replay
 the accumulated cells in their original order. Cairo may use additional
 memory while writing paths.
@@ -44,6 +44,12 @@ polygons into compound paths. Every original contour vertex and hole is
 retained; boundaries are not simplified. Pending paths are flushed at
 262,144 vertices and at changes of drawing state. Legacy `shade1` keeps its
 existing rendering because its polygons may overlap.
+
+PDF/SVG also compact non-overlapping fills with positive partial alpha,
+including `-alpha 125` colors. Each display pass remains a separate layer;
+overlapping layers accumulate opacity in their original order. PS/EPS
+partial-alpha fills retain their existing Cairo fallback. Contour lines,
+dashes, widths and label masks are not combined with filled regions.
 
 Hershey text uses one stroked path per visible character, with separate
 subpaths for disconnected strokes. Character positions, rotation, size,

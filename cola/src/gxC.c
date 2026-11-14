@@ -88,6 +88,12 @@ static struct {
 static struct { gaint active,pending; size_t points; } shadefill;
 static struct { gaint active,pending; } character;
 
+/* PS/EPS retain Cairo's existing partial-alpha fallback. Negative alpha
+   uses a separate mask context and must not enter either collector. */
+static gaint gxCcompactalpha(gaint alpha) {
+  return alpha>=0 && alpha<=255 && (alpha==255 || surftype==4 || surftype==5);
+}
+
 static void gxCcharacterflush(void) {
   if (!character.pending) return;
   cairo_stroke(cr);
@@ -238,7 +244,7 @@ gaint i,j,k,n=0,changed,color=-1;
 size_t capacity,limit=(64u*1024u*1024u)/sizeof(struct gxCrect);
 struct gxCrect *buffer;
 struct gxCrgba *rgba;
-  if (count<3 || count>32 || psav!=255 || rsav<0 || maskflag ||
+  if (count<3 || count>32 || !gxCcompactalpha(psav) || rsav<0 || maskflag ||
       cairo_get_operator(cr)!=CAIRO_OPERATOR_OVER ||
       cairo_pattern_get_type(cairo_get_source(cr))!=CAIRO_PATTERN_TYPE_SOLID) return 0;
   for (i=0;i<count;i++) {
@@ -928,7 +934,7 @@ gaint bcol;
     dbq.alpha = 0;
     dbq.tile  = -999;
   }
-  if (dbq.tile>-900 || dbq.alpha!=255) gxCgridabort();
+  if (dbq.tile>-900 || !gxCcompactalpha(dbq.alpha)) gxCgridabort();
   if (dbq.tile>-900 || dbq.red!=rsav || dbq.green!=gsav || dbq.blue!=bsav || dbq.alpha!=psav)
     gxCshadeflush();
   if (force || clr!=actualcolor || dbq.red!=rsav || dbq.green!=gsav || dbq.blue!=bsav || dbq.alpha!=psav) {
@@ -1107,9 +1113,9 @@ gaint i,combine;
   }
 
   /* shade2 and shade2b provide non-overlapping contour regions. Preserve
-     their vertex order and holes, combining only consecutive opaque fills
+     their vertex order and holes, combining only consecutive compatible fills
      with an unchanged source/state. Bound additional pending path size. */
-  combine=shadefill.active && psav==255 && rsav>=0 && !maskflag &&
+  combine=shadefill.active && gxCcompactalpha(psav) && rsav>=0 && !maskflag &&
           cairo_get_operator(cr)==CAIRO_OPERATOR_OVER &&
           cairo_pattern_get_type(cairo_get_source(cr))==CAIRO_PATTERN_TYPE_SOLID && n>=3 && n<=262144;
   if (!combine || shadefill.points+(size_t)n>262144) gxCshadeflush();
