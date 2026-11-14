@@ -449,6 +449,7 @@ gaint i;
   gcmn.hbufsz = 1000000;
   gcmn.g2bufsz = 10000000;
   gcmn.loopdim = 3;
+  gcmn.loopincr = 1;
   gcmn.csmth = 0;
   gcmn.cterp = 1;
   gcmn.cint = 0;

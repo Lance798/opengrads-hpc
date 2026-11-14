@@ -26,6 +26,29 @@ void gxidle (void);   /* in gxsubs.c; gx.h clashes with grads.h here */
 static char *rcdef = "rc              ";
 static char *redef = "result          ";
 
+/* Same metadata lookup as the expression function, without issuing a
+   command or changing the script's rc/result variables. */
+static gaint gsfdimsize (struct gscmn *pcmn) {
+  struct gsvar *axis=pcmn->farg, *file=axis ? axis->forw : NULL;
+  char text[32], *result;
+  gaint size, rc=1;
+  pcmn->rres=NULL;
+  if (!axis || (file && file->forw)) {
+    printf("DIMSIZE error: Expected dimsize('x'|'y'|'z'|'t'|'e' <,file#>)\n");
+  } else if (!gagsdimsize(axis->strng,file ? file->strng : NULL,&size)) {
+    snprintf(text,sizeof(text),"%i",size);
+    result=malloc(strlen(text)+1);
+    if (result) {
+      strcpy(result,text);
+      pcmn->rres=result;
+      rc=0;
+    } else printf("DIMSIZE error: Memory allocation failed\n");
+  }
+  gsfrev(pcmn->farg);
+  pcmn->farg=NULL;
+  return rc;
+}
+
 /*  Execute a script, from one or more files. 
     Beware: various levels of recursion are used.     */
 
@@ -1913,6 +1936,7 @@ gaint len, rc, i, cflg, pcnt;
 
   pcmn->farg = avar;
   if (cmpwrd(name,"substr")) rc = gsfsub(pcmn);
+  else if (cmpwrd(name,"dimsize")) rc = gsfdimsize(pcmn);
   else if (cmpwrd(name,"subwrd")) rc = gsfwrd(pcmn);
   else if (cmpwrd(name,"sublin")) rc = gsflin(pcmn);
   else if (cmpwrd(name,"wrdpos")) rc = gsfpwd(pcmn);

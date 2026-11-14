@@ -219,10 +219,14 @@ workers start; compact worker ordinals are published only for worker jobs.
 
 ## Built-in function audit
 
-The `rtnprs` registry in `cola/src/gafunc.c` contains 67 built-in names.
+The `rtnprs` registry in `cola/src/gafunc.c` contains 68 built-in names.
 The time-worker allowlist contains 47 of them. Eligibility depends on the
 complete expression and command shape; it does not imply that every argument
 or dimension combination is parallelized.
+
+`dimsize` is a metadata scalar evaluated by the serial fallback. Expressions
+containing it retain the parent file numbers and full descriptor dimensions;
+the time-worker allowlist is unchanged. See [DIMENSIONS.md](DIMENSIONS.md).
 
 | Worker functions | Names |
 |---|---|

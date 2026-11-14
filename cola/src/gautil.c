@@ -37,6 +37,55 @@ struct gamfcmn mfcmn;
 
 static char pout[1256];   /* Build Error msgs here */
 
+/* A complete positive decimal integer, with checked accumulation. */
+gaint gaposint (const char *str, gaint *value) {
+  gaint n=0, digit, seen=0;
+  while (isspace((unsigned char)*str)) str++;
+  while (*str>='0' && *str<='9') {
+    digit=*str++-'0';
+    if (n>(INT_MAX-digit)/10) return 1;
+    n=n*10+digit;
+    seen=1;
+  }
+  while (isspace((unsigned char)*str)) str++;
+  if (!seen || *str || n<1) return 1;
+  *value=n;
+  return 0;
+}
+
+/* Metadata only: use the full descriptor dimensions, independent of SET.
+   Shared by expression and script functions; never opens a data file. */
+gaint gadimsize (struct gafile *first, struct gafile *dfile,
+                 const char *axis, const char *file, gaint *size) {
+  struct gafile *pfi=dfile;
+  const char *axes="xyzte", *pos;
+  gaint n, dim;
+  if (!axis || !*axis || axis[1] ||
+      !(pos=strchr(axes,tolower((unsigned char)*axis)))) {
+    gaprnt(0,"DIMSIZE error: Axis must be x, y, z, t, or e\n");
+    return 1;
+  }
+  dim=(gaint)(pos-axes);
+  if (file) {
+    if (gaposint(file,&n)) {
+      gaprnt(0,"DIMSIZE error: File number must be a positive integer\n");
+      return 1;
+    }
+    pfi=first;
+    while (pfi && --n) pfi=pfi->pforw;
+  }
+  if (!pfi) {
+    gaprnt(0,"DIMSIZE error: No open file at the requested file number\n");
+    return 1;
+  }
+  if (((pfi->type==2 || pfi->type==3) && dim<3) || pfi->dnum[dim]<1) {
+    gaprnt(0,"DIMSIZE error: File has no grid dimension on this axis\n");
+    return 1;
+  }
+  *size=pfi->dnum[dim];
+  return 0;
+}
+
 char *gatxtl(char *str, gaint color);
 char *gatxtlp(char *str);
 

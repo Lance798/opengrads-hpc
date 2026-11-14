@@ -39,6 +39,7 @@ static char pout[1256];          /* Build error msgs here */
 /* Function routine names.  Add a new function by putting the
    prototype here and adding to the if tests below.  */
 gaint ffsqrt   (struct gafunc *, struct gastat *);
+gaint ffdimsize(struct gafunc *, struct gastat *);
 gaint ffsin    (struct gafunc *, struct gastat *);
 gaint ffcos    (struct gafunc *, struct gastat *);
 gaint fftan    (struct gafunc *, struct gastat *);
@@ -125,6 +126,23 @@ void setupba (struct gaupb *upb) {
 }
 
 
+/* A metadata scalar; no field evaluation or data reads are required. */
+gaint ffdimsize (struct gafunc *pfc, struct gastat *pst) {
+  gaint size;
+  struct gagrid *pgr;
+  if (pfc->argnum<1 || pfc->argnum>2) {
+    gaprnt(0,"DIMSIZE error: Expected dimsize(x|y|z|t|e <,file#>)\n");
+    return 1;
+  }
+  if (gadimsize(pst->pfi1,pst->pfid,pfc->argpnt[0],
+                pfc->argnum==2 ? pfc->argpnt[1] : NULL,&size)) return 1;
+  pgr=gagrvl((gadouble)size);
+  if (!pgr) return 1;
+  pst->type=1;
+  pst->result.pgr=pgr;
+  return 0;
+}
+
 /* Handles function calls from gaexpr.c  */
 char *rtnprs (char *ch, char *name, struct gastat *pst) {
 struct gafunc *pfc;
@@ -141,6 +159,7 @@ gaint (*fpntr)(struct gafunc *, struct gastat *);
   /* New built-ins also need a funcs[] entry in gahelp.c.
      Checklist: docs/ADDING_FUNCTIONS.md; check: pytests/check_function_catalog.py. */
   /* start with the list of built-in functions */
+  if (cmpwrd("dimsize",name)) fpntr = ffdimsize;
   if (cmpwrd("sqrt",name)) fpntr = ffsqrt;
   if (cmpwrd("sin",name)) fpntr = ffsin;
   if (cmpwrd("cos",name)) fpntr = ffcos;

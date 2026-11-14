@@ -93,6 +93,7 @@ OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
 OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
   "$repo_root/pytests/TestSaturation.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestDefineNames.sh"
+OPENGRADS_BUILD_ROOT="$build_root" bash "$repo_root/pytests/TestDimensions.sh"
 
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestTimeLoader.sh"
 if grep -Eq '^#define USEHDF5 1$' "$build_root/src/config.h"; then

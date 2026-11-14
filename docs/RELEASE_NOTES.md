@@ -6,6 +6,13 @@ and a bundled VVM terrain script. The GrADS baseline remains `2.2.1.oga.1`.
 
 ### Added in 1.0.15
 
+- **Dimension endpoints and animation steps.** Indexed SET dimensions accept
+  the corresponding `nx/ny/nz/nt/ne`, `last`, and checked integer expressions.
+  `set lon/lat/lev` accept `first` and `last` in file grid order. The expression
+  and script function `dimsize(axis <,file#>)` returns full descriptor sizes.
+  `set loopincr N` samples built-in animation every N grid steps; `c` resets
+  it to 1, while `cc` and `swap` retain it. See [DIMENSIONS.md](DIMENSIONS.md).
+
 - **Last-command diagnostics.** `q performance` reports the last DISPLAY or
   DEFINE's wall/evaluation/output time, observed input backends and read paths,
   actual time-worker dispatch and pool reuse, and labeled worker-workspace
@@ -13,7 +20,7 @@ and a bundled VVM terrain script. The GrADS baseline remains `2.2.1.oga.1`.
   leaves progress/graphics behavior unchanged. See [QUERY_PERFORMANCE.md](QUERY_PERFORMANCE.md).
 
 - **Broader time-worker support.** The shared expression allowlist now covers
-  47 of 67 built-ins, including IF, spatial neighbors, extrema and their
+  47 of 68 built-ins, including IF, spatial neighbors, extrema and their
   locations, pressure integrals, indexed vertical slices and ROLL. Eligible
   BP5 expressions can use the same isolated pool as NetCDF/HDF5 expressions.
   Native file-qualified operands such as `zint(qv.3*rhobar.4)` retain each

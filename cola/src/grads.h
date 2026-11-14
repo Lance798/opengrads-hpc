@@ -311,6 +311,7 @@ struct gacmn {
   char xgeom[100];           /* geometry string for size of X window on startup */
   char gxdopt[16];           /* Name of graphics display back end     */
   char gxpopt[16];           /* Name of graphics printing back end    */
+  gaint loopincr;            /* Animation step; appended for ABI offsets */
 };
 
 /* Sructure for string substitution in templating -- the %ch template.  
@@ -878,6 +879,9 @@ gaint gadraw (char *, struct gacmn *);
 gaint gardrw (char *, struct gacmn *);
 gaint gaexec (char *, struct gacmn *);
 char *gagsdo (char *, gaint *);
+gaint gagsdimsize (const char *, const char *, gaint *);
+gaint gadimsize (struct gafile *, struct gafile *, const char *, const char *, gaint *);
+gaint gaposint (const char *, gaint *);
 gaint gadef (char *, struct gacmn *, gaint);
 gaint gaudef (char *, struct gacmn *);
 gaint gamodf (char *, struct gacmn *);
