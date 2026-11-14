@@ -317,9 +317,9 @@ class VectorExportTests(unittest.TestCase):
                 if item.tag.endswith('}path') and item.attrib.get('fill')=='none':
                     result.append(item.attrib)
             return result
-        for alpha in (255,125):
-            with self.subTest(alpha=alpha):
-                commands=f'set rgb 30 40 80 120 {alpha}\nset string 30\nset strsiz .4 .4\ndraw string 2 4 A+x\n'
+        for alpha,angle in ((255,0),(125,0),(255,35)):
+            with self.subTest(alpha=alpha,angle=angle):
+                commands=f'set rgb 30 40 80 120 {alpha}\nset string 30 l 3 {angle}\nset strsiz .4 .4\ndraw string 2 4 A+x\n'
                 for name,compact in (('legacy','0'),('compact','1')):
                     self.run_grads(commands+self.export(name,'svg','white')+self.export(name,'png','white'),
                                    settings={'OPENGRADS_VECTOR_COMPACT':compact})
@@ -331,6 +331,22 @@ class VectorExportTests(unittest.TestCase):
                                   for p in paths for part in p['d'].split('M') if part.strip())
                 self.assertEqual(subpaths(old),subpaths(new))
                 self.assertEqual((self.work/'legacy.png').read_bytes(),(self.work/'compact.png').read_bytes())
+
+    def test_custom_alpha_background_is_painted_once(self):
+        commands='set rgb 30 25 60 95 125\nset background 30\nc\n'
+        commands+=self.export('alpha','svg')+self.export('alpha','png')
+        commands+=self.export('empty','svg','transparent')+self.export('empty','png','transparent')
+        self.run_grads(commands)
+        shapes=svg_polygons(self.work/'alpha.svg')
+        self.assertEqual(len(shapes),1)
+        self.assertAlmostEqual(shapes[0][1],125/255,places=6)
+        width,height,pixel=png_pixels(self.work/'alpha.png')
+        self.assertEqual(pixel(0,0)[3],125)
+        self.assertEqual(pixel(width//2,height//2)[3],125)
+        self.assertEqual(svg_polygons(self.work/'empty.svg'),[])
+        width,height,pixel=png_pixels(self.work/'empty.png')
+        self.assertEqual(pixel(0,0)[3],0)
+        self.assertEqual(pixel(width//2,height//2)[3],0)
 
     def test_transparent_postscript_keeps_canvas_bounds(self):
         for suffix in ('eps','ps'):
