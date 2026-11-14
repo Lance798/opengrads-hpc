@@ -10,7 +10,8 @@ and a bundled VVM terrain script. The GrADS baseline remains `2.2.1.oga.1`.
   the line start to the cursor, retaining the prefix across repeated arrows
   and restoring the original draft at the newer end. Empty input keeps
   ordinary recall. Ctrl-C clears input and search state, and `.inputrc`
-  arrow bindings keep priority. See [PROMPT.md](PROMPT.md).
+  arrow bindings keep priority. System inputrc defaults no longer restore
+  ordinary arrows over the application default. See [PROMPT.md](PROMPT.md).
 
 - **Dimension endpoints and animation steps.** Indexed SET dimensions accept
   the corresponding `nx/ny/nz/nt/ne`, `last`, and checked arithmetic expressions

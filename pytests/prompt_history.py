@@ -21,28 +21,41 @@ checks = 0
 
 
 class Terminal:
-    def __init__(self, name, history=seed, inputrc='', term='dumb', enabled=True):
+    def __init__(self, name, history=seed, inputrc='', term='dumb', enabled=True,
+                 personal=False, display='gxdummy'):
         self.home = work / name
         self.home.mkdir()
         self.seed = list(history)
         self.enabled = enabled
         self.log = self.home / '.grads.log'
         self.log.write_text(''.join(line+'\n' for line in history))
-        config = self.home / 'inputrc'
+        config = self.home / ('.inputrc' if personal else 'inputrc')
+        self.bol, self.eol, self.kill = BOL, EOL, KILL
         # Private harness keys work in both editing modes without assuming
         # Emacs Ctrl-A/E/F/K bindings in vi insertion mode.
-        config.write_text(inputrc+'\n"\\C-x\\C-a": beginning-of-line\n'
-                          '"\\C-x\\C-e": end-of-line\n'
-                          '"\\C-x\\C-f": forward-char\n'
-                          '"\\C-x\\C-k": kill-line\n')
+        if inputrc is None:
+            self.bol, self.eol, self.kill = '\x01', '\x05', '\x0b'
+        else:
+            config.write_text(inputrc+'\n"\\C-x\\C-a": beginning-of-line\n'
+                              '"\\C-x\\C-e": end-of-line\n'
+                              '"\\C-x\\C-f": forward-char\n'
+                              '"\\C-x\\C-k": kill-line\n')
         self.done = False
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(self.home)
-            env = dict(os.environ, HOME=str(self.home), INPUTRC=str(config), TERM=term,
+            env = dict(os.environ, HOME=str(self.home), TERM=term,
                        OPENGRADS_COLOR='0', OPENGRADS_UPDATE_CHECK='0',
                        OPENGRADS_HISTORY='1' if enabled else '0', GA_PROGRESS='off')
-            os.execve(launcher, [launcher, '-bl', '-d', 'gxdummy', '-h', 'gxdummy'], env)
+            if inputrc is None or personal:
+                env.pop('INPUTRC', None)
+            else:
+                env['INPUTRC'] = str(config)
+            if display=='Term':
+                env.update(GA_TERM_MODE='file', GA_TERM_DIR=str(self.home/'plots'))
+                env.pop('TMUX', None)
+                env.pop('TMUX_PANE', None)
+            os.execve(launcher, [launcher, '-bl', '-d', display, '-h', 'gxdummy'], env)
         self.prompt()
 
     def pump(self, seconds):
@@ -83,7 +96,7 @@ class Terminal:
         if cursor is not None:
             self.keys('@')
             expected = expected[:cursor]+'@'+expected[cursor:]
-        os.write(self.fd, (BOL+"! printf 'HISTORY_BEGIN<%s>HISTORY_END\\n' '"+EOL+"'\r").encode())
+        os.write(self.fd, (self.bol+"! printf 'HISTORY_BEGIN<%s>HISTORY_END\\n' '"+self.eol+"'\r").encode())
         result = self.prompt().replace('\r','')
         result = re.sub(r'\x1b\[[0-9;?]*[A-Za-z@]', '', result)
         matches = re.findall(r'^HISTORY_BEGIN<(.*)>HISTORY_END$', result, re.MULTILINE)
@@ -96,7 +109,7 @@ class Terminal:
 
     def close(self):
         try:
-            os.write(self.fd, (BOL+KILL+'quit\r').encode())
+            os.write(self.fd, (self.bol+self.kill+'quit\r').encode())
             deadline = time.monotonic()+10
             while time.monotonic()<deadline:
                 self.pump(0.05)
@@ -202,6 +215,22 @@ case('custom-macro', 'open '+UP, 'open INSERTED', len('open INSERTED'),
 case('named', 'open '+'\x18\x10'*2+'\x18\x0e', 'open c.ctl', 5,
      inputrc='$if opengrads\n"\\C-x\\C-p": opengrads-history-backward\n'
              '"\\C-x\\C-n": opengrads-history-forward\n$endif\n')
+
+# No INPUTRC and no ~/.inputrc: exercise the real system fallback, rather
+# than an empty test init file that hides system arrow bindings.
+for name, keys, expected in [
+        ('csi', 'open '+UP, 'open c.ctl'),
+        ('ss3', 'open '+SS3_UP, 'open c.ctl'),
+        ('restore', 'open '+UP+DOWN, 'open ')]:
+    case('system-'+name, keys, expected, 5, inputrc=None, term='tmux-256color')
+case('personal-override', 'open '+UP, 'q threads', len('q threads'), personal=True,
+     inputrc='"\\e[A": previous-history\n')
+case('personal-options', 'open '+UP, 'open c.ctl', 5, personal=True,
+     inputrc='set bell-style none\n')
+plugins = Path(os.environ.get('OPENGRADS_BUILD_ROOT','build'))/'src'/'.libs'
+if any((plugins/('libgxdTerm'+suffix)).exists() for suffix in ('.so','.dylib')):
+    case('system-term', 'open '+UP, 'open c.ctl', 5, inputrc=None,
+         term='tmux-256color', display='Term')
 
 # A completed command creates a fresh readline call; prefix state must not
 # cross that boundary. Also check the current session's unsaved commands.

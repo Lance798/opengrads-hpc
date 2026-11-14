@@ -45,7 +45,8 @@ Ctrl-C clears the input and search state without deleting history; Up on
 the resulting blank line recalls the most recent command normally.
 
 These defaults apply to the usual CSI and SS3 arrow sequences in Emacs and
-vi insertion mode. Explicit `.inputrc` bindings take precedence, including
+vi insertion mode. System inputrc defaults do not disable this behavior.
+Explicit personal `.inputrc` / `INPUTRC` bindings take precedence, including
 bindings back to `previous-history` and `next-history`. The named functions
 `opengrads-history-backward` and `opengrads-history-forward` can also be bound
 explicitly. For example, to retain ordinary arrows:

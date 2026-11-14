@@ -1395,22 +1395,37 @@ static const char *up[] = {"\033[A","\033OA",NULL};
 static const char *down[] = {"\033[B","\033OB",NULL};
 Keymap map;
 rl_command_func_t *binding;
+const char *configured;
+char *user_init;
 int i,j,type;
   rl_readline_name = "opengrads";
   rl_add_defun("opengrads-complete",ga_tab_complete,-1);
   rl_add_defun("opengrads-history-backward",ga_history_backward,-1);
   rl_add_defun("opengrads-history-forward",ga_history_forward,-1);
-  /* Set defaults before Readline loads inputrc. Even an explicit binding
-     back to previous-history/next-history must take precedence over them. */
-  for (i=0; isatty(STDIN_FILENO) && isatty(STDOUT_FILENO) && maps[i]; i++) {
-    map=rl_get_keymap_by_name(maps[i]);
-    if (!map) continue;
-    for (j=0; up[j]; j++) {
-      rl_bind_keyseq_in_map(up[j],ga_history_backward,map);
-      rl_bind_keyseq_in_map(down[j],ga_history_forward,map);
-    }
-  }
   rl_initialize();
+  /* System inputrc files often explicitly install ordinary history arrows.
+     Apply application defaults after that fallback, then reapply only the
+     user's selected inputrc so an explicit personal override still wins. */
+  if (isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)) {
+    for (i=0; maps[i]; i++) {
+      map=rl_get_keymap_by_name(maps[i]);
+      if (!map) continue;
+      for (j=0; up[j]; j++) {
+        type=ISFUNC;
+        binding=rl_function_of_keyseq(up[j],map,&type);
+        if (type==ISFUNC && (!binding || binding==rl_get_previous_history || binding==rl_history_search_backward))
+          rl_bind_keyseq_in_map(up[j],ga_history_backward,map);
+        type=ISFUNC;
+        binding=rl_function_of_keyseq(down[j],map,&type);
+        if (type==ISFUNC && (!binding || binding==rl_get_next_history || binding==rl_history_search_forward))
+          rl_bind_keyseq_in_map(down[j],ga_history_forward,map);
+      }
+    }
+    configured=getenv("INPUTRC");
+    user_init=tilde_expand(configured && *configured ? configured : "~/.inputrc");
+    if (user_init && access(user_init,R_OK)==0) rl_read_init_file(user_init);
+    free(user_init);
+  }
   rl_attempted_completion_function = ga_attempted_completion;
   rl_completion_word_break_hook = ga_wordbreaks;
   rl_completion_display_matches_hook = ga_display_matches;
