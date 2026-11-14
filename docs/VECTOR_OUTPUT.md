@@ -45,6 +45,14 @@ retained; boundaries are not simplified. Pending paths are flushed at
 262,144 vertices and at changes of drawing state. Legacy `shade1` keeps its
 existing rendering because its polygons may overlap.
 
+Hershey text uses one stroked path per visible character, with separate
+subpaths for disconnected strokes. Character positions, rotation, size,
+line width and clipping are retained. Native Cairo fonts keep their own
+font/text representation. A partially transparent character is now painted
+once, so crossing strokes within that character share its opacity instead
+of becoming darker at their intersection. Negative-alpha mask rendering
+keeps its existing behavior. PNG and screen text are unchanged.
+
 `OPENGRADS_VECTOR_COMPACT=0` disables vector compaction for comparisons with
 the original geometry. It does not change the new page/background behavior.
 

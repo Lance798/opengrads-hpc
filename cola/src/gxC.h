@@ -49,6 +49,7 @@ void gxCfil (gadouble*, gaint);
 void gxCflush (gaint);
 void gxCgrid (gaint);
 void gxCshade (gaint);
+void gxCcharacter (gaint);
 void gxCfrm (void);
 void gxCftinit (void);
 void gxCftend (void);

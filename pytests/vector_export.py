@@ -131,11 +131,12 @@ class VectorExportTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.work = Path(self.temporary.name)
 
-    def run_grads(self, commands, portrait=False, errors=False, settings=None):
+    def run_grads(self, commands, portrait=False, errors=False, settings=None, batch=True):
         environment = dict(os.environ, OPENGRADS_COLOR='0', OPENGRADS_HISTORY='0',
                            OPENGRADS_UPDATE_CHECK='0', GA_PROGRESS='off')
         environment.update(settings or {})
-        process = subprocess.run([LAUNCHER, '-bpu' if portrait else '-blu', '-d', 'gxdummy', '-h', 'Cairo'],
+        flags=('-bp' if portrait else '-bl') if batch else ('-p' if portrait else '-l')
+        process = subprocess.run([LAUNCHER, flags+'u', '-d', 'gxdummy', '-h', 'Cairo'],
                                  input=commands+'\nquit\n', text=True, capture_output=True,
                                  env=environment, timeout=60)
         output = process.stdout+process.stderr
@@ -237,6 +238,36 @@ class VectorExportTests(unittest.TestCase):
                     box = re.search(r'(?m)^%%BoundingBox:\s*(\d+) (\d+) (\d+) (\d+)',text)
                     self.assertIsNotNone(box)
                     self.assertEqual(tuple(map(int,box.groups())), (0,0,width,height))
+
+    def test_interactive_export_without_shared_display_context(self):
+        commands='set string 2\ndraw string 2 4 A+x\n'
+        for suffix in ('svg','pdf','eps','ps','png'):
+            commands+=self.export('interactive',suffix,'white')
+        commands+='set line 4\ndraw recf 3 1 4 2\n'+self.export('after','svg','transparent')
+        self.run_grads(commands,batch=False)
+        self.assertIn('rgb(11.764706%, 23.529412%, 100%)',(self.work/'after.svg').read_text())
+
+    def test_hershey_character_paths_keep_strokes_and_png(self):
+        def strokes(name):
+            result=[]
+            for item in ET.parse(self.work/(name+'.svg')).getroot().iter():
+                if item.tag.endswith('}path') and item.attrib.get('fill')=='none':
+                    result.append(item.attrib)
+            return result
+        for alpha in (255,125):
+            with self.subTest(alpha=alpha):
+                commands=f'set rgb 30 40 80 120 {alpha}\nset string 30\nset strsiz .4 .4\ndraw string 2 4 A+x\n'
+                for name,compact in (('legacy','0'),('compact','1')):
+                    self.run_grads(commands+self.export(name,'svg','white')+self.export(name,'png','white'),
+                                   settings={'OPENGRADS_VECTOR_COMPACT':compact})
+                old,new=strokes('legacy'),strokes('compact')
+                self.assertEqual(len(old),7)
+                self.assertEqual(len(new),3)
+                def subpaths(paths):
+                    return sorted((tuple(sorted((k,v) for k,v in p.items() if k!='d')),part.strip())
+                                  for p in paths for part in p['d'].split('M') if part.strip())
+                self.assertEqual(subpaths(old),subpaths(new))
+                self.assertEqual((self.work/'legacy.png').read_bytes(),(self.work/'compact.png').read_bytes())
 
     def test_transparent_postscript_keeps_canvas_bounds(self):
         for suffix in ('eps','ps'):

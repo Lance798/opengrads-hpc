@@ -86,6 +86,25 @@ static struct {
   gaint colors,active,disabled;
 } gridfill;
 static struct { gaint active,pending; size_t points; } shadefill;
+static struct { gaint active,pending; } character;
+
+static void gxCcharacterflush(void) {
+  if (!character.pending) return;
+  cairo_stroke(cr);
+  character.pending=0;
+  drawing=0;
+}
+
+void gxCcharacter(gaint begin) {
+  if (begin) {
+    if (!vectorcompact || surftype<=2 || maskflag) return;
+    gxCflush(1);
+    character.active=1;
+  } else {
+    gxCcharacterflush();
+    character.active=0;
+  }
+}
 
 static void gxCshadeflush(void) {
   if (!shadefill.pending) return;
@@ -462,6 +481,7 @@ static void gxChrestore (void) {
   gridfill.active=gridfill.disabled=vectorcompact=0;
   shadefill.active=shadefill.pending=0;
   shadefill.points=0;
+  character.active=character.pending=0;
   Hsurface=NULL;
   Hcr=NULL;
   rotate=0;
@@ -483,6 +503,9 @@ static void gxChrestore (void) {
   xscl=(gadouble)width/xsize;
   yscl=(gadouble)height/ysize;
   drawing=maskflag=filflg=0;
+  /* The print plug-in may have its own state and no display/batch context
+     when GrADS runs interactively. There is then no Cairo state to restore. */
+  if (!cr) return;
   force=1;
   if (lcolor>=0) gxCcol(lcolor);
   gxCwid(lwidth);
@@ -859,6 +882,7 @@ void gxCrsiz (gaint dw, gaint dh) {
 /*  opt=0 discard everything. opt=1 finish rendering. */
 
 void gxCflush (gaint opt) {
+  gxCcharacterflush();
   gxCgridabort();
   gxCshadeflush();
   if (drawing) cairo_stroke(cr);
@@ -887,6 +911,7 @@ void gxCcol (gaint clr) {
 struct gxdbquery dbq;
 gaint bcol;
 
+  gxCcharacterflush();
   if (drawing) cairo_stroke(cr);
   drawing = 0;
   lcolor = clr;                  /* outside this routine lcolor 0/1 still means background/foreground */
@@ -955,6 +980,7 @@ gaint bcol;
 
 void gxCwid (gaint wid) {                 
 struct gxdbquery dbq;
+  gxCcharacterflush();
   gxCgridabort();
   gxCshadeflush();
   if (drawing) cairo_stroke(cr);
@@ -988,7 +1014,7 @@ void gxCxycnv (gadouble x, gadouble y, gadouble *nx, gadouble *ny) {
 void gxCmov (gadouble x, gadouble y) {
   if (!filflg) gxCgridabort();
   if (!filflg) gxCshadeflush();
-  if (drawing) cairo_stroke(cr);
+  if (drawing && !character.active) cairo_stroke(cr);
   drawing = 0;
   gxCxycnv (x,y,&xxx,&yyy);
 }
@@ -1000,6 +1026,7 @@ void gxCdrw (gadouble x, gadouble y) {
 gadouble di, dj;
   gxCxycnv (x,y,&di,&dj);
   if (!filflg) {           /* we're not filling a polygon */
+    if (character.active) character.pending=1;
     if (!drawing) {        /* this is the start of a line */
       drawing = 1;
       cairo_move_to(cr,xxx,yyy);
@@ -1018,6 +1045,7 @@ gadouble di, dj;
 
 void gxCclip (gadouble x1, gadouble x2, gadouble y1, gadouble y2) {
 gadouble di1,di2,dj1,dj2;
+  gxCcharacterflush();
   gxCgridabort();
   gxCshadeflush();
   gxCxycnv (x1,y1,&di1,&dj1);
@@ -1034,6 +1062,7 @@ gadouble di1,di2,dj1,dj2;
 
 void gxCrec (gadouble x1, gadouble x2, gadouble y1, gadouble y2) {
 gadouble di1,di2,dj1,dj2;
+  gxCcharacterflush();
   gxCgridabort();
   gxCshadeflush();
   if (drawing) cairo_stroke(cr);
@@ -1071,6 +1100,7 @@ void gxCfil (gadouble *xy, gaint n) {
 gadouble *pt,x,y;
 gaint i,combine;
 
+  gxCcharacterflush();
   if (gridfill.active && !gridfill.disabled) {
     if (gxCgridadd(xy,n)) { filflg=0; return; }
     gxCgridabort();
@@ -1121,6 +1151,7 @@ gaint i,combine;
 */
 
 void gxCaa (gaint flag) {
+  gxCcharacterflush();
   gxCgridabort();
   gxCshadeflush();
   if (cr!=NULL) {
@@ -1147,6 +1178,7 @@ cairo_text_extents_t te;
 gadouble usize,awidth,swidth,fontsize=100.0;
 char str[2];
 char *astr = "A";
+  gxCcharacterflush();
 
   gxCselfont (fn);
 
@@ -1457,12 +1489,14 @@ void gxCftend (void) {
 }
 
 void gxCpush (void) {
+  gxCcharacterflush();
   gxCgridabort();
   gxCshadeflush();
   cairo_push_group(cr);
 }
 
 void gxCpop (void) {
+  gxCcharacterflush();
   gxCgridabort();
   gxCshadeflush();
   cairo_pop_group_to_source(cr);
