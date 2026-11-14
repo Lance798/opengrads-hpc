@@ -199,7 +199,8 @@ the current release body with `python3 release/release_notes.py`.
 
 The `release/1.0.16` branch prepares distribution version `1.0.16`, including
 prefix history, contextual completion, dimension endpoints and sizes,
-animation steps, last-command diagnostics and the `vvmtopo` dimension fix.
+animation steps, last-command diagnostics, the `vvmtopo` dimension fix and
+the vector export improvements described in [VECTOR_OUTPUT.md](VECTOR_OUTPUT.md).
 Its pull request targets `Lance798/opengrads-hpc:main`.
 Pushing a `release/**` branch runs the same Linux x86_64, Linux aarch64 and
 macOS arm64 build/test matrix as the PR. CI keeps binary uploads disabled.
@@ -209,6 +210,8 @@ platform checks the active interpreter before running the regression suite.
 Launcher argument checks run before compilation, using `/bin/bash` explicitly
 on macOS to cover its system Bash 3.2 with color both enabled and disabled.
 The release publish job also uses Python 3.11 for notes extraction.
+Both release builders run the vector-output regressions with Python 3.11's
+standard library after building the Cairo plug-ins.
 Merging the pull request does not itself publish a release. CI can also be
 started by manual dispatch; pushing a version tag starts the separate release
 workflow and its gated publication step.

@@ -2,7 +2,9 @@
 
 This release improves interactive history and completion, adds convenient
 dimension selection and animation steps, and reports the work performed by
-the last analysis command. The GrADS baseline remains `2.2.1.oga.1`.
+the last analysis command. Vector exports follow the canvas orientation and
+use fewer objects for filled grids and text. The GrADS baseline remains
+`2.2.1.oga.1`.
 
 ### Added in 1.0.16
 
@@ -33,6 +35,11 @@ the last analysis command. The GrADS baseline remains `2.2.1.oga.1`.
   nested directories and explicit paths, and caches directory listings.
   Custom Tab bindings remain supported. See [PROMPT.md](PROMPT.md).
 
+- **Background-only transparency.** `gxprint plot.svg transparent` omits the
+  page background while retaining black/white data and text. It also works
+  with PDF, PS, EPS and Cairo PNG. The existing `-t color#` continues to make
+  that color transparent wherever it is drawn. See [VECTOR_OUTPUT.md](VECTOR_OUTPUT.md).
+
 ### Improved in 1.0.16
 
 - Interactive terminal sessions load and save history automatically, including
@@ -42,6 +49,14 @@ the last analysis command. The GrADS baseline remains `2.2.1.oga.1`.
   The complete changelog remains in this repository.
 - Release regressions use a four-core budget, and terminal checks wait for
   prompt output rather than depending on short fixed startup delays.
+- Vector `grfill` combines adjacent same-color cells and groups disconnected
+  regions into compound paths. `shaded`/`shade2` and `shade2b` group regions
+  without simplifying contour vertices or holes. PDF/SVG also compact
+  positive partial-alpha fills within each display pass. Unsupported states
+  retain their original rendering; PNG and screen plotting are unchanged.
+- Hershey vector text uses one path per visible character, with disconnected
+  strokes as subpaths. Partially transparent crossing strokes within a
+  character share one opacity. Native Cairo fonts retain their representation.
 
 ### Fixed in 1.0.16
 
@@ -51,6 +66,15 @@ the last analysis command. The GrADS baseline remains `2.2.1.oga.1`.
   not restore cancelled drafts or consume the next key.
 - Source and out-of-tree build launchers support color-disabled startup with
   macOS system Bash 3.2, including the headless release regressions.
+- PDF, PS and EPS follow the canvas orientation. Page margins scale both axes
+  uniformly and center the figure; PS/EPS bounds include transparent margins.
+- Export backgrounds cover the full page, including margins. Explicit white
+  or black overrides custom backgrounds, and failed exports restore temporary
+  transparency and drawing state. Interactive output supports separate
+  display and printing contexts.
+- `color.gs` reports invalid palettes, including `-kind shaded`, before
+  changing plot settings. Use a gradient such as `-kind black->white` with
+  `-alpha 125` for partially transparent shading.
 
 Linux x86_64, Linux aarch64 and macOS arm64 remain supported. Existing
 numeric coordinate selections and data calculations keep their behavior;
