@@ -13,6 +13,9 @@ set t 1 nt
 set e 1 ne
 set x 2 nx-1
 set z (nz+1)/2
+set x nx*1/3
+set x nx*0.5
+set x nx/3 nx*0.8
 ```
 
 `last` and the size name refer to the full dimension of the default file,
@@ -21,10 +24,16 @@ They are resolved when SET executes. Changing `set dfile` does not rewrite
 an earlier selection. For a template, the descriptor's declared length is
 used; missing data files are not searched to find an endpoint.
 
-Integer expressions support `+`, `-`, `*`, `/`, unary signs and parentheses,
-with the usual precedence. Each endpoint must be one token without spaces.
-All intermediate results must fit a signed 32-bit integer, and every division
-must be exact: `nx/2` fails for an odd NX. Division by zero, overflow, unknown
+Arithmetic expressions support `+`, `-`, `*`, `/`, unary signs, parentheses,
+decimal coefficients and scientific notation, with the usual precedence.
+Each endpoint must be one token without spaces. Evaluate the entire expression
+in double precision, then round once to the nearest integer grid index.
+Halfway values round toward the larger index, as in existing single-index SET:
+with NX=7, `nx*0.5` selects index 4; with NX=8, `nx/3` selects index 3.
+`(nx/3)*3` selects NX because intermediate results are not rounded.
+
+All intermediate values must be finite and within the signed 32-bit index
+range. Division by zero, overflow, unknown
 names, mismatched axis names (`set x 1 ny`) and extra arguments fail without
 changing the dimension environment. Original numeric endpoints, including
 fractional indices, scientific notation, and out-of-domain selections, keep

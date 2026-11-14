@@ -7,7 +7,8 @@ and a bundled VVM terrain script. The GrADS baseline remains `2.2.1.oga.1`.
 ### Added in 1.0.15
 
 - **Dimension endpoints and animation steps.** Indexed SET dimensions accept
-  the corresponding `nx/ny/nz/nt/ne`, `last`, and checked integer expressions.
+  the corresponding `nx/ny/nz/nt/ne`, `last`, and checked arithmetic expressions
+  with decimal coefficients, rounded once to the nearest integer grid index.
   `set lon/lat/lev` accept `first` and `last` in file grid order. The expression
   and script function `dimsize(axis <,file#>)` returns full descriptor sizes.
   `set loopincr N` samples built-in animation every N grid steps; `c` resets

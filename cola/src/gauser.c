@@ -5789,10 +5789,11 @@ struct gadimexpr {
   gaint last, axis, depth;
 };
 
-static gaint gadimsum (struct gadimexpr *, int64_t *);
+static gaint gadimsum (struct gadimexpr *, gadouble *);
 
-static gaint gadimatom (struct gadimexpr *expr, int64_t *value) {
+static gaint gadimatom (struct gadimexpr *expr, gadouble *value) {
   const char *start;
+  char *end;
   int sign;
   if (expr->p==expr->end || expr->depth>=64) return 1;
   if (*expr->p=='+' || *expr->p=='-') {
@@ -5805,12 +5806,10 @@ static gaint gadimatom (struct gadimexpr *expr, int64_t *value) {
     expr->p++; expr->depth++;
     if (gadimsum(expr,value) || expr->p==expr->end || *expr->p!=')') return 1;
     expr->p++; expr->depth--;
-  } else if (*expr->p>='0' && *expr->p<='9') {
-    *value=0;
-    do {
-      *value=*value*10+(*expr->p++-'0');
-      if (*value>INT_MAX) return 1;
-    } while (expr->p<expr->end && *expr->p>='0' && *expr->p<='9');
+  } else if ((*expr->p>='0' && *expr->p<='9') || *expr->p=='.') {
+    *value=strtod(expr->p,&end);
+    if (end==expr->p || end>expr->end) return 1;
+    expr->p=end;
   } else {
     start=expr->p;
     while (expr->p<expr->end && isalpha((unsigned char)*expr->p)) expr->p++;
@@ -5820,11 +5819,11 @@ static gaint gadimatom (struct gadimexpr *expr, int64_t *value) {
       *value=expr->last;
     } else return 1;
   }
-  return *value<INT_MIN || *value>INT_MAX;
+  return !isfinite(*value) || *value<INT_MIN || *value>INT_MAX;
 }
 
-static gaint gadimterm (struct gadimexpr *expr, int64_t *value) {
-  int64_t right;
+static gaint gadimterm (struct gadimexpr *expr, gadouble *value) {
+  gadouble right;
   char op;
   if (gadimatom(expr,value)) return 1;
   while (expr->p<expr->end && (*expr->p=='*' || *expr->p=='/')) {
@@ -5832,23 +5831,23 @@ static gaint gadimterm (struct gadimexpr *expr, int64_t *value) {
     if (gadimatom(expr,&right)) return 1;
     if (op=='*') *value*=right;
     else {
-      if (!right || *value%right) return 1;
+      if (!right) return 1;
       *value/=right;
     }
-    if (*value<INT_MIN || *value>INT_MAX) return 1;
+    if (!isfinite(*value) || *value<INT_MIN || *value>INT_MAX) return 1;
   }
   return 0;
 }
 
-static gaint gadimsum (struct gadimexpr *expr, int64_t *value) {
-  int64_t right;
+static gaint gadimsum (struct gadimexpr *expr, gadouble *value) {
+  gadouble right;
   char op;
   if (gadimterm(expr,value)) return 1;
   while (expr->p<expr->end && (*expr->p=='+' || *expr->p=='-')) {
     op=*expr->p++;
     if (gadimterm(expr,&right)) return 1;
     *value+=op=='+' ? right : -right;
-    if (*value<INT_MIN || *value>INT_MAX) return 1;
+    if (!isfinite(*value) || *value<INT_MIN || *value>INT_MAX) return 1;
   }
   return 0;
 }
@@ -5857,10 +5856,10 @@ static gaint gasetdimvalue (char *cmd, struct gafile *pfi, gaint axis,
                             gaint world, gadouble *value) {
   struct gadimexpr expr;
   char *end=cmd, *pos;
-  int64_t result;
+  gadouble result;
   while (*end && !isspace((unsigned char)*end)) end++;
   /* Preserve ordinary numeric coordinates, including fractional indices
-     and scientific notation. An expression must consist of integers. */
+     and scientific notation. Round only the final arithmetic result. */
   pos=getdbl(cmd,value);
   if (pos==end && isfinite(*value)) return 0;
   if (world) {
@@ -5874,10 +5873,11 @@ static gaint gasetdimvalue (char *cmd, struct gafile *pfi, gaint axis,
   expr.p=cmd; expr.end=end; expr.depth=0; expr.axis=axis;
   expr.last=((pfi->type==2 || pfi->type==3) && axis<3) ? 0 : pfi->dnum[axis];
   if (gadimsum(&expr,&result) || expr.p!=end) {
-    gaprnt(0,"SET error: Invalid integer dimension expression; use last or the matching n-axis name, + - * / and parentheses (division must be exact)\n");
+    gaprnt(0,"SET error: Invalid dimension expression; use last or the matching n-axis name, numbers, + - * / and parentheses (no division by zero or overflow)\n");
     return 1;
   }
-  *value=(gadouble)result;
+  /* Match existing single-index SET rounding, including halfway cases. */
+  *value=floor(result+0.5);
   return 0;
 }
 

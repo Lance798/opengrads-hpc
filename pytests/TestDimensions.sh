@@ -39,6 +39,7 @@ def fixture(name, dims, data=True):
 ctl = fixture('main', shape)
 other_shape = (6, 3, 1, 7, 1)
 other = fixture('other', other_shape)
+odd = fixture('odd', (7, 5, 1, 7, 1))
 metadata = fixture('metadata', shape, data=False)
 env = dict(os.environ, OPENGRADS_BUILD_ROOT=build, OPENGRADS_COLOR='0',
            OPENGRADS_UPDATE_CHECK='0', GA_PROGRESS='off')
@@ -83,8 +84,26 @@ for axis, size in zip(axes, shape):
         same(f'set {axis} {name}', f'set {axis} {size}')
         same(f'set {axis} 2 {name}-1', f'set {axis} 2 {size-1}')
 for expr, expected in [('nx/2',4), ('(nx+2)*2/4',5), ('nx-2*2',4),
-                       ('-(2-4)+nx/2',6), ('+last-1',7), ('2+3*1',5)]:
+                       ('-(2-4)+nx/2',6), ('+last-1',7), ('2+3*1',5),
+                       ('nx*1/3',3), ('nx*0.5',4), ('nx*.5',4),
+                       ('.5*nx',4), ('nx*5e-1',4), ('nx*5e-01',4),
+                       ('nx/3*3',8), ('(nx/3)*3',8), ('nx/3+0.5',3),
+                       ('7/2',4), ('nx*0.5625',5), ('1+0.5',2)]:
     same('set x '+expr, 'set x '+str(expected))
+same('set x nx/3 nx*0.8', 'set x 3 6')
+same('set x nx*0.5 nx/2', 'set x 4')
+for axis, size in zip(axes, shape):
+    same(f'set {axis} n{axis}*0.5', f'set {axis} {(size+1)//2}')
+    same(f'set {axis} 1 last/3', f'set {axis} 1 {int(size/3+0.5)}')
+# Halfway values follow the existing numeric single-index convention,
+# including negative/out-of-domain indices; never round intermediate values.
+same('set x -(3/2)', 'set x -1', 'lon')
+same('set x 1+0.49 4+0.49', 'set x 1 4', 'lon')
+same('set x 1+0.5 4+0.5', 'set x 2 5', 'lon')
+same(f'open {odd}\nset dfile 3\nset x nx*0.5',
+     f'open {odd}\nset dfile 3\nset x 4')
+same(f'open {odd}\nset dfile 3\nset x nx*1/3',
+     f'open {odd}\nset dfile 3\nset x 2')
 same('set dfile 2\nset x 1 nx', 'set dfile 2\nset x 1 6')
 same('set dfile 2\nset t 1 nt', 'set dfile 2\nset t 1 7')
 
@@ -102,7 +121,10 @@ same('set lon 120.25 122.25', 'set lon 1.2025e2 1.2225e2', 'lon')
 same('set x -1 nx+2', 'set x -1 10', 'lon')
 
 # Rejections are atomic, including an invalid second endpoint.
-bad = ['set x 2 ny', 'set x 2 nx/3', 'set x 2 nx/0', 'set x 2 nx+1junk',
+bad = ['set x 2 ny', 'set x 2 nx/0', 'set x 2 nx+1junk',
+       'set x 2 nx*nan', 'set x 2 nx*inf', 'set x 2 nx*1e309',
+       'set x 2 nx*0.5junk', 'set x 2 nx*.', 'set x 2 nx/0.0',
+       'set x 2 nx/1e-100',
        'set x 2 nx+2147483647', 'set x 2 2147483647*2',
        'set x 2 (-2147483647-1)-1', 'set x 2 -(-2147483647-1)',
        'set x 2 (nx-1', 'set x 2 nx-', 'set x 2 nx extra',
