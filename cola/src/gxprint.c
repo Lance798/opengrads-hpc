@@ -114,6 +114,8 @@ void gxpflush (void) { /* finish drawing */
 void gxpsignal (gaint sig) { 
   if (sig==GX_GRID_BEGIN) gxCgrid(1);
   if (sig==GX_GRID_END) gxCgrid(0);
+  if (sig==GX_SHADE_BEGIN) gxCshade(1);
+  if (sig==GX_SHADE_END) gxCshade(0);
   if (sig==GX_BACKGROUND_BEGIN) { gxCflush(1); background=1; }
   if (sig==GX_BACKGROUND_END) { background=0; gxCcol(background_color); }
   if (sig==1) gxCflush(1);   /* finish drawing */

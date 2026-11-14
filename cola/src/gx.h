@@ -14,6 +14,8 @@
 #define GX_BACKGROUND_END 65
 #define GX_GRID_BEGIN 66
 #define GX_GRID_END 67
+#define GX_SHADE_BEGIN 68
+#define GX_SHADE_END 69
 
 /* HBUFSZ is the size of the metafile output buffer in
    number of short integers.  The metafile buffer should be as

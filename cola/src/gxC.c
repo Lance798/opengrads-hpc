@@ -78,12 +78,35 @@ static gadouble clxsav,clysav,clwsav,clhsav;  /* saved clipping coordinates */
    Unsupported geometry, states or allocation limits replay in original order. */
 struct gxCrect { gadouble x0,y0,x1,y1; gaint color; };
 struct gxCrgba { gaint r,g,b,a; };
+static gaint vectorcompact=0;
 static struct {
   struct gxCrect *rect;
   size_t count,capacity;
   struct gxCrgba color[COLORMAX];
-  gaint colors,active,disabled,enabled;
+  gaint colors,active,disabled;
 } gridfill;
+static struct { gaint active,pending; size_t points; } shadefill;
+
+static void gxCshadeflush(void) {
+  if (!shadefill.pending) return;
+  cairo_save(cr);
+  cairo_set_antialias(cr,CAIRO_ANTIALIAS_NONE);
+  cairo_fill(cr);
+  cairo_restore(cr);
+  shadefill.pending=0;
+  shadefill.points=0;
+}
+
+void gxCshade(gaint begin) {
+  if (begin) {
+    if (!vectorcompact || surftype<=2 || maskflag) return;
+    gxCflush(1);
+    shadefill.active=1;
+  } else {
+    gxCshadeflush();
+    shadefill.active=0;
+  }
+}
 
 static int gxCrect_ycmp(const void *aa,const void *bb) {
 const struct gxCrect *a=aa,*b=bb;
@@ -253,8 +276,9 @@ struct gxCrgba *rgba;
 
 void gxCgrid(gaint begin) {
   if (begin) {
+    if (!vectorcompact || surftype<=2 || maskflag) return;
     gxCflush(1);
-    gridfill.active=gridfill.enabled && surftype>2;
+    gridfill.active=1;
     gridfill.disabled=0;
   } else {
     if (gridfill.active && !gridfill.disabled) {
@@ -435,7 +459,9 @@ gaint i;
 /* Restore the display context on both successful and failed exports. */
 static void gxChrestore (void) {
   gxCgridfree();
-  gridfill.active=gridfill.disabled=gridfill.enabled=0;
+  gridfill.active=gridfill.disabled=vectorcompact=0;
+  shadefill.active=shadefill.pending=0;
+  shadefill.points=0;
   Hsurface=NULL;
   Hcr=NULL;
   rotate=0;
@@ -658,7 +684,7 @@ gaint bgwidth,bgheight,len;
   }
   {
     const char *setting=getenv("OPENGRADS_VECTOR_COMPACT");
-    gridfill.enabled=fmtflg<=4 && !(setting && (!strcmp(setting,"0") || !strcmp(setting,"off")));
+    vectorcompact=fmtflg<=4 && !(setting && (!strcmp(setting,"0") || !strcmp(setting,"off")));
   }
 
   /* default drawing settings */
@@ -834,6 +860,7 @@ void gxCrsiz (gaint dw, gaint dh) {
 
 void gxCflush (gaint opt) {
   gxCgridabort();
+  gxCshadeflush();
   if (drawing) cairo_stroke(cr);
   drawing = 0;
   if (maskflag) {
@@ -877,6 +904,8 @@ gaint bcol;
     dbq.tile  = -999;
   }
   if (dbq.tile>-900 || dbq.alpha!=255) gxCgridabort();
+  if (dbq.tile>-900 || dbq.red!=rsav || dbq.green!=gsav || dbq.blue!=bsav || dbq.alpha!=psav)
+    gxCshadeflush();
   if (force || clr!=actualcolor || dbq.red!=rsav || dbq.green!=gsav || dbq.blue!=bsav || dbq.alpha!=psav) {
     /* change to new color */
     if (maskflag) gxCflush(1);
@@ -927,6 +956,7 @@ gaint bcol;
 void gxCwid (gaint wid) {                 
 struct gxdbquery dbq;
   gxCgridabort();
+  gxCshadeflush();
   if (drawing) cairo_stroke(cr);
   drawing = 0;
   lwidth = wid;
@@ -957,6 +987,7 @@ void gxCxycnv (gadouble x, gadouble y, gadouble *nx, gadouble *ny) {
 
 void gxCmov (gadouble x, gadouble y) {
   if (!filflg) gxCgridabort();
+  if (!filflg) gxCshadeflush();
   if (drawing) cairo_stroke(cr);
   drawing = 0;
   gxCxycnv (x,y,&xxx,&yyy);
@@ -988,6 +1019,7 @@ gadouble di, dj;
 void gxCclip (gadouble x1, gadouble x2, gadouble y1, gadouble y2) {
 gadouble di1,di2,dj1,dj2;
   gxCgridabort();
+  gxCshadeflush();
   gxCxycnv (x1,y1,&di1,&dj1);
   gxCxycnv (x2,y2,&di2,&dj2);
   /* set the clipping variables -- these get used when drawing characters */
@@ -1003,6 +1035,7 @@ gadouble di1,di2,dj1,dj2;
 void gxCrec (gadouble x1, gadouble x2, gadouble y1, gadouble y2) {
 gadouble di1,di2,dj1,dj2;
   gxCgridabort();
+  gxCshadeflush();
   if (drawing) cairo_stroke(cr);
   drawing = 0;
   gxCxycnv (x1,y1,&di1,&dj1);
@@ -1036,12 +1069,20 @@ void gxCbfil (void) {
 
 void gxCfil (gadouble *xy, gaint n) {
 gadouble *pt,x,y;
-gaint i;
+gaint i,combine;
 
   if (gridfill.active && !gridfill.disabled) {
     if (gxCgridadd(xy,n)) { filflg=0; return; }
     gxCgridabort();
   }
+
+  /* shade2 and shade2b provide non-overlapping contour regions. Preserve
+     their vertex order and holes, combining only consecutive opaque fills
+     with an unchanged source/state. Bound additional pending path size. */
+  combine=shadefill.active && psav==255 && rsav>=0 && !maskflag &&
+          cairo_get_operator(cr)==CAIRO_OPERATOR_OVER &&
+          cairo_pattern_get_type(cairo_get_source(cr))==CAIRO_PATTERN_TYPE_SOLID && n>=3 && n<=262144;
+  if (!combine || shadefill.points+(size_t)n>262144) gxCshadeflush();
 
   if (drawing) cairo_stroke(cr);
   drawing = 0;
@@ -1051,6 +1092,13 @@ gaint i;
     if (i==0) cairo_move_to(cr,x,y);
     else cairo_line_to(cr,x,y);
     pt+=2;
+  }
+  if (combine) {
+    cairo_close_path(cr);
+    shadefill.pending=1;
+    shadefill.points+=(size_t)n;
+    filflg=0;
+    return;
   }
   /* disable antialiasing, otherwise faint lines appear around the edges */
   if (aaflg) {
@@ -1074,6 +1122,7 @@ gaint i;
 
 void gxCaa (gaint flag) {
   gxCgridabort();
+  gxCshadeflush();
   if (cr!=NULL) {
     if (flag) {
       if (aaflg==0) {
@@ -1130,6 +1179,7 @@ gadouble aheight,awidth,swidth,fontsize=100.0;
 char str[2];
 char *astr = "A";
   gxCgridabort();
+  gxCshadeflush();
 
   if (drawing) cairo_stroke(cr);
   drawing = 0;
@@ -1408,11 +1458,13 @@ void gxCftend (void) {
 
 void gxCpush (void) {
   gxCgridabort();
+  gxCshadeflush();
   cairo_push_group(cr);
 }
 
 void gxCpop (void) {
   gxCgridabort();
+  gxCshadeflush();
   cairo_pop_group_to_source(cr);
   cairo_paint(cr);
 }

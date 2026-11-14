@@ -39,6 +39,12 @@ buffer is capped at 64 MiB; unsupported states or allocation limits replay
 the accumulated cells in their original order. Cairo may use additional
 memory while writing paths.
 
+Opaque `shaded`/`shade2` and `shade2b` combine consecutive same-color
+polygons into compound paths. Every original contour vertex and hole is
+retained; boundaries are not simplified. Pending paths are flushed at
+262,144 vertices and at changes of drawing state. Legacy `shade1` keeps its
+existing rendering because its polygons may overlap.
+
 `OPENGRADS_VECTOR_COMPACT=0` disables vector compaction for comparisons with
 the original geometry. It does not change the new page/background behavior.
 

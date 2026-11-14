@@ -148,8 +148,8 @@ class VectorExportTests(unittest.TestCase):
     def export(self, name, suffix, options=''):
         return f'gxprint {self.work/name}.{suffix} {suffix} {options}\n'
 
-    def grid(self, missing=False):
-        values=[float((x//4)%2+2*((y//4)%2)) for y in range(8) for x in range(8)]
+    def grid(self, missing=False, block=4):
+        values=[float((x//block)%2+2*((y//block)%2)) for y in range(8) for x in range(8)]
         if missing:
             for y in (3,4):
                 for x in (3,4): values[y*8+x]=-9999
@@ -201,6 +201,23 @@ class VectorExportTests(unittest.TestCase):
                 for x in range(23,790,19):
                     for y in range(17,610,19):
                         self.assertEqual(svg_color_at(legacy,x+.13,y+.21),svg_color_at(compact,x+.13,y+.21),(index,x,y))
+
+    def test_shaded_compounds_preserve_contours_and_holes(self):
+        for mode in ('shaded','shade2b'):
+            for missing in (False,True):
+                with self.subTest(mode=mode,missing=missing):
+                    setup=self.grid(missing,block=2).replace('set gxout grfill','set gxout '+mode)
+                    for name,compact in (('legacy','0'),('compact','1')):
+                        self.run_grads(setup+'d f\n'+self.export(name,'svg','white')+
+                                       self.export(name,'png','white x1100 y850'),
+                                       settings={'OPENGRADS_VECTOR_COMPACT':compact})
+                    legacy=svg_polygons(self.work/'legacy.svg')
+                    compact=svg_polygons(self.work/'compact.svg')
+                    self.assertLess(len(compact),len(legacy))
+                    for x in range(23,790,19):
+                        for y in range(17,610,19):
+                            self.assertEqual(svg_color_at(legacy,x+.13,y+.21),svg_color_at(compact,x+.13,y+.21),(mode,missing,x,y))
+                    self.assertEqual((self.work/'legacy.png').read_bytes(),(self.work/'compact.png').read_bytes())
 
     def test_page_size_follows_canvas(self):
         for portrait, width, height in ((False, 792, 612), (True, 612, 792)):

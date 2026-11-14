@@ -5420,6 +5420,7 @@ size_t sz;
   rrb = irb+1;
   if (filflg) {
     gaselc (pcm,pgr->rmin,pgr->rmax);
+    if (!shpflg && (filflg==4 || filflg==5)) gxsignal(GX_SHADE_BEGIN);
     if (smooth) {
       if (filflg==1) {
 	gxshad (rrr,isz,jsz,pcm->shdlvs,pcm->shdcls,pcm->shdcnt,rrrmask);
@@ -5448,6 +5449,7 @@ size_t sz;
         gxshad2b (pgr->grid,pgr->isiz,pgr->jsiz,pcm->shdlvs,pgr->rmax,pcm->shdcls,pcm->shdcnt,pgr->umask);
       }
     }
+    if (!shpflg && (filflg==4 || filflg==5)) gxsignal(GX_SHADE_END);
     if (pgr->idim==0 && pgr->jdim==1 && shpflg==0) gawmap (pcm, 0);
   } 
   else {
