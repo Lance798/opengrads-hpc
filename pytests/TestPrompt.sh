@@ -225,3 +225,4 @@ printf 'Prompt checks passed: ~ in file names, %d usage hints, %d names known, 1
 
 OPENGRADS_BUILD_ROOT="$build_root" python3 "$repo_root/pytests/prompt_completion.py" "$launcher" "$work"
 OPENGRADS_BUILD_ROOT="$build_root" python3 "$repo_root/pytests/prompt_defaults.py" "$launcher" "$work"
+OPENGRADS_BUILD_ROOT="$build_root" python3 "$repo_root/pytests/prompt_history.py" "$launcher" "$work"

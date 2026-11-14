@@ -2904,6 +2904,13 @@ void gaprogreset (void) {
 #include <readline/readline.h>
 #include <readline/history.h>
 
+static volatile sig_atomic_t ga_readline_cancelled;
+
+/* Enable Readline's idle polling when there is no application event hook.
+   Its polling loop checks rl_done after signal delivery, so Ctrl-C can
+   finish an empty read without waiting for and consuming another key. */
+static int ga_readline_idle (void) { return 0; }
+
 /* Retrieves the next command from the user.  Leading blanks
    are stripped.  The number of characters entered before the
    CR is returned.                                                    */
@@ -2915,9 +2922,19 @@ char *ch, *ch2;
   gaprogreset();
   gxidle();
 #endif
+  ga_readline_cancelled = 0;
   ga_at_prompt = 1;
+  if (!rl_event_hook) rl_event_hook=ga_readline_idle;
   ch=readline(gatxtlp(prompt));
+  if (rl_event_hook==ga_readline_idle) rl_event_hook=NULL;
   ga_at_prompt = 0;
+  if (ga_readline_cancelled) {
+    /* A Readline callback can finish after SIGINT and change its buffer.
+       A cancelled read must never submit that reconstructed command. */
+    free(ch);
+    *cmd='\0';
+    return 1;
+  }
   if ( ch== NULL) {
     return(-1);
   } else {
@@ -2935,10 +2952,14 @@ char *ch, *ch2;
 
 void ga_prompt_sigint (void) {
   if (ga_at_prompt==1) {
-    rl_crlf();
-    rl_on_new_line();
+    ga_readline_cancelled=1;
     rl_replace_line("",0);
-    rl_redisplay();
+    /* Finish this empty input and let the next readline call reset all
+       history state, including Readline's saved draft and undo ownership.
+       Merely clearing the visible line can resurrect a cancelled draft
+       when the user subsequently presses Up then Down. */
+    rl_done=1;
+    rl_crlf();
     return;
   }
   if (ga_at_prompt==2) {

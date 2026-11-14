@@ -45,6 +45,7 @@
 #endif
 
 #if READLINE ==1
+#include <limits.h>
 #include <time.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -1328,13 +1329,87 @@ unsigned int kinds=0;
   return rl_completion_matches(text,ga_completion_generator);
 }
 
+/* Readline owns the history and search cursor. Retain only the draft, so
+   reaching the newer end can restore all of it, including text after point.
+   Keeping point at the prefix boundary follows Readline's search commands. */
+static char *ga_history_draft;
+static int ga_history_point, ga_history_mark, ga_history_restart;
+static int ga_history_backward(int, int);
+static int ga_history_forward(int, int);
+
+static int ga_history_browse(int count, int key, int direction) {
+char *before, *draft;
+int continuing, point=rl_point, mark=rl_mark, rc;
+  if (count==0) return 0;
+  if (count==INT_MIN) return rl_ding();
+  if (count<0) { count=-count; direction=-direction; }
+  continuing=ga_history_draft && !ga_history_restart &&
+    (rl_last_func==ga_history_backward || rl_last_func==ga_history_forward);
+  if (!continuing) {
+    draft=rl_copy_text(0,rl_end);
+    if (!draft) return rl_ding();
+    free(ga_history_draft);
+    ga_history_draft=draft;
+    ga_history_point=rl_point;
+    ga_history_mark=rl_mark;
+    ga_history_restart=0;
+  }
+  /* No prefix: retain normal history navigation, including duplicates and
+     Ctrl-P/Ctrl-N interoperability, throughout this run of arrow presses. */
+  if (ga_history_point==0)
+    return direction<0 ? rl_get_previous_history(count,key) : rl_get_next_history(count,key);
+  before=rl_copy_text(0,rl_end);
+  if (!before) return rl_ding();
+  /* The native functions recognize each other, rather than these wrappers,
+     when deciding whether to reuse the initial search prefix. */
+  rl_last_func=continuing ? rl_history_search_backward : NULL;
+  rc=direction<0 ? rl_history_search_backward(count,key) : rl_history_search_forward(count,key);
+  if (rc) {
+    if (direction<0) {
+      rl_replace_line(before,0);
+      rl_point=point;
+      rl_mark=mark;
+    } else {
+      rl_replace_line(ga_history_draft,0);
+      rl_point=ga_history_point;
+      rl_mark=ga_history_mark;
+      using_history();
+      ga_history_restart=1;
+    }
+  }
+  free(before);
+  return rc;
+}
+
+static int ga_history_backward(int count, int key) {
+  return ga_history_browse(count,key,-1);
+}
+
+static int ga_history_forward(int count, int key) {
+  return ga_history_browse(count,key,1);
+}
+
 static void ga_readline_init(void) {
 static const char *maps[] = {"emacs-standard","vi-insert",NULL};
+static const char *up[] = {"\033[A","\033OA",NULL};
+static const char *down[] = {"\033[B","\033OB",NULL};
 Keymap map;
 rl_command_func_t *binding;
-int i,type;
+int i,j,type;
   rl_readline_name = "opengrads";
   rl_add_defun("opengrads-complete",ga_tab_complete,-1);
+  rl_add_defun("opengrads-history-backward",ga_history_backward,-1);
+  rl_add_defun("opengrads-history-forward",ga_history_forward,-1);
+  /* Set defaults before Readline loads inputrc. Even an explicit binding
+     back to previous-history/next-history must take precedence over them. */
+  for (i=0; isatty(STDIN_FILENO) && isatty(STDOUT_FILENO) && maps[i]; i++) {
+    map=rl_get_keymap_by_name(maps[i]);
+    if (!map) continue;
+    for (j=0; up[j]; j++) {
+      rl_bind_keyseq_in_map(up[j],ga_history_backward,map);
+      rl_bind_keyseq_in_map(down[j],ga_history_forward,map);
+    }
+  }
   rl_initialize();
   rl_attempted_completion_function = ga_attempted_completion;
   rl_completion_word_break_hook = ga_wordbreaks;

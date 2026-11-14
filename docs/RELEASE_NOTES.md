@@ -6,6 +6,12 @@ and a bundled VVM terrain script. The GrADS baseline remains `2.2.1.oga.1`.
 
 ### Added in 1.0.15
 
+- **Prefix history search.** Up/Down recall commands matching the text from
+  the line start to the cursor, retaining the prefix across repeated arrows
+  and restoring the original draft at the newer end. Empty input keeps
+  ordinary recall. Ctrl-C clears input and search state, and `.inputrc`
+  arrow bindings keep priority. See [PROMPT.md](PROMPT.md).
+
 - **Dimension endpoints and animation steps.** Indexed SET dimensions accept
   the corresponding `nx/ny/nz/nt/ne`, `last`, and checked arithmetic expressions
   with decimal coefficients, rounded once to the nearest integer grid index.

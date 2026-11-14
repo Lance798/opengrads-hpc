@@ -1,7 +1,8 @@
 # The prompt
 
-Three conveniences at the `ga->` prompt: Tab completes what can come next,
-a command that fails says how it is used, and file names may start with `~`.
+At the `ga->` prompt, arrows can recall history matching the input prefix,
+Tab completes what can come next, a command that fails says how it is used,
+and file names may start with `~`.
 
 ## Default color and history
 
@@ -20,6 +21,46 @@ Piped input/output, `-E`, `-u`, and one-shot `-x` execution do not enable
 history automatically. Explicit `-H` remains available when desired.
 Writing history preserves earlier commands when a startup command exits
 before entering the interactive prompt.
+
+## History matching the input prefix
+
+Type a prefix and press Up to recall the most recent history entry starting
+with it. For example, `open ` recalls `open c.ctl`, then `open b.ctl`, then
+`open a.ctl` as Up is repeated, skipping other commands. `set x ` and `d qv`
+work the same way. The default match is case-sensitive and includes spaces.
+The prefix is the text from the start of the line to the cursor on the first
+arrow press; later text does not restrict the match.
+
+Consecutive Up/Down presses retain that initial prefix. Down moves toward
+newer matches, then restores the original draft and cursor, including any
+text after the cursor. Up at the oldest match, or with no match, keeps the
+current input. Readline skips consecutive identical matching lines during
+prefix search. Recall only changes the input line; Enter executes it.
+
+Editing or moving the cursor starts a new search on the next arrow press.
+An empty prefix keeps ordinary history navigation. Ctrl-P/Ctrl-N keep their
+mode-specific bindings (history in Emacs mode, menu completion in vi insertion
+mode), and Ctrl-R keeps its existing search behavior.
+Ctrl-C clears the input and search state without deleting history; Up on
+the resulting blank line recalls the most recent command normally.
+
+These defaults apply to the usual CSI and SS3 arrow sequences in Emacs and
+vi insertion mode. Explicit `.inputrc` bindings take precedence, including
+bindings back to `previous-history` and `next-history`. The named functions
+`opengrads-history-backward` and `opengrads-history-forward` can also be bound
+explicitly. For example, to retain ordinary arrows:
+
+```text
+$if opengrads
+"\e[A": previous-history
+"\e[B": next-history
+"\eOA": previous-history
+"\eOB": next-history
+$endif
+```
+
+History persistence and `OPENGRADS_HISTORY` retain their existing behavior.
+Builds without Readline, `-E`, IPC and piped input do not use arrow search.
 
 ## Tab completion
 
