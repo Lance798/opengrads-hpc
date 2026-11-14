@@ -72,15 +72,69 @@ def pdf_content(path):
     return b'\n'.join(decoded)
 
 
+def svg_polygons(path):
+    """Read straight SVG subpaths for independent point-coverage checks."""
+    result=[]
+    number=r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?'
+    def visit(item, parent, definition=False):
+        props=dict(parent,**item.attrib)
+        props.update(pair.strip().split(':',1) for pair in props.get('style','').split(';') if ':' in pair)
+        tag=item.tag.rsplit('}',1)[-1]
+        definition=definition or tag=='defs'
+        fill=props.get('fill','black')
+        if not definition and fill!='none' and tag in ('rect','path'):
+            polygons=[]
+            if tag=='rect':
+                x,y,w,h=(float(item.attrib.get(k,0)) for k in ('x','y','width','height'))
+                polygons=[[(x,y),(x+w,y),(x+w,y+h),(x,y+h)]]
+            else:
+                tokens=re.findall(r'[A-Za-z]|'+number,item.attrib['d'])
+                command=None;points=[];i=0;x=y=0.0
+                while i<len(tokens):
+                    if tokens[i].isalpha():
+                        command=tokens[i];i+=1
+                        if command in ('Z','z'):
+                            if points: polygons.append(points);points=[]
+                            continue
+                    assert command in ('M','L','m','l'), (command,item.attrib['d'][:200])
+                    dx,dy=map(float,tokens[i:i+2]);i+=2
+                    if command.islower(): x+=dx;y+=dy
+                    else: x,y=dx,dy
+                    if command in ('M','m'):
+                        if points: polygons.append(points)
+                        points=[];command='l' if command=='m' else 'L'
+                    points.append((x,y))
+                if points: polygons.append(points)
+            result.append((fill,float(props.get('fill-opacity','1')),polygons))
+        for child in item:
+            visit(child,props,definition)
+    visit(ET.parse(path).getroot(),{})
+    return result
+
+
+def svg_color_at(shapes,x,y):
+    color=None
+    for fill,alpha,polygons in shapes:
+        winding=0
+        for points in polygons:
+            for (ax,ay),(bx,by) in zip(points,points[1:]+points[:1]):
+                cross=(bx-ax)*(y-ay)-(x-ax)*(by-ay)
+                if ay<=y<by and cross>0: winding+=1
+                elif by<=y<ay and cross<0: winding-=1
+        if winding and alpha>0: color=(fill,alpha)
+    return color
+
+
 class VectorExportTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='opengrads-vector-')
         self.addCleanup(self.temporary.cleanup)
         self.work = Path(self.temporary.name)
 
-    def run_grads(self, commands, portrait=False, errors=False):
+    def run_grads(self, commands, portrait=False, errors=False, settings=None):
         environment = dict(os.environ, OPENGRADS_COLOR='0', OPENGRADS_HISTORY='0',
                            OPENGRADS_UPDATE_CHECK='0', GA_PROGRESS='off')
+        environment.update(settings or {})
         process = subprocess.run([LAUNCHER, '-bpu' if portrait else '-blu', '-d', 'gxdummy', '-h', 'Cairo'],
                                  input=commands+'\nquit\n', text=True, capture_output=True,
                                  env=environment, timeout=60)
@@ -93,6 +147,60 @@ class VectorExportTests(unittest.TestCase):
 
     def export(self, name, suffix, options=''):
         return f'gxprint {self.work/name}.{suffix} {suffix} {options}\n'
+
+    def grid(self, missing=False):
+        values=[float((x//4)%2+2*((y//4)%2)) for y in range(8) for x in range(8)]
+        if missing:
+            for y in (3,4):
+                for x in (3,4): values[y*8+x]=-9999
+        (self.work/'grid.dat').write_bytes(struct.pack('<64f',*values))
+        ctl=self.work/'grid.ctl'
+        ctl.write_text('dset ^grid.dat\noptions little_endian\nundef -9999\n'
+                       'xdef 8 linear -30 5\nydef 8 linear 60 3\nzdef 1 linear 1 1\n'
+                       'tdef 1 linear 00z01jan2000 1hr\nvars 1\nf 0 99 Test\nendvars\n')
+        return (f'open {ctl}\nset grads off\nset timelab off\nset mproj scaled\nset mpdraw off\n'
+                'set grid off\nset frame off\nset xlab off\nset ylab off\n'
+                'set clevs .5 1.5 2.5\nset ccols 2 3 4 5\nset gxout grfill\n')
+
+    def test_grfill_compacts_colors_and_preserves_holes(self):
+        for missing in (False,True):
+            with self.subTest(missing=missing):
+                setup=self.grid(missing)
+                for name,compact in (('legacy','0'),('compact','1')):
+                    self.run_grads(setup+'d f\n'+self.export(name,'svg','white')+
+                                   self.export(name,'png','white x1100 y850'),
+                                   settings={'OPENGRADS_VECTOR_COMPACT':compact})
+                legacy=svg_polygons(self.work/'legacy.svg')
+                compact=svg_polygons(self.work/'compact.svg')
+                self.assertEqual(len(legacy),61 if missing else 65)
+                self.assertEqual(len(compact),5)
+                self.assertLess((self.work/'compact.svg').stat().st_size,(self.work/'legacy.svg').stat().st_size/2)
+                for x in range(23,790,19):
+                    for y in range(17,610,19):
+                        self.assertEqual(svg_color_at(legacy,x+.13,y+.21),svg_color_at(compact,x+.13,y+.21),(missing,x,y))
+                self.assertEqual((self.work/'legacy.png').read_bytes(),(self.work/'compact.png').read_bytes())
+
+    def test_grfill_projection_fallback_keeps_geometry(self):
+        setup=self.grid()+'set mproj nps\n'
+        for name,compact in (('legacy','0'),('compact','1')):
+            self.run_grads(setup+'d f\n'+self.export(name,'svg','white'),
+                           settings={'OPENGRADS_VECTOR_COMPACT':compact})
+        self.assertEqual((self.work/'legacy.svg').read_bytes(),(self.work/'compact.svg').read_bytes())
+
+    def test_grfill_reversed_axes_and_layer_order(self):
+        setups=[self.grid(True)+'set xflip on\nset yflip on\nd f\n',
+                self.grid()+'d f\nset line 6\ndraw recf 3 3 7 6\n'
+                'set clevs .5 1.5 2.5\nset ccols 2 3 4 5\nd maskout(f,f>1.5)\n']
+        for index,commands in enumerate(setups):
+            with self.subTest(case=index):
+                for name,compact in (('legacy','0'),('compact','1')):
+                    self.run_grads(commands+self.export(name,'svg','white'),
+                                   settings={'OPENGRADS_VECTOR_COMPACT':compact})
+                legacy=svg_polygons(self.work/'legacy.svg')
+                compact=svg_polygons(self.work/'compact.svg')
+                for x in range(23,790,19):
+                    for y in range(17,610,19):
+                        self.assertEqual(svg_color_at(legacy,x+.13,y+.21),svg_color_at(compact,x+.13,y+.21),(index,x,y))
 
     def test_page_size_follows_canvas(self):
         for portrait, width, height in ((False, 792, 612), (True, 612, 792)):

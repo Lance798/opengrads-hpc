@@ -73,6 +73,199 @@ static gaint batch=0;                         /* Batch mode */
 static gadouble clx,cly,clw,clh;              /* current clipping coordinates */
 static gadouble clxsav,clysav,clwsav,clhsav;  /* saved clipping coordinates */
 
+/* A grfill pass may contain a million cells but only a few colors. Keep
+   exact rectangles until the complete pass has been checked for overlap.
+   Unsupported geometry, states or allocation limits replay in original order. */
+struct gxCrect { gadouble x0,y0,x1,y1; gaint color; };
+struct gxCrgba { gaint r,g,b,a; };
+static struct {
+  struct gxCrect *rect;
+  size_t count,capacity;
+  struct gxCrgba color[COLORMAX];
+  gaint colors,active,disabled,enabled;
+} gridfill;
+
+static int gxCrect_ycmp(const void *aa,const void *bb) {
+const struct gxCrect *a=aa,*b=bb;
+  if (a->color!=b->color) return a->color<b->color ? -1:1;
+#define RCMP(field) if (a->field!=b->field) return a->field<b->field ? -1:1
+  RCMP(y0); RCMP(y1); RCMP(x0); RCMP(x1);
+  return 0;
+}
+static int gxCrect_xcmp(const void *aa,const void *bb) {
+const struct gxCrect *a=aa,*b=bb;
+  if (a->color!=b->color) return a->color<b->color ? -1:1;
+  RCMP(x0); RCMP(x1); RCMP(y0); RCMP(y1);
+#undef RCMP
+  return 0;
+}
+
+static void gxCgridfree(void) {
+  free(gridfill.rect);
+  gridfill.rect=NULL;
+  gridfill.count=gridfill.capacity=0;
+  gridfill.colors=0;
+}
+
+static void gxCgridpaint(gaint combine) {
+size_t i;
+gaint color=-1;
+struct gxCrgba *rgba;
+struct gxCrect *r;
+  if (!gridfill.count) return;
+  cairo_save(cr);
+  cairo_set_antialias(cr,CAIRO_ANTIALIAS_NONE);
+  cairo_set_fill_rule(cr,CAIRO_FILL_RULE_WINDING);
+  for (i=0;i<gridfill.count;i++) {
+    r=gridfill.rect+i;
+    if (color!=r->color) {
+      if (combine && color!=-1) cairo_fill(cr);
+      color=r->color;
+      rgba=gridfill.color+color;
+      cairo_set_source_rgba(cr,rgba->r/255.0,rgba->g/255.0,rgba->b/255.0,rgba->a/255.0);
+    }
+    cairo_rectangle(cr,r->x0,r->y0,r->x1-r->x0,r->y1-r->y0);
+    if (!combine) cairo_fill(cr);
+  }
+  if (combine) cairo_fill(cr);
+  cairo_restore(cr);
+}
+
+static void gxCgridabort(void) {
+  if (!gridfill.active || gridfill.disabled) return;
+  gxCgridpaint(0);
+  gxCgridfree();
+  gridfill.disabled=1;
+}
+
+/* Row-major monotone rectangles prove disjointness across all colors.
+   Missing cells and rows are allowed; overlapping/folded projections are not. */
+static gaint gxCgriddisjoint(void) {
+size_t i;
+gaint xdir=0,ydir=0,direction;
+struct gxCrect row,last,r;
+  if (!gridfill.count) return 1;
+  row=last=gridfill.rect[0];
+  for (i=1;i<gridfill.count;i++) {
+    r=gridfill.rect[i];
+    if (r.y0==row.y0 && r.y1==row.y1) {
+      direction=r.x0>=last.x1 ? 1 : r.x1<=last.x0 ? -1 : 0;
+      if (!direction || (xdir && direction!=xdir)) return 0;
+      xdir=direction;
+    } else {
+      direction=r.y0>=row.y1 ? 1 : r.y1<=row.y0 ? -1 : 0;
+      if (!direction || (ydir && direction!=ydir)) return 0;
+      ydir=direction;
+      row=r;
+    }
+    last=r;
+  }
+  return 1;
+}
+
+static void gxCgridmerge(void) {
+size_t i,n=0;
+struct gxCrect r,*previous;
+  if (!gridfill.count) return;
+  qsort(gridfill.rect,gridfill.count,sizeof(*gridfill.rect),gxCrect_ycmp);
+  for (i=0;i<gridfill.count;i++) {
+    r=gridfill.rect[i];
+    previous=n ? gridfill.rect+n-1 : NULL;
+    if (previous && previous->color==r.color && previous->y0==r.y0 && previous->y1==r.y1 && previous->x1==r.x0)
+      previous->x1=r.x1;
+    else gridfill.rect[n++]=r;
+  }
+  gridfill.count=n;
+  qsort(gridfill.rect,n,sizeof(*gridfill.rect),gxCrect_xcmp);
+  n=0;
+  for (i=0;i<gridfill.count;i++) {
+    r=gridfill.rect[i];
+    previous=n ? gridfill.rect+n-1 : NULL;
+    if (previous && previous->color==r.color && previous->x0==r.x0 && previous->x1==r.x1 && previous->y1==r.y0)
+      previous->y1=r.y1;
+    else gridfill.rect[n++]=r;
+  }
+  gridfill.count=n;
+  /* Row order also gives PDF's stream compressor local coordinate reuse. */
+  qsort(gridfill.rect,n,sizeof(*gridfill.rect),gxCrect_ycmp);
+}
+
+static gaint gxCgridadd(gadouble *xy,gaint count) {
+gadouble x[32],y[32],x0,x1,y0,y1;
+gaint i,j,k,n=0,changed,color=-1;
+size_t capacity,limit=(64u*1024u*1024u)/sizeof(struct gxCrect);
+struct gxCrect *buffer;
+struct gxCrgba *rgba;
+  if (count<3 || count>32 || psav!=255 || rsav<0 || maskflag ||
+      cairo_get_operator(cr)!=CAIRO_OPERATOR_OVER ||
+      cairo_pattern_get_type(cairo_get_source(cr))!=CAIRO_PATTERN_TYPE_SOLID) return 0;
+  for (i=0;i<count;i++) {
+    gxCxycnv(xy[2*i],xy[2*i+1],x+n,y+n);
+    if (!isfinite(x[n]) || !isfinite(y[n])) return 0;
+    if (!n || x[n]!=x[n-1] || y[n]!=y[n-1]) n++;
+  }
+  if (n>1 && x[n-1]==x[0] && y[n-1]==y[0]) n--;
+  do {
+    changed=0;
+    for (i=0;n>2 && i<n;i++) {
+      j=(i+n-1)%n; k=(i+1)%n;
+      if ((x[j]==x[i] && x[i]==x[k] && y[i]>=fmin(y[j],y[k]) && y[i]<=fmax(y[j],y[k])) ||
+          (y[j]==y[i] && y[i]==y[k] && x[i]>=fmin(x[j],x[k]) && x[i]<=fmax(x[j],x[k]))) {
+        for (j=i;j<n-1;j++) { x[j]=x[j+1]; y[j]=y[j+1]; }
+        n--; changed=1; break;
+      }
+    }
+  } while (changed);
+  if (n<3) return 1;
+  if (n!=4) return 0;
+  x0=x1=x[0]; y0=y1=y[0];
+  for (i=0;i<n;i++) {
+    x0=fmin(x0,x[i]); x1=fmax(x1,x[i]); y0=fmin(y0,y[i]); y1=fmax(y1,y[i]);
+    j=(i+1)%n;
+    if (x[i]!=x[j] && y[i]!=y[j]) return 0;
+  }
+  if (x0==x1 || y0==y1) return 1;
+  for (i=0;i<n;i++) {
+    if ((x[i]!=x0 && x[i]!=x1) || (y[i]!=y0 && y[i]!=y1)) return 0;
+    for (j=0;j<i;j++) if (x[i]==x[j] && y[i]==y[j]) return 0;
+  }
+  for (i=0;i<gridfill.colors;i++) {
+    rgba=gridfill.color+i;
+    if (rgba->r==rsav && rgba->g==gsav && rgba->b==bsav && rgba->a==psav) { color=i; break; }
+  }
+  if (color<0) {
+    if (gridfill.colors==COLORMAX) return 0;
+    color=gridfill.colors++;
+    rgba=gridfill.color+color;
+    rgba->r=rsav; rgba->g=gsav; rgba->b=bsav; rgba->a=psav;
+  }
+  if (gridfill.count==gridfill.capacity) {
+    if (gridfill.count==limit) return 0;
+    capacity=gridfill.capacity ? gridfill.capacity*2 : 1024;
+    if (capacity>limit) capacity=limit;
+    buffer=realloc(gridfill.rect,capacity*sizeof(*buffer));
+    if (!buffer) return 0;
+    gridfill.rect=buffer; gridfill.capacity=capacity;
+  }
+  gridfill.rect[gridfill.count++]=(struct gxCrect){x0,y0,x1,y1,color};
+  return 1;
+}
+
+void gxCgrid(gaint begin) {
+  if (begin) {
+    gxCflush(1);
+    gridfill.active=gridfill.enabled && surftype>2;
+    gridfill.disabled=0;
+  } else {
+    if (gridfill.active && !gridfill.disabled) {
+      if (gxCgriddisjoint()) { gxCgridmerge(); gxCgridpaint(1); }
+      else gxCgridpaint(0);
+    }
+    gxCgridfree();
+    gridfill.active=gridfill.disabled=0;
+  }
+}
+
 /* Cairo normally crops EPS BoundingBox to the ink. Keep the real canvas,
    including a transparent background, without inserting a visible shape. */
 static struct {
@@ -241,6 +434,8 @@ gaint i;
 
 /* Restore the display context on both successful and failed exports. */
 static void gxChrestore (void) {
+  gxCgridfree();
+  gridfill.active=gridfill.disabled=gridfill.enabled=0;
   Hsurface=NULL;
   Hcr=NULL;
   rotate=0;
@@ -461,6 +656,10 @@ gaint bgwidth,bgheight,len;
     status=1;
     goto failure;
   }
+  {
+    const char *setting=getenv("OPENGRADS_VECTOR_COMPACT");
+    gridfill.enabled=fmtflg<=4 && !(setting && (!strcmp(setting,"0") || !strcmp(setting,"off")));
+  }
 
   /* default drawing settings */
   cairo_set_line_cap(cr,CAIRO_LINE_CAP_ROUND);
@@ -634,6 +833,7 @@ void gxCrsiz (gaint dw, gaint dh) {
 /*  opt=0 discard everything. opt=1 finish rendering. */
 
 void gxCflush (gaint opt) {
+  gxCgridabort();
   if (drawing) cairo_stroke(cr);
   drawing = 0;
   if (maskflag) {
@@ -676,6 +876,7 @@ gaint bcol;
     dbq.alpha = 0;
     dbq.tile  = -999;
   }
+  if (dbq.tile>-900 || dbq.alpha!=255) gxCgridabort();
   if (force || clr!=actualcolor || dbq.red!=rsav || dbq.green!=gsav || dbq.blue!=bsav || dbq.alpha!=psav) {
     /* change to new color */
     if (maskflag) gxCflush(1);
@@ -725,6 +926,7 @@ gaint bcol;
 
 void gxCwid (gaint wid) {                 
 struct gxdbquery dbq;
+  gxCgridabort();
   if (drawing) cairo_stroke(cr);
   drawing = 0;
   lwidth = wid;
@@ -754,6 +956,7 @@ void gxCxycnv (gadouble x, gadouble y, gadouble *nx, gadouble *ny) {
 /* Move to x,y */
 
 void gxCmov (gadouble x, gadouble y) {
+  if (!filflg) gxCgridabort();
   if (drawing) cairo_stroke(cr);
   drawing = 0;
   gxCxycnv (x,y,&xxx,&yyy);
@@ -784,6 +987,7 @@ gadouble di, dj;
 
 void gxCclip (gadouble x1, gadouble x2, gadouble y1, gadouble y2) {
 gadouble di1,di2,dj1,dj2;
+  gxCgridabort();
   gxCxycnv (x1,y1,&di1,&dj1);
   gxCxycnv (x2,y2,&di2,&dj2);
   /* set the clipping variables -- these get used when drawing characters */
@@ -798,6 +1002,7 @@ gadouble di1,di2,dj1,dj2;
 
 void gxCrec (gadouble x1, gadouble x2, gadouble y1, gadouble y2) {
 gadouble di1,di2,dj1,dj2;
+  gxCgridabort();
   if (drawing) cairo_stroke(cr);
   drawing = 0;
   gxCxycnv (x1,y1,&di1,&dj1);
@@ -833,6 +1038,11 @@ void gxCfil (gadouble *xy, gaint n) {
 gadouble *pt,x,y;
 gaint i;
 
+  if (gridfill.active && !gridfill.disabled) {
+    if (gxCgridadd(xy,n)) { filflg=0; return; }
+    gxCgridabort();
+  }
+
   if (drawing) cairo_stroke(cr);
   drawing = 0;
   pt = xy;
@@ -863,6 +1073,7 @@ gaint i;
 */
 
 void gxCaa (gaint flag) {
+  gxCgridabort();
   if (cr!=NULL) {
     if (flag) {
       if (aaflg==0) {
@@ -918,6 +1129,7 @@ gadouble xpage,ypage,usize,vsize;
 gadouble aheight,awidth,swidth,fontsize=100.0;
 char str[2];
 char *astr = "A";
+  gxCgridabort();
 
   if (drawing) cairo_stroke(cr);
   drawing = 0;
@@ -1195,10 +1407,12 @@ void gxCftend (void) {
 }
 
 void gxCpush (void) {
+  gxCgridabort();
   cairo_push_group(cr);
 }
 
 void gxCpop (void) {
+  gxCgridabort();
   cairo_pop_group_to_source(cr);
   cairo_paint(cr);
 }

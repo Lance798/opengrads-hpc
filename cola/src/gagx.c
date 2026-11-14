@@ -7098,6 +7098,7 @@ char *vu;
 
   v = r;
   vu = ru;
+  gxsignal(GX_GRID_BEGIN);
   for (j=1; j<=js; j++) {
     for (i=1; i<=is; i++) {
       if (*vu != 0) {
@@ -7138,6 +7139,7 @@ char *vu;
       v++; vu++;
     } 
   }
+  gxsignal(GX_GRID_END);
 }
 
 /* Direct image map to X display.  Bypasses metafile (ie, no refresh on

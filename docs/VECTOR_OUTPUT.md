@@ -28,6 +28,20 @@ white output override, the logical foreground/background colors 0 and 1
 are swapped for contrast, so use `transparent` for a background-only change.
 Temporary export settings are reset after both successful and failed output.
 
+Opaque `grfill` output combines adjacent same-color rectangles and writes
+disconnected rectangles of a color as subpaths of one filled path per pass.
+This removes shared interior edges while preserving the original geometry,
+missing cells and drawing order between passes. PNG and screen drawing keep
+their original cell-by-cell rendering. A pass is compacted only when its
+converted rectangles are monotone and non-overlapping. Other projections,
+patterns and transparency keep their existing rendering. The rectangle
+buffer is capped at 64 MiB; unsupported states or allocation limits replay
+the accumulated cells in their original order. Cairo may use additional
+memory while writing paths.
+
+`OPENGRADS_VECTOR_COMPACT=0` disables vector compaction for comparisons with
+the original geometry. It does not change the new page/background behavior.
+
 Transparent PS/EPS pages leave unpainted areas for the importing application
 or paper to supply. PostScript does not have PDF/SVG's native partial-alpha
 compositing; the existing Cairo image fallbacks for partial transparency
