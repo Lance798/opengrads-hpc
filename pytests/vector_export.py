@@ -267,6 +267,22 @@ class VectorExportTests(unittest.TestCase):
                 for suffix in ('svg','png'):
                     self.assertEqual((self.work/('legacy.'+suffix)).read_bytes(),(self.work/('compact.'+suffix)).read_bytes())
 
+    def test_color_script_validates_palette_before_changing_plot_state(self):
+        script=ROOT/'lib/scripts/gscript/color.gs'
+        self.run_grads(self.grid()+'d f\n'+self.export('before','svg','white'))
+        commands=self.grid()+f'run {script} 0 10 -kind shaded -gxout contour -alpha 125\n'
+        commands+='d f\n'+self.export('after','svg','white')
+        output=self.run_grads(commands)
+        self.assertIn('unknown or invalid color in -kind: shaded',output)
+        self.assertEqual((self.work/'before.svg').read_bytes(),(self.work/'after.svg').read_bytes())
+        for palette in ('black->white','bluered','black-(3)->white','(0,0,0)->(255,255,255)'):
+            with self.subTest(palette=palette):
+                output=self.run_grads(self.grid()+f'run {script} 0 10 -kind {palette} -gxout grfill -alpha 125\n'
+                                      'd f\n'+self.export('palette','svg','white'))
+                self.assertNotIn('error in color.gs',output)
+                shapes=svg_polygons(self.work/'palette.svg')
+                self.assertTrue(any(abs(alpha-125/255)<.000001 for fill,alpha,polygons in shapes))
+
     def test_page_size_follows_canvas(self):
         for portrait, width, height in ((False, 792, 612), (True, 612, 792)):
             with self.subTest(portrait=portrait):
