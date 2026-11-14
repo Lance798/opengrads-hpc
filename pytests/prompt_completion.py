@@ -173,6 +173,7 @@ try:
     complete('d qvs', ['qvsat('])
     complete('d esa', ['esat('])
     complete('d grar', ['grarea('])
+    complete('q perf', ['performance'])
     complete('define surface = zsl', ['zslice('])
     complete('column = zi', ['zint('])
     complete('d zint(qvs', ['qvsat('])

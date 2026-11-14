@@ -1,5 +1,9 @@
 # Calculation performance
 
+Use [`q performance`](QUERY_PERFORMANCE.md) to inspect the last DISPLAY or
+DEFINE's measured timings, observed execution paths and worker dispatch.
+It is a last-command report, not a replacement for controlled benchmarks.
+
 Current regression suites use at most four calculation cores. The dated
 validation and benchmark results below retain their original CPU counts.
 

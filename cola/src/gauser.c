@@ -567,6 +567,8 @@ size_t sz,len;
 
 gaint gacmd (char *com, struct gacmn *pcm, gaint exflg) {
 gaint keepcanvas,canvasaa;
+gaint performance=0;
+gadouble performance_start=ga_perf_clock();
 struct gafile *pfi,*pfi2;
 struct gadefn *pdf,*pdf2;
 struct gaclct *clct,*clct2;
@@ -644,6 +646,7 @@ FILE *pdefid=NULL;
       }
     }
     if (flag) {
+      performance=ga_perf_begin(com,performance_start);
       if (pcm->pfid==NULL) {
         gaprnt (0,"DEFINE error:  no file open yet\n");
         retcod = 1;
@@ -1405,6 +1408,7 @@ FILE *pdefid=NULL;
 #endif
     goto retrn ;
   } else if (cmpwrd("d",cmd) || cmpwrd("display",cmd)) {
+    performance=ga_perf_begin(com,performance_start);
     if (pcm->pfid==NULL) {
       gaprnt (0,"DISPLAY error:  no file open yet\n");
       retcod = 1;
@@ -1425,6 +1429,7 @@ FILE *pdefid=NULL;
     goto retrn;
   }
   else if (cmpwrd("define",cmd)) {
+    performance=ga_perf_begin(com,performance_start);
     if (pcm->pfid==NULL) {
       gaprnt (0,"DEFINE error:  no file open yet\n");
       retcod = 1;
@@ -1559,6 +1564,7 @@ retrn:
     gree(ccc,"f196");
   }
   if (comhome) gree(comhome,"cmdhome");
+  if (performance) ga_perf_end(retcod,gaqsig());
   return (retcod);
 }
 
@@ -2948,9 +2954,11 @@ static gaint gadef_run (char *, struct gacmn *, gaint);
 /* define, with its progress shown while it runs */
 gaint gadef (char *cmd, struct gacmn *pcm, gaint impf) {
 gaint lv, rc;
+  ga_perf_start(GA_PERF_EVAL);
   lv = gaprogbeg("define", 0);
   rc = gadef_run(cmd, pcm, impf);
   gaprogend(lv);
+  ga_perf_stop(GA_PERF_EVAL);
   return (rc);
 }
 
@@ -3554,6 +3562,7 @@ gadouble minvals[4], maxvals[4],dval;
     gaprnt (2,"  q fwrite   Returns status of fwrite output file\n");
     gaprnt (2,"  q gxinfo   Returns graphics environment info\n");
     gaprnt (2,"  q gxout    Gives current gxout settings\n");
+    gaprnt (2,"  q performance Returns the last analysis command's timing and execution paths\n");
     gaprnt (2,"  q pos      Waits for mouse click, returns position and widget info\n");
     gaprnt (2,"  q sdfwrite Returns status of self-describing fwrite options\n");
     gaprnt (2,"  q shades   Returns colors and levels of shaded contours\n");
@@ -3603,6 +3612,13 @@ gadouble minvals[4], maxvals[4],dval;
                "Undo is on: %i step%s can be undone (up to %i kept), %i meta buffer words used by the current plot\n",
                j,j==1?"":"s",i,cnt);
     gaprnt(2,pout);
+  }
+  else if (cmpwrd(arg,"performance")) {
+    if (nxtwrd(arg)) {
+      gaprnt(0,"QUERY PERFORMANCE error: no arguments expected\n");
+      return 1;
+    }
+    ga_perf_query();
   }
   else if (cmpwrd(arg,"threads")) {
     if (ga_omp_enabled())
@@ -5540,7 +5556,9 @@ static gaint dcolor[10] = {-1, 1, 3, 7, 2, 6, 9, 10, 11, 12 };
     if (pcm->ccolor<0) pcm->mcolor = 15;
     rc = gapars(cmd, pst, pcm);
     if (rc) goto retrn;
-    gaplot (pcm); 
+    ga_perf_start(GA_PERF_PLOT);
+    gaplot (pcm);
+    ga_perf_stop(GA_PERF_PLOT);
     gagrel (pcm);
     pcm->pass++;
     pcm->ccolor = -9;
@@ -5608,7 +5626,9 @@ static gaint dcolor[10] = {-1, 1, 3, 7, 2, 6, 9, 10, 11, 12 };
       if (rc) goto retrn;
       pcm->clab = 0;
       if (l==l2) pcm->clab = labsv;
+      ga_perf_start(GA_PERF_PLOT);
       gaplot (pcm);
+      ga_perf_stop(GA_PERF_PLOT);
       if (ldim==3) {
 	snprintf(lab,29,"%i:%i:%i:%i",pst->tmin.yr,pst->tmin.mo,pst->tmin.dy,pst->tmin.hr);
       }
@@ -5666,7 +5686,17 @@ retrn:
 /* Parse compound expression (multiple expressions seperated
    by ;'s), get data, hand data off pcm, return */
 
+static gaint gapars_run (char *, struct gastat *, struct gacmn *);
+
 gaint gapars (char *cmd, struct gastat *pst, struct gacmn *pcm) {
+gaint rc;
+  ga_perf_start(GA_PERF_EVAL);
+  rc=gapars_run(cmd,pst,pcm);
+  ga_perf_stop(GA_PERF_EVAL);
+  return rc;
+}
+
+static gaint gapars_run (char *cmd, struct gastat *pst, struct gacmn *pcm) {
 char *pos;
 char *expr;
 gaint num, i, rc;

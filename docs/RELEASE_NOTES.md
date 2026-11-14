@@ -6,6 +6,12 @@ and a bundled VVM terrain script. The GrADS baseline remains `2.2.1.oga.1`.
 
 ### Added in 1.0.15
 
+- **Last-command diagnostics.** `q performance` reports the last DISPLAY or
+  DEFINE's wall/evaluation/output time, observed input backends and read paths,
+  actual time-worker dispatch and pool reuse, and labeled worker-workspace
+  estimates and parent lifetime RSS. Recording adds no ordinary output and
+  leaves progress/graphics behavior unchanged. See [QUERY_PERFORMANCE.md](QUERY_PERFORMANCE.md).
+
 - **Broader time-worker support.** The shared expression allowlist now covers
   47 of 67 built-ins, including IF, spatial neighbors, extrema and their
   locations, pressure integrals, indexed vertical slices and ROLL. Eligible

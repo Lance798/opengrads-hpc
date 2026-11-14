@@ -2489,6 +2489,174 @@ struct timespec t;
   return (t.tv_sec + t.tv_nsec*1e-9);
 }
 
+/* Q PERFORMANCE observes existing work; it neither selects an execution path
+   nor prints during an analysis. Keep the last completed snapshot separate
+   so queries inside scripts cannot expose a partly updated report. */
+#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+#include <sys/resource.h>
+#endif
+#define PERF_NOTES 16
+static struct ga_perf_record {
+  char command[1024];
+  gaint valid,budget,openmp,status,interrupted,workers,batches,created,reused;
+  gaint kernels,spatial,backends,notes,paths;
+  unsigned long long completed;
+  gadouble started,elapsed,phase[2],setup,workspace,memory_budget,rss;
+  const char *note[PERF_NOTES];
+  const char *path[PERF_NOTES];
+} perf_current,perf_last;
+static gaint perf_active,perf_depth[2];
+static gadouble perf_started[2];
+
+gadouble ga_perf_clock (void) { return prognow(); }
+
+gaint ga_perf_begin (const char *command, gadouble started) {
+size_t i;
+const char *setting;
+  if (perf_active || ga_time_is_worker()) return 0;
+  memset(&perf_current,0,sizeof(perf_current));
+  memset(perf_depth,0,sizeof(perf_depth));
+  for (i=0; command[i] && i<sizeof(perf_current.command)-1; i++)
+    perf_current.command[i]=isprint((unsigned char)command[i]) ? command[i] : ' ';
+  while (i && isspace((unsigned char)perf_current.command[i-1])) i--;
+  perf_current.command[i]=0;
+  perf_current.budget=ga_omp_get_threads();
+  perf_current.openmp=ga_omp_enabled();
+  perf_current.started=started;
+  perf_active=1;
+  if (perf_current.budget<2) ga_perf_note("CPU budget below two");
+  setting=getenv("GA_TIME_WORKERS");
+  if (setting && (!strcmp(setting,"off") || !strcmp(setting,"0")))
+    ga_perf_note("time workers disabled by GA_TIME_WORKERS");
+  return 1;
+}
+
+void ga_perf_end (gaint status, gaint interrupted) {
+  if (!perf_active) return;
+  perf_current.elapsed=prognow()-perf_current.started;
+  perf_current.status=status;
+  perf_current.interrupted=interrupted;
+  perf_current.rss=-1;
+#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+  {
+    struct rusage usage;
+    if (!getrusage(RUSAGE_SELF,&usage)) {
+#ifdef __APPLE__
+      perf_current.rss=(gadouble)usage.ru_maxrss;
+#else
+      perf_current.rss=(gadouble)usage.ru_maxrss*1024;
+#endif
+    }
+  }
+#endif
+  perf_current.valid=1;
+  perf_last=perf_current;
+  perf_active=0;
+}
+
+void ga_perf_start (gaint phase) {
+  if (!perf_active || phase<0 || phase>1) return;
+  if (!perf_depth[phase]++) perf_started[phase]=prognow();
+}
+
+void ga_perf_stop (gaint phase) {
+  if (!perf_active || phase<0 || phase>1 || !perf_depth[phase]) return;
+  if (!--perf_depth[phase]) perf_current.phase[phase]+=prognow()-perf_started[phase];
+}
+
+void ga_perf_source (struct gafile *file) {
+gaint kind;
+  if (!perf_active || !file) return;
+  kind=file->type==4 ? 0 : file->adios2flg ? 1 : file->ncflg==1 ? 2 :
+       file->ncflg==2 ? 3 : file->ncflg==3 ? 4 : file->idxflg ? 5 :
+       file->type==2 ? 6 : 7;
+  perf_current.backends|=1<<kind;
+}
+
+void ga_perf_note (const char *note) {
+gaint i;
+  if (!perf_active) return;
+  for (i=0;i<perf_current.notes;i++) if (!strcmp(note,perf_current.note[i])) return;
+  if (i<PERF_NOTES) perf_current.note[perf_current.notes++]=note;
+}
+
+void ga_perf_path (const char *path) {
+gaint i;
+  if (!perf_active) return;
+  for (i=0;i<perf_current.paths;i++) if (!strcmp(path,perf_current.path[i])) return;
+  if (i<PERF_NOTES) perf_current.path[perf_current.paths++]=path;
+}
+
+void ga_perf_workers (gaint workers, gaint reused, gadouble setup,
+                       gadouble workspace, gadouble budget) {
+  if (!perf_active) return;
+  ga_perf_path("isolated time workers");
+  if (workers>perf_current.workers) perf_current.workers=workers;
+  perf_current.batches++;
+  if (reused) perf_current.reused++; else perf_current.created++;
+  perf_current.setup+=setup;
+  if (workspace>perf_current.workspace) perf_current.workspace=workspace;
+  if (!perf_current.memory_budget || budget<perf_current.memory_budget)
+    perf_current.memory_budget=budget;
+}
+
+void ga_perf_completed (void) { if (perf_active) perf_current.completed++; }
+void ga_perf_spatial (void) {
+  if (perf_active) {
+    perf_current.spatial=1;
+    ga_perf_path("spatial section/volume batching");
+  }
+}
+void ga_perf_kernel (void) { if (perf_active) perf_current.kernels=1; }
+
+void ga_perf_query (void) {
+static const char *backends[]={"DEFINE","BP5","NetCDF","HDF4","HDF5","indexed GRIB","station","binary"};
+struct ga_perf_record *p=&perf_last;
+char line[1256];
+gaint i,any=0;
+  if (!p->valid) {
+    gaprnt(2,"No completed analysis command recorded. Run DISPLAY or DEFINE first.\n");
+    return;
+  }
+  gaprnt(2,"Performance report\n");
+  snprintf(line,sizeof(line),"  Command: %s\n",p->command); gaprnt(2,line);
+  snprintf(line,sizeof(line),"  Status: %s (return code %d)\n",
+           p->interrupted ? "interrupted" : p->status ? "error" : "success",p->status); gaprnt(2,line);
+  snprintf(line,sizeof(line),"  Wall time: %.6f s\n",p->elapsed); gaprnt(2,line);
+  snprintf(line,sizeof(line),"  Evaluation, including reads and worker wait: %.6f s\n",p->phase[GA_PERF_EVAL]); gaprnt(2,line);
+  snprintf(line,sizeof(line),"  Display/output calls: %.6f s\n",p->phase[GA_PERF_PLOT]); gaprnt(2,line);
+  snprintf(line,sizeof(line),"  CPU budget at command start: %d (OpenMP %s)\n",p->budget,p->openmp ? "enabled" : "disabled"); gaprnt(2,line);
+  snprintf(line,sizeof(line),"  OpenMP kernel eligibility observed: %s (actual team sizes not sampled)\n",p->kernels ? "yes" : "no"); gaprnt(2,line);
+  snprintf(line,sizeof(line),"  Time workers, peak active: %d\n",p->workers); gaprnt(2,line);
+  snprintf(line,sizeof(line),"  Worker batches: %d; new pools: %d; reused pools: %d\n",p->batches,p->created,p->reused); gaprnt(2,line);
+  snprintf(line,sizeof(line),"  Completed worker time results: %llu\n",p->completed); gaprnt(2,line);
+  snprintf(line,sizeof(line),"  Pool setup, included in evaluation: %.6f s\n",p->setup); gaprnt(2,line);
+  if (p->workers) {
+    snprintf(line,sizeof(line),"  Peak active-worker workspace estimate: %.3f MiB\n",p->workspace/(1024*1024)); gaprnt(2,line);
+    snprintf(line,sizeof(line),"  Worker memory budget, minimum observed: %.3f MiB\n",p->memory_budget/(1024*1024)); gaprnt(2,line);
+  }
+  if (p->rss>=0) {
+    snprintf(line,sizeof(line),"  Parent peak RSS, process lifetime: %.3f MiB\n",p->rss/(1024*1024)); gaprnt(2,line);
+  } else gaprnt(2,"  Parent peak RSS: unavailable on this platform\n");
+  gaprnt(2,"  Input backends observed:");
+  for (i=0;i<8;i++) if (p->backends&(1<<i)) {
+    snprintf(line,sizeof(line),"%s%s",any ? ", " : " ",backends[i]); gaprnt(2,line); any=1;
+  }
+  if (!any) gaprnt(2," none");
+  gaprnt(2,"\n");
+  for (i=0;i<p->paths;i++) {
+    snprintf(line,sizeof(line),"  Execution path observed: %s\n",p->path[i]); gaprnt(2,line);
+  }
+  snprintf(line,sizeof(line),"  Spatial section/volume batching observed: %s\n",p->spatial ? "yes" : "no"); gaprnt(2,line);
+  for (i=0;i<p->notes;i++) {
+    snprintf(line,sizeof(line),"  Worker eligibility note: %s\n",p->note[i]); gaprnt(2,line);
+  }
+  if (!p->workers && !p->notes)
+    gaprnt(2,"  Time-worker reason: no eligible dispatch observed; detailed reason unavailable\n");
+  gaprnt(2,"  Read/decompression time is not measured separately; worker workspace is an estimate, not total RSS.\n");
+  gaprnt(2,"End performance\n");
+}
+
 static void progsetup (void) {
 char *v,*lc;
   progon = isatty(1);

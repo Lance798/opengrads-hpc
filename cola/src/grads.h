@@ -914,6 +914,23 @@ void gaprogpulse (void);
 void gaprogend (gaint);
 void gaprogpause (void);
 void gaprogreset (void);
+
+/* Last completed analysis command; diagnostic counters stay in the parent. */
+#define GA_PERF_EVAL 0
+#define GA_PERF_PLOT 1
+gaint ga_perf_begin (const char *, gadouble);
+void ga_perf_end (gaint, gaint);
+void ga_perf_start (gaint);
+void ga_perf_stop (gaint);
+void ga_perf_query (void);
+void ga_perf_source (struct gafile *);
+void ga_perf_note (const char *);
+void ga_perf_path (const char *);
+void ga_perf_workers (gaint, gaint, gadouble, gadouble, gadouble);
+void ga_perf_completed (void);
+void ga_perf_spatial (void);
+void ga_perf_kernel (void);
+gadouble ga_perf_clock (void);
 #if READLINE == 1
 gaint gahistory(char*, char *, struct gacmn *);
 #endif /* READLINE == 1 */

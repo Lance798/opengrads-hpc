@@ -326,6 +326,7 @@ gaint gaggrd (struct gagrid *pgrid) {
   pgr = pgrid;
   pvr = pgr->pvar;
   pfi = pgr->pfile;
+  ga_perf_source(pfi);
   timerr = 0;
   if (pfi->idxflg==1) { 
     pindx  = pfi->pindx;
@@ -435,13 +436,19 @@ gaint gaggrd (struct gagrid *pgrid) {
   /* Read an in-bounds X/Y BP5 request with one ADIOS2 selection. */
   if (pfi->adios2flg) {
     rc = gaadios_read_grid(pfi,pvr,pgr,gr,gru);
-    if (rc>=0) return(rc);
+    if (rc>=0) {
+      if (!rc) ga_perf_path("BP5 bulk grid reader");
+      return(rc);
+    }
   }
 #endif
 #if USEHDF5==1
   if (pfi->ncflg==3) {
     rc=gah5read(pgr,gr,gru,0);
-    if (rc>=0) return rc;
+    if (rc>=0) {
+      if (!rc) ga_perf_path("HDF5 bulk grid reader");
+      return rc;
+    }
   }
 #endif
 
@@ -466,6 +473,7 @@ gaint gaggrd (struct gagrid *pgrid) {
     rc=gancgrid(gr,gru,id,jd);
     pgr=saved; pgr->undef=sub.undef;
     if (rc<0) goto nodat;
+    if (!rc) ga_perf_path("NetCDF bulk grid reader");
     return rc;
   }
 #endif
@@ -477,7 +485,9 @@ gaint gaggrd (struct gagrid *pgrid) {
       !pfi->tmplat && !pfi->seqflg && !pfi->yrflg && !pgr->toff &&
       id==0 && jd==1 && pgr->dimmin[0]==1 && pgr->dimmax[0]==dx[0] &&
       pgr->dimmin[1]>=1 && pgr->dimmax[1]<=dx[1]) {
-    return garrow(1,d[1],d[2],d[3],d[4],size,gr,gru,pgr->toff);
+    rc=garrow(1,d[1],d[2],d[3],d[4],size,gr,gru,pgr->toff);
+    if (!rc) ga_perf_path("contiguous binary slab reader");
+    return rc;
   }
 
   if (!pfi->adios2flg && !pfi->ncflg && !pfi->idxflg && !pfi->ppflag &&
@@ -498,6 +508,7 @@ gaint gaggrd (struct gagrid *pgrid) {
     /* get the 2D grid */
     rc = gancgrid(gr,gru,id,jd);
     if (rc<0) goto nodat;
+    if (!rc) ga_perf_path("NetCDF bulk grid reader");
     return (rc);
   }
 
@@ -709,8 +720,11 @@ gaint gagrdsteps(struct gagrid *grid, gaint t0, gaint n, gaint incr,
   gaint k,rc,tt,ee,oflg,row;
   size_t size=(size_t)grid->isiz*grid->jsiz,pos;
 #if USEADIOS2==1
-  if (file && var && file->adios2flg && var->levels>-900)
-    return gaadios_read_steps(file,var,grid,t0,n,incr,values,mask);
+  if (file && var && file->adios2flg && var->levels>-900) {
+    rc=gaadios_read_steps(file,var,grid,t0,n,incr,values,mask);
+    if (!rc) { ga_perf_source(file);ga_perf_path("BP5 native time-step batching"); }
+    return rc;
+  }
 #endif
   if (!file || !var || file->type!=1 || file->ppflag || file->idxflg || grid->toff ||
       var->levels<=-900 || grid->idim>1 || grid->jdim>1 ||
@@ -799,12 +813,18 @@ gaint gagrdvolume(struct gagrid *grid, gaint z1, gaint z2, gadouble *values, cha
   sub.dimmin[2]=z1; sub.dimmax[2]=z2;
   plane=(size_t)sub.isiz*sub.jsiz;
 #if USEADIOS2==1
-  if (file->adios2flg) return gaadios_read_volume(file,grid->pvar,&sub,values,mask);
+  if (file->adios2flg) {
+    rc=gaadios_read_volume(file,grid->pvar,&sub,values,mask);
+    if (!rc) { ga_perf_source(file);ga_perf_path("BP5 bulk volume reader"); }
+    return rc;
+  }
 #endif
 #if USEHDF5==1
   if (file->ncflg==3) {
     pgr=&sub; pfi=file; pvr=grid->pvar;
-    return gah5read(&sub,values,mask,1);
+    rc=gah5read(&sub,values,mask,1);
+    if (!rc) { ga_perf_source(file);ga_perf_path("HDF5 bulk volume reader"); }
+    return rc;
   }
 #endif
   for (z=z1;z<=z2;z++) {
@@ -963,12 +983,19 @@ gaint gagrdzslice(struct gagrid *grid, const gaint *indices,
       grid->dimmin[3]<1 || grid->dimmax[3]>grid->pfile->dnum[3] ||
       grid->dimmin[4]<1 || grid->dimmax[4]>grid->pfile->dnum[4]) return -1;
 #if USEADIOS2==1
-  if (grid->pfile->adios2flg)
-    return gaadios_read_zslice(grid->pfile,grid->pvar,grid,indices,values,mask);
+  if (grid->pfile->adios2flg) {
+    rc=gaadios_read_zslice(grid->pfile,grid->pvar,grid,indices,values,mask);
+    if (!rc) { ga_perf_source(grid->pfile);ga_perf_path("BP5 indexed vertical gather"); }
+    return rc;
+  }
 #endif
   pgr=grid; pfi=grid->pfile; pvr=grid->pvar;
 #if USEHDF5==1
-  if (pfi->ncflg==3) return gah5zslice(grid,indices,values,mask);
+  if (pfi->ncflg==3) {
+    rc=gah5zslice(grid,indices,values,mask);
+    if (!rc) { ga_perf_source(pfi);ga_perf_path("HDF5 indexed vertical gather"); }
+    return rc;
+  }
 #endif
   if (grid->pfile->idxflg || grid->idim!=0 || (grid->jdim!=1 && grid->jdim!=-1)) return -1;
   if (pfi->ncflg==1 && !pfi->tmplat && gancsetup()) return 1;
@@ -1426,6 +1453,7 @@ cleanup:
 
 gaint gagrdzint(struct gagrid *grid, struct gazint *integral) {
   struct gafile *file=grid->pfile;
+  gaint rc;
   if (!file || !grid->pvar || file->type!=1 || file->ppflag || grid->toff ||
       grid->idim>1 || grid->jdim>1 ||
       (file->wrap && (grid->dimmin[0]<1 || grid->dimmax[0]>file->dnum[0])) ||
@@ -1434,12 +1462,18 @@ gaint gagrdzint(struct gagrid *grid, struct gazint *integral) {
   if (grid->dimmax[0]<1 || grid->dimmin[0]>file->dnum[0] ||
       grid->dimmax[1]<1 || grid->dimmin[1]>file->dnum[1]) return 0;
 #if USEADIOS2==1
-  if (file->adios2flg) return gaadios_read_zint(file,grid->pvar,grid,integral);
+  if (file->adios2flg) {
+    rc=gaadios_read_zint(file,grid->pvar,grid,integral);
+    if (!rc) { ga_perf_source(file);ga_perf_path("BP5 native column integral"); }
+    return rc;
+  }
 #endif
 #if USEHDF5==1
   if (file->ncflg==3) {
     pgr=grid; pfi=file; pvr=grid->pvar;
-    return gah5zint(grid,integral);
+    rc=gah5zint(grid,integral);
+    if (!rc) { ga_perf_source(file);ga_perf_path("HDF5 native column integral"); }
+    return rc;
   }
 #endif
   return -1;
@@ -1460,6 +1494,8 @@ gaint gagrdzint(struct gagrid *grid, struct gazint *integral) {
 #endif
 
   /* change t value if offset flag is set */
+  ga_perf_source(pfi);
+  ga_perf_path("row/segment reader");
   if (toff) {
     /* advance through chain of ensemble structure to get to ensemble 'e' */
     ens=pfi->ens1;    

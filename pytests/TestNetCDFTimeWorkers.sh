@@ -9,7 +9,7 @@ if [[ -r "$build_root/src/config.h" ]] && ! grep -Eq '^#define USENETCDF 1$' "$b
 fi
 for format in nc nc4; do
   GA_TEST_TIME_FORMAT="$format" bash "$repo_root/pytests/TestSpatialReductions.sh"
-  for suite in TimeWorkers TimeMeanWorkers TimeExpressions TimeExpressionReductions TimeDefinedInputs TimeSpatialFunctions TimeFileInputs TimeRoll; do
+  for suite in Performance TimeWorkers TimeMeanWorkers TimeExpressions TimeExpressionReductions TimeDefinedInputs TimeSpatialFunctions TimeFileInputs TimeRoll; do
     printf '\nNetCDF time workers: %s / %s\n' "$format" "$suite"
     GA_TEST_TIME_FORMAT="$format" bash "$repo_root/pytests/Test$suite.sh"
   done

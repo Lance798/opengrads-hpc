@@ -257,6 +257,7 @@ static const struct gahelp qrys[] = {
   {"gxconfig", "q gxconfig", NULL, NULL},
   {"gxinfo",   "q gxinfo", NULL, NULL},
   {"gxout",    "q gxout", NULL, NULL},
+  {"performance", "q performance", NULL, NULL},
   {"pos",      "q pos <nowait>", NULL, "nowait"},
   {"pp2xy",    "q pp2xy x y", NULL, NULL},
   {"sdfwrite", "q sdfwrite", NULL, NULL},

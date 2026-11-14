@@ -49,6 +49,12 @@ libraries are available.
   shows a progress line with the time left. See
   [performance notes](docs/PERFORMANCE.md).
 
+- **Last-command performance report.** `q performance` shows the last DISPLAY
+  or DEFINE's elapsed/evaluation/output times, observed backends and execution
+  paths, actual time-worker counts and pool reuse, plus clearly labeled memory
+  estimates. Normal output and progress displays remain unchanged. See
+  [the performance query](docs/QUERY_PERFORMANCE.md).
+
 - **Fixed-time spatial reductions.** Eligible built-in expressions inside X/Y/Z
   means, sums and extrema share bounded section/volume readers and the existing
   math kernels. DEFINE can batch across Z while retaining XZ/YZ results. See
