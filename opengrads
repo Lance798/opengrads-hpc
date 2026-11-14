@@ -317,7 +317,8 @@ if [[ -r "$repo_root/libexec/opengrads-version" ]]; then
 fi
 
 color_args=()
-if [[ "${OPENGRADS_COLOR:-1}" != 0 ]]; then
+export OPENGRADS_COLOR="${OPENGRADS_COLOR:-1}"
+if [[ "$OPENGRADS_COLOR" != 0 ]]; then
   color_args=(-C "${OPENGRADS_COLOR_SCHEME:-1}")
 fi
 

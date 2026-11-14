@@ -39,6 +39,7 @@ static char pout[1256];          /* Build error msgs here */
 /* Function routine names.  Add a new function by putting the
    prototype here and adding to the if tests below.  */
 gaint ffsqrt   (struct gafunc *, struct gastat *);
+gaint ffdimsize(struct gafunc *, struct gastat *);
 gaint ffsin    (struct gafunc *, struct gastat *);
 gaint ffcos    (struct gafunc *, struct gastat *);
 gaint fftan    (struct gafunc *, struct gastat *);
@@ -125,6 +126,23 @@ void setupba (struct gaupb *upb) {
 }
 
 
+/* A metadata scalar; no field evaluation or data reads are required. */
+gaint ffdimsize (struct gafunc *pfc, struct gastat *pst) {
+  gaint size;
+  struct gagrid *pgr;
+  if (pfc->argnum<1 || pfc->argnum>2) {
+    gaprnt(0,"DIMSIZE error: Expected dimsize(x|y|z|t|e <,file#>)\n");
+    return 1;
+  }
+  if (gadimsize(pst->pfi1,pst->pfid,pfc->argpnt[0],
+                pfc->argnum==2 ? pfc->argpnt[1] : NULL,&size)) return 1;
+  pgr=gagrvl((gadouble)size);
+  if (!pgr) return 1;
+  pst->type=1;
+  pst->result.pgr=pgr;
+  return 0;
+}
+
 /* Handles function calls from gaexpr.c  */
 char *rtnprs (char *ch, char *name, struct gastat *pst) {
 struct gafunc *pfc;
@@ -138,7 +156,10 @@ gaint (*fpntr)(struct gafunc *, struct gastat *);
   /* Find the function name and get the function pointer. */
   fpntr=NULL;
 
+  /* New built-ins also need a funcs[] entry in gahelp.c.
+     Checklist: docs/ADDING_FUNCTIONS.md; check: pytests/check_function_catalog.py. */
   /* start with the list of built-in functions */
+  if (cmpwrd("dimsize",name)) fpntr = ffdimsize;
   if (cmpwrd("sqrt",name)) fpntr = ffsqrt;
   if (cmpwrd("sin",name)) fpntr = ffsin;
   if (cmpwrd("cos",name)) fpntr = ffcos;
@@ -3398,7 +3419,12 @@ static gaint spatial_volume(char *expr, struct gastat *pst, struct gagrid *box,
   size_t count,at;
   gadouble index;
   gaint i,d,k,rc=-1;
-  if (plain) { read.pvar=plain; read.pfile=pst->pfid; return gagrdvolume(&read,first,last,values,mask); }
+  if (plain) {
+    read.pvar=plain; read.pfile=pst->pfid;
+    rc=gagrdvolume(&read,first,last,values,mask);
+    if (!rc) { ga_perf_source(read.pfile);ga_perf_spatial(); }
+    return rc;
+  }
   if (!spatial_plan(expr,pst,&plan) || !plan.count ||
       last<first || plane>SPATIAL_BYTES/((sizeof(*values)+1)*(plan.count+1))/(last-first+1)) return -1;
   count=plane*(last-first+1);
@@ -3427,6 +3453,7 @@ static gaint spatial_volume(char *expr, struct gastat *pst, struct gagrid *box,
     if (!storage[i].file.rbuf || !storage[i].file.ubuf) goto done;
     rc=gagrdvolume(&read,first,last,storage[i].file.rbuf,storage[i].file.ubuf);
     if (rc) goto done;
+    ga_perf_source(source);
     spatial_view(&storage[i].file,source,&read,first,last,storage[i].file.rbuf,storage[i].file.ubuf);
     strcpy(storage[i].node.abbrv,plan.fields[i].alias);
     storage[i].node.pfi=&storage[i].file;
@@ -3461,7 +3488,9 @@ done:
     if (storage[i].file.rbuf) gree(storage[i].file.rbuf,"spatialvalues");
     if (storage[i].file.ubuf) gree(storage[i].file.ubuf,"spatialmask");
   }
-  gree(storage,"spatialviews"); return rc;
+  gree(storage,"spatialviews");
+  if (!rc) ga_perf_spatial();
+  return rc;
 }
 
 static gaint spatial_series(struct gafunc *,struct gastat *,gaint,gaint,gaint,gaint,
@@ -3515,6 +3544,7 @@ static struct gagrid *ave_section(struct gafunc *pfc, struct gastat *pst,
       sec->idim!=sample.idim || sec->jdim!=sample.jdim) {
     gagfre(sec); return NULL;
   }
+  ga_perf_spatial();
   return sec;
 }
 

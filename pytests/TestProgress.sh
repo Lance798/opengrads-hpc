@@ -52,7 +52,7 @@ trap 'rm -rf -- "$test_root"' EXIT
 # got: each progress frame on a line of its own ("frame ..."), each erase
 # ("erase"), and the rest of the output with them taken out ("text ...").
 cat > "$test_root/onterm.py" <<'PYTHON'
-import os, pty, re, select, sys, time
+import errno, os, pty, re, select, signal, sys, time
 launcher, settings, commands = sys.argv[1], sys.argv[2], sys.argv[3:]
 env = dict(os.environ, OPENGRADS_COLOR='0')
 # Python sets LC_CTYPE for what it starts; the settings name the locale
@@ -64,22 +64,50 @@ if pid == 0:
     os.execve(launcher, [launcher, '-bl', '-d', 'gxdummy', '-h', 'gxdummy'], env)
 out = bytearray()
 def pump(most):
-    end = time.time() + most
-    while time.time() < end:
+    end = time.monotonic() + most
+    while time.monotonic() < end:
         r, _, _ = select.select([fd], [], [], 0.05)
         if r:
             try:
-                out.extend(os.read(fd, 65536))
-            except OSError:
-                return
-pump(2)
-for c in commands + ['quit']:
-    n = len(out)
-    os.write(fd, (c + '\r').encode())
-    end = time.time() + 30
-    while time.time() < end and b'ga->' not in out[n + len(c):]:
-        pump(0.1)
-pump(1)
+                data = os.read(fd, 65536)
+            except OSError as error:
+                if error.errno != errno.EIO:
+                    raise
+                return False
+            if not data:
+                return False
+            out.extend(data)
+    return True
+def prompt(start):
+    end = time.monotonic() + 30
+    while b'ga->' not in out[start:]:
+        if time.monotonic() >= end:
+            raise AssertionError('prompt timeout: ' + repr(out[-1500:]))
+        if not pump(0.1):
+            raise AssertionError('exited before prompt: ' + repr(out[-1500:]))
+try:
+    prompt(0)
+    for c in commands:
+        n = len(out)
+        os.write(fd, (c + '\r').encode())
+        prompt(n + len(c))
+    # Quit closes the terminal; it never produces another ga-> prompt.
+    os.write(fd, b'quit\r')
+    end = time.monotonic() + 30
+    while pump(0.1):
+        if time.monotonic() >= end:
+            raise AssertionError('quit timeout: ' + repr(out[-1500:]))
+    child, status = os.waitpid(pid, 0)
+    pid = None
+    assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, status
+finally:
+    if pid is not None:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        os.waitpid(pid, 0)
+    os.close(fd)
 d = out.decode('utf-8', 'replace')
 for m in re.finditer(r'\r([^\r\n]*?)\x1b\[K|\x1b\]9;4;(\d+)(?:;(\d+))?\x07', d):
     if m.group(1) is not None:

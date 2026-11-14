@@ -1,6 +1,9 @@
 name: CI
 
 on:
+  # Release-preparation branches get the same matrix before a PR is opened.
+  push:
+    branches: ['release/**']
   pull_request:
     branches: [main]
   # Push a branch, then select it under Actions > CI > Run workflow.

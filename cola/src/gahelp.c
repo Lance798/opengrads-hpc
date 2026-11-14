@@ -136,7 +136,7 @@ static const struct gahelp sets[] = {
   {"digsiz",   "set digsiz size", "set digsiz 0.1", NULL},
   {"display",  "set display color|grey|greyscale <black|white>", "set display color white", "color grey greyscale black white"},
   {"dropmenu", "set dropmenu fc bc oc1 oc2 tfc tbc toc1 toc2 bfc bbc boc1 boc2 soc1 soc2 thickness", NULL, NULL},
-  {"e",        "set e e1 <e2>", "set e 1", NULL},
+  {"e",        "set e e1 <e2>    (ne/last; expressions round to nearest index)", "set e 1 ne", "ne last"},
   {"ens",      "set ens name1 <name2>", NULL, NULL},
   {"fgvals",   "set fgvals value color <value color> ...", "set fgvals 1 2 2 4", NULL},
   {"font",     "set font number <file filename>", "set font 1", NULL},
@@ -154,13 +154,14 @@ static const struct gahelp sets[] = {
   {"hershey",  "set hershey on|off", NULL, "on off"},
   {"imprun",   "set imprun script <arguments>", NULL, NULL},
   {"kml",      "set kml <-img|-ln|-poly> filename_root", "set kml -ln ~/contours", "-img -ln -poly"},
-  {"lat",      "set lat lat1 <lat2>", "set lat -30 30", NULL},
-  {"lev",      "set lev lev1 <lev2>", "set lev 1000 100", NULL},
+  {"lat",      "set lat lat1 <lat2>    (number, first, or last)", "set lat first last", "first last"},
+  {"lev",      "set lev lev1 <lev2>    (number, first, or last)", "set lev first last", "first last"},
   {"lfcols",   "set lfcols color1 color2    (gxout linefill)", "set lfcols 2 4", NULL},
   {"line",     "set line color# <style> <thickness>", "set line 2 1 6", NULL},
   {"log1d",    "set log1d loglog|logh|logv|off", NULL, "loglog logh logv off"},
-  {"lon",      "set lon lon1 <lon2>", "set lon 100 150", NULL},
+  {"lon",      "set lon lon1 <lon2>    (number, first, or last)", "set lon first last", "first last"},
   {"loopdim",  "set loopdim x|y|z|t|e", NULL, "x y z t e"},
+  {"loopincr", "set loopincr positive_integer    (animation grid step; default 1)", "set loopincr 6", NULL},
   {"looping",  "set looping on|off", NULL, "on off"},
   {"lwid",     "set lwid thickness width    (thickness 13 to 256)", "set lwid 13 2.5", NULL},
   {"map",      "set map auto | color <style> <thickness>", "set map 15 1 3", "auto"},
@@ -195,7 +196,7 @@ static const struct gahelp sets[] = {
   {"strmden",  "set strmden density <spacing <size <type>>>    (density 1 to 10)", "set strmden 5", NULL},
   {"strmopts", "set strmopts density <spacing <size <type>>>    (density 1 to 10)", "set strmopts 5", NULL},
   {"strsiz",   "set strsiz width <height>", "set strsiz 0.15", NULL},
-  {"t",        "set t t1 <t2>", "set t 1 12", NULL},
+  {"t",        "set t t1 <t2>    (nt/last; expressions round to nearest index)", "set t 1 last", "nt last"},
   {"threads",  "set threads N", "set threads 8", NULL},
   {"tile",     "set tile number type <width <height <thickness <fgcolor <bgcolor>>>>>", NULL, NULL},
   {"time",     "set time time1 <time2>", "set time 00z01jan2000 00z31dec2000", NULL},
@@ -209,7 +210,7 @@ static const struct gahelp sets[] = {
   {"warn",     "set warn on|off", NULL, "on off"},
   {"wxcols",   "set wxcols c1 c2 c3 c4 c5", NULL, NULL},
   {"wxopt",    "set wxopt wxsym|mark|char", NULL, "wxsym mark char"},
-  {"x",        "set x x1 <x2>", "set x 1 72", NULL},
+  {"x",        "set x x1 <x2>    (nx/last; expressions round to nearest index)", "set x 1 nx*0.5", "nx last"},
   {"xaxis",    "set xaxis start end <increment>", "set xaxis 0 360 30", NULL},
   {"xflip",    "set xflip on|off", NULL, "on off"},
   {"xlab",     "set xlab on|off|auto|format", "set xlab %.0f", "on off auto"},
@@ -220,7 +221,7 @@ static const struct gahelp sets[] = {
   {"xlpos",    "set xlpos offset b|t", "set xlpos 0 b", NULL},
   {"xsize",    "set xsize xpixels ypixels", "set xsize 800 600", NULL},
   {"xyrev",    "set xyrev on|off", NULL, "on off"},
-  {"y",        "set y y1 <y2>", "set y 1 46", NULL},
+  {"y",        "set y y1 <y2>    (ny/last; expressions round to nearest index)", "set y 1 ny", "ny last"},
   {"yaxis",    "set yaxis start end <increment>", "set yaxis 1000 100 100", NULL},
   {"yflip",    "set yflip on|off", NULL, "on off"},
   {"ylab",     "set ylab on|off|auto|format", "set ylab %.1f", "on off auto"},
@@ -229,7 +230,7 @@ static const struct gahelp sets[] = {
   {"ylint",    "set ylint interval", "set ylint 10", NULL},
   {"ylopts",   "set ylopts color <thickness <size>>", "set ylopts 1 4 0.15", NULL},
   {"ylpos",    "set ylpos offset l|r", "set ylpos 0 l", NULL},
-  {"z",        "set z z1 <z2>", "set z 1 10", NULL},
+  {"z",        "set z z1 <z2>    (nz/last; expressions round to nearest index)", "set z nz-1", "nz last"},
   {"zlog",     "set zlog on|off", NULL, "on off"},
   {NULL,NULL,NULL,NULL}
 };
@@ -257,6 +258,7 @@ static const struct gahelp qrys[] = {
   {"gxconfig", "q gxconfig", NULL, NULL},
   {"gxinfo",   "q gxinfo", NULL, NULL},
   {"gxout",    "q gxout", NULL, NULL},
+  {"performance", "q performance", NULL, NULL},
   {"pos",      "q pos <nowait>", NULL, "nowait"},
   {"pp2xy",    "q pp2xy x y", NULL, NULL},
   {"sdfwrite", "q sdfwrite", NULL, NULL},
@@ -277,6 +279,8 @@ static const struct gahelp qrys[] = {
   {NULL,NULL,NULL,NULL}
 };
 
+/* Keep this catalog in sync with gafunc.c:rtnprs. Both Tab and usage hints
+   read it; pytests/check_function_catalog.py checks both directions. */
 static const struct gahelp funcs[] = {
   {"aave",     "aave(expr, xdim1, xdim2, ydim1, ydim2)    (weighted by latitude)", "aave(ts, lon=0, lon=360, lat=-90, lat=90)", NULL},
   {"abs",      "abs(expr)", "abs(u)", NULL},
@@ -298,11 +302,14 @@ static const struct gahelp funcs[] = {
   {"coll2gr",  "coll2gr(collection# <,levels>)", "coll2gr(1, -u)", NULL},
   {"const",    "const(expr, value <,-u|-a>)", "const(pr, 0, -u)", NULL},
   {"cos",      "cos(expr)", "cos(lat*3.1416/180)", NULL},
+  {"dimsize",  "dimsize(x|y|z|t|e <,file#>)    (full file dimension length)", "dimsize(x,1)*dimsize(y,1)", NULL},
   {"eloop",    "eloop(expr)", NULL, NULL},
+  {"esat",     "esat(T <,phase>)    (T in K; phase defaults to auto)", "esat(ta)", NULL},
   {"exp",      "exp(expr)", NULL, NULL},
   {"fndlvl",   "fndlvl(expr, expr_to_find, lev1, lev2)", "fndlvl(ta, 273.15, lev=1000, lev=100)", NULL},
   {"gint",     "gint(expr, dim1, dim2)", "gint(pr, t=1, t=12)", NULL},
   {"gr2stn",   "gr2stn(grid_expr, stn_expr <,-n>)  or  gr2stn(grid_expr, lon, lat <,-n>)", NULL, NULL},
+  {"grarea",   "grarea(expr)", "grarea(ts)", NULL},
   {"hcurl",    "hcurl(uexpr, vexpr)", "hcurl(u, v)", NULL},
   {"hdivg",    "hdivg(uexpr, vexpr)", "hdivg(u, v)", NULL},
   {"if",       "if(logical_expr, then_expr, else_expr)", "if(ts>273.15, 1, 0)", NULL},
@@ -319,6 +326,7 @@ static const struct gahelp funcs[] = {
   {"oabin",    "oabin(grid_expr, stn_expr <,-flag>)", NULL, NULL},
   {"oacres",   "oacres(grid_expr, stn_expr <,radii>)", NULL, NULL},
   {"pow",      "pow(expr1, expr2)", "pow(u, 2)", NULL},
+  {"qvsat",    "qvsat(T, p <,phase>)    (T in K, p in Pa; phase defaults to auto)", "qvsat(ta, 100000)", NULL},
   {"roll",     "roll(expr, integer_shift, x|y)", "roll(ts, -1, x)", NULL},
   {"s2g1d",    "s2g1d(stn_expr)", NULL, NULL},
   {"scorr",    "scorr(expr1, expr2, xdim1, xdim2, ydim1, ydim2)", "scorr(ts, ts.2, lon=0, lon=360, lat=-90, lat=90)", NULL},
@@ -340,6 +348,8 @@ static const struct gahelp funcs[] = {
   {"tvrh2q",   "tvrh2q(tv_expr, rh_expr)", NULL, NULL},
   {"tvrh2t",   "tvrh2t(tv_expr, rh_expr)", NULL, NULL},
   {"vint",     "vint(ps_expr, expr, top)", "vint(ps, q, 300)", NULL},
+  {"zint",     "zint(expr <,bottom <,top>>)    (height-coordinate bounds)", "zint(qv*rhobar, 0, 5000)", NULL},
+  {"zslice",   "zslice(expr, index_map)    (one-based Z indices)", "zslice(th, topo)", NULL},
   {NULL,NULL,NULL,NULL}
 };
 

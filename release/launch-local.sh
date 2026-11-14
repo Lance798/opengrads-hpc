@@ -57,4 +57,9 @@ case "$library_variable" in
   *) export LD_LIBRARY_PATH="$runtime_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
 esac
 
-exec "$grads_binary" "$@"
+export OPENGRADS_COLOR="${OPENGRADS_COLOR:-1}"
+color_args=()
+if [[ "$OPENGRADS_COLOR" != 0 ]]; then
+  color_args=(-C "${OPENGRADS_COLOR_SCHEME:-1}")
+fi
+exec "$grads_binary" "${color_args[@]}" "$@"

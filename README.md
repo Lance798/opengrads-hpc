@@ -49,6 +49,12 @@ libraries are available.
   shows a progress line with the time left. See
   [performance notes](docs/PERFORMANCE.md).
 
+- **Last-command performance report.** `q performance` shows the last DISPLAY
+  or DEFINE's elapsed/evaluation/output times, observed backends and execution
+  paths, actual time-worker counts and pool reuse, plus clearly labeled memory
+  estimates. Normal output and progress displays remain unchanged. See
+  [the performance query](docs/QUERY_PERFORMANCE.md).
+
 - **Fixed-time spatial reductions.** Eligible built-in expressions inside X/Y/Z
   means, sums and extrema share bounded section/volume readers and the existing
   math kernels. DEFINE can batch across Z while retaining XZ/YZ results. See
@@ -142,12 +148,14 @@ Use `q config` to see whether this build includes `adios2-bp5`, `openmp`,
 - [Undo: settings and limits](docs/UNDO.md)
 - [The prompt: Tab completion, usage after errors, ~ in file names](docs/PROMPT.md)
 - [Clear Canvas: clear the picture and reuse plot settings](docs/CLEAR_CANVAS.md)
+- [Dimension endpoints, dimension sizes and animation steps](docs/DIMENSIONS.md)
 - [Z slices: extract a different vertical index at each grid point](docs/ZSLICE.md)
 - [Height-coordinate column integrals and column water vapor](docs/ZINT.md)
 - [Saturation vapor pressure and mixing ratio](docs/SATURATION.md)
 - [OpenMP controls and benchmark notes](docs/PERFORMANCE.md)
 - [NetCDF/HDF5/BP5 time workers: expressions, support and limits](docs/TIME_WORKERS.md)
 - [Architecture and development roadmap](docs/ARCHITECTURE.md)
+- [Adding a built-in function: registration, Tab/help, tests and checks](docs/ADDING_FUNCTIONS.md)
 
 ## Legacy OpenGrADS documentation
 

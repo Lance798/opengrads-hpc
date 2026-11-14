@@ -73,6 +73,7 @@ OPENGRADS_ADIOS2_ROOT="$adios2_root" OPENGRADS_DEPS_ROOT="$deps_root" \
   "$repo_root/pytests/TestBP5Compression.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestSDFOpen.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestOpenMP.sh"
+OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestPerformance.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestIf.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestRoll.sh"
 OPENGRADS_BUILD_ROOT="$build_root" GA_TEST_TIME_FORMAT=binary "$repo_root/pytests/TestSpatialReductions.sh"
@@ -92,6 +93,7 @@ OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
 OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
   "$repo_root/pytests/TestSaturation.sh"
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestDefineNames.sh"
+OPENGRADS_BUILD_ROOT="$build_root" bash "$repo_root/pytests/TestDimensions.sh"
 
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestTimeLoader.sh"
 if grep -Eq '^#define USEHDF5 1$' "$build_root/src/config.h"; then
@@ -99,6 +101,7 @@ if grep -Eq '^#define USEHDF5 1$' "$build_root/src/config.h"; then
   OPENGRADS_BUILD_ROOT="$build_root" GA_TEST_TIME_FORMAT=h5 "$repo_root/pytests/TestSpatialReductions.sh"
   OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestTimeFileInputs.sh"
   OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestTimeRoll.sh"
+  OPENGRADS_BUILD_ROOT="$build_root" GA_TEST_TIME_FORMAT=h5 "$repo_root/pytests/TestPerformance.sh"
 fi
 OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
 GA_TEST_TIME_FORMAT=bp5 "$repo_root/pytests/TestTimeSpatialFunctions.sh"
@@ -108,6 +111,8 @@ OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
 GA_TEST_TIME_FORMAT=bp5 "$repo_root/pytests/TestTimeFileInputs.sh"
 OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
 GA_TEST_TIME_FORMAT=bp5 "$repo_root/pytests/TestTimeRoll.sh"
+OPENGRADS_BUILD_ROOT="$build_root" OPENGRADS_ADIOS2_ROOT="$adios2_root" \
+GA_TEST_TIME_FORMAT=bp5 "$repo_root/pytests/TestPerformance.sh"
 OPENGRADS_BUILD_ROOT="$build_root" bash "$repo_root/pytests/TestNetCDFTimeWorkers.sh"
 
 OPENGRADS_BUILD_ROOT="$build_root" "$repo_root/pytests/TestProgress.sh"

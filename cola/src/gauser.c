@@ -37,6 +37,7 @@
 #include <ctype.h>
 #include <string.h>
 #include <limits.h>
+#include <stdint.h>
 #include <math.h>
 #include "grads.h"
 #include "gahelp.h"
@@ -567,6 +568,8 @@ size_t sz,len;
 
 gaint gacmd (char *com, struct gacmn *pcm, gaint exflg) {
 gaint keepcanvas,canvasaa;
+gaint performance=0;
+gadouble performance_start=ga_perf_clock();
 struct gafile *pfi,*pfi2;
 struct gadefn *pdf,*pdf2;
 struct gaclct *clct,*clct2;
@@ -644,6 +647,7 @@ FILE *pdefid=NULL;
       }
     }
     if (flag) {
+      performance=ga_perf_begin(com,performance_start);
       if (pcm->pfid==NULL) {
         gaprnt (0,"DEFINE error:  no file open yet\n");
         retcod = 1;
@@ -1001,6 +1005,9 @@ FILE *pdefid=NULL;
     else if (rc==9) gxmaskclear();
     /* call gacln (reset gacmn) with different options */
     if (pcm->aaflg==0 && !keepcanvas) dsubs->gxdsignal(3); /* re-enable anti-aliasing */
+    /* Reset animation sampling only for a resetting CLEAR. SWAP and
+       CLEAR NORSET share gacln, but must retain the chosen step. */
+    if (rc==0 || rc==2 || rc==3 || rc==4 || rc==99) pcm->loopincr=1;
     if (rc==1) gacln(pcm,0);
     else if (rc<5 || rc==99) {
       gacln (pcm,1);
@@ -1405,6 +1412,7 @@ FILE *pdefid=NULL;
 #endif
     goto retrn ;
   } else if (cmpwrd("d",cmd) || cmpwrd("display",cmd)) {
+    performance=ga_perf_begin(com,performance_start);
     if (pcm->pfid==NULL) {
       gaprnt (0,"DISPLAY error:  no file open yet\n");
       retcod = 1;
@@ -1425,6 +1433,7 @@ FILE *pdefid=NULL;
     goto retrn;
   }
   else if (cmpwrd("define",cmd)) {
+    performance=ga_perf_begin(com,performance_start);
     if (pcm->pfid==NULL) {
       gaprnt (0,"DEFINE error:  no file open yet\n");
       retcod = 1;
@@ -1559,6 +1568,7 @@ retrn:
     gree(ccc,"f196");
   }
   if (comhome) gree(comhome,"cmdhome");
+  if (performance) ga_perf_end(retcod,gaqsig());
   return (retcod);
 }
 
@@ -2538,9 +2548,14 @@ void gapysavpcm(struct gacmn *pcm) {
   savpcm = pcm;
 }
 
+/* Metadata access on behalf of the scripting language. */
+gaint gagsdimsize (const char *axis, const char *file, gaint *size) {
+  return gadimsize(savpcm ? savpcm->pfi1 : NULL,
+                   savpcm ? savpcm->pfid : NULL,axis,file,size);
+}
+
 /* Execute command on behalf of the scripting language.
    Return the result in a dynamically allocated buffer */
-
 char *gagsdo (char *cmd, gaint *rc) {
 gaint savflg,tlen,i;
 struct gacmn *pcm;
@@ -2948,9 +2963,11 @@ static gaint gadef_run (char *, struct gacmn *, gaint);
 /* define, with its progress shown while it runs */
 gaint gadef (char *cmd, struct gacmn *pcm, gaint impf) {
 gaint lv, rc;
+  ga_perf_start(GA_PERF_EVAL);
   lv = gaprogbeg("define", 0);
   rc = gadef_run(cmd, pcm, impf);
   gaprogend(lv);
+  ga_perf_stop(GA_PERF_EVAL);
   return (rc);
 }
 
@@ -3554,6 +3571,7 @@ gadouble minvals[4], maxvals[4],dval;
     gaprnt (2,"  q fwrite   Returns status of fwrite output file\n");
     gaprnt (2,"  q gxinfo   Returns graphics environment info\n");
     gaprnt (2,"  q gxout    Gives current gxout settings\n");
+    gaprnt (2,"  q performance Returns the last analysis command's timing and execution paths\n");
     gaprnt (2,"  q pos      Waits for mouse click, returns position and widget info\n");
     gaprnt (2,"  q sdfwrite Returns status of self-describing fwrite options\n");
     gaprnt (2,"  q shades   Returns colors and levels of shaded contours\n");
@@ -3603,6 +3621,13 @@ gadouble minvals[4], maxvals[4],dval;
                "Undo is on: %i step%s can be undone (up to %i kept), %i meta buffer words used by the current plot\n",
                j,j==1?"":"s",i,cnt);
     gaprnt(2,pout);
+  }
+  else if (cmpwrd(arg,"performance")) {
+    if (nxtwrd(arg)) {
+      gaprnt(0,"QUERY PERFORMANCE error: no arguments expected\n");
+      return 1;
+    }
+    ga_perf_query();
   }
   else if (cmpwrd(arg,"threads")) {
     if (ga_omp_enabled())
@@ -5540,7 +5565,9 @@ static gaint dcolor[10] = {-1, 1, 3, 7, 2, 6, 9, 10, 11, 12 };
     if (pcm->ccolor<0) pcm->mcolor = 15;
     rc = gapars(cmd, pst, pcm);
     if (rc) goto retrn;
-    gaplot (pcm); 
+    ga_perf_start(GA_PERF_PLOT);
+    gaplot (pcm);
+    ga_perf_stop(GA_PERF_PLOT);
     gagrel (pcm);
     pcm->pass++;
     pcm->ccolor = -9;
@@ -5595,7 +5622,10 @@ static gaint dcolor[10] = {-1, 1, 3, 7, 2, 6, 9, 10, 11, 12 };
     gxfrme (2);
     pcm->pass = 0;
     labsv = pcm->clab;
-    for (l=l1;l<=l2;l++) {
+    /* The last sampled frame may precede the requested upper endpoint.
+       Use it for labels too, and avoid an overflowing final increment. */
+    if (l1<=l2) l2=(gaint)((int64_t)l1+((int64_t)l2-l1)/pcm->loopincr*pcm->loopincr);
+    for (l=l1;l<=l2;) {
       if (ldim==3) {
         gr2t (vals, (gadouble)l, &(pst->tmin));
         pst->tmax = pst->tmin;
@@ -5608,7 +5638,9 @@ static gaint dcolor[10] = {-1, 1, 3, 7, 2, 6, 9, 10, 11, 12 };
       if (rc) goto retrn;
       pcm->clab = 0;
       if (l==l2) pcm->clab = labsv;
+      ga_perf_start(GA_PERF_PLOT);
       gaplot (pcm);
+      ga_perf_stop(GA_PERF_PLOT);
       if (ldim==3) {
 	snprintf(lab,29,"%i:%i:%i:%i",pst->tmin.yr,pst->tmin.mo,pst->tmin.dy,pst->tmin.hr);
       }
@@ -5627,6 +5659,8 @@ static gaint dcolor[10] = {-1, 1, 3, 7, 2, 6, 9, 10, 11, 12 };
       gagrel (pcm);
       pcm->aflag = -1;
       pcm->aflag2 = -1;
+      if (l==l2) break;
+      l+=pcm->loopincr;
     }
     pcm->dbflg = 0;
     pcm->pass = 0;
@@ -5666,7 +5700,17 @@ retrn:
 /* Parse compound expression (multiple expressions seperated
    by ;'s), get data, hand data off pcm, return */
 
+static gaint gapars_run (char *, struct gastat *, struct gacmn *);
+
 gaint gapars (char *cmd, struct gastat *pst, struct gacmn *pcm) {
+gaint rc;
+  ga_perf_start(GA_PERF_EVAL);
+  rc=gapars_run(cmd,pst,pcm);
+  ga_perf_stop(GA_PERF_EVAL);
+  return rc;
+}
+
+static gaint gapars_run (char *cmd, struct gastat *pst, struct gacmn *pcm) {
 char *pos;
 char *expr;
 gaint num, i, rc;
@@ -5737,6 +5781,105 @@ gaint i;
 /* Handle set command */
 
 char *justs[9] = {"bl","bc","br","l","c","r","tl","tc","tr"};
+
+/* SET endpoints are blank-delimited. Keep index arithmetic separate from
+   gaexpr: it must not read data, change the environment, or reserve names. */
+struct gadimexpr {
+  const char *p, *end;
+  gaint last, axis, depth;
+};
+
+static gaint gadimsum (struct gadimexpr *, gadouble *);
+
+static gaint gadimatom (struct gadimexpr *expr, gadouble *value) {
+  const char *start;
+  char *end;
+  int sign;
+  if (expr->p==expr->end || expr->depth>=64) return 1;
+  if (*expr->p=='+' || *expr->p=='-') {
+    sign=*expr->p++=='-' ? -1 : 1;
+    expr->depth++;
+    if (gadimatom(expr,value)) return 1;
+    expr->depth--;
+    *value*=sign;
+  } else if (*expr->p=='(') {
+    expr->p++; expr->depth++;
+    if (gadimsum(expr,value) || expr->p==expr->end || *expr->p!=')') return 1;
+    expr->p++; expr->depth--;
+  } else if ((*expr->p>='0' && *expr->p<='9') || *expr->p=='.') {
+    *value=strtod(expr->p,&end);
+    if (end==expr->p || end>expr->end) return 1;
+    expr->p=end;
+  } else {
+    start=expr->p;
+    while (expr->p<expr->end && isalpha((unsigned char)*expr->p)) expr->p++;
+    if ((expr->p-start==4 && !strncmp(start,"last",4)) ||
+        (expr->p-start==2 && start[0]=='n' && start[1]=="xyzte"[expr->axis])) {
+      if (expr->last<1) return 1;
+      *value=expr->last;
+    } else return 1;
+  }
+  return !isfinite(*value) || *value<INT_MIN || *value>INT_MAX;
+}
+
+static gaint gadimterm (struct gadimexpr *expr, gadouble *value) {
+  gadouble right;
+  char op;
+  if (gadimatom(expr,value)) return 1;
+  while (expr->p<expr->end && (*expr->p=='*' || *expr->p=='/')) {
+    op=*expr->p++;
+    if (gadimatom(expr,&right)) return 1;
+    if (op=='*') *value*=right;
+    else {
+      if (!right) return 1;
+      *value/=right;
+    }
+    if (!isfinite(*value) || *value<INT_MIN || *value>INT_MAX) return 1;
+  }
+  return 0;
+}
+
+static gaint gadimsum (struct gadimexpr *expr, gadouble *value) {
+  gadouble right;
+  char op;
+  if (gadimterm(expr,value)) return 1;
+  while (expr->p<expr->end && (*expr->p=='+' || *expr->p=='-')) {
+    op=*expr->p++;
+    if (gadimterm(expr,&right)) return 1;
+    *value+=op=='+' ? right : -right;
+    if (!isfinite(*value) || *value<INT_MIN || *value>INT_MAX) return 1;
+  }
+  return 0;
+}
+
+static gaint gasetdimvalue (char *cmd, struct gafile *pfi, gaint axis,
+                            gaint world, gadouble *value) {
+  struct gadimexpr expr;
+  char *end=cmd, *pos;
+  gadouble result;
+  while (*end && !isspace((unsigned char)*end)) end++;
+  /* Preserve ordinary numeric coordinates, including fractional indices
+     and scientific notation. Round only the final arithmetic result. */
+  pos=getdbl(cmd,value);
+  if (pos==end && isfinite(*value)) return 0;
+  if (world) {
+    if (pfi->type!=1 || !pfi->gr2ab[axis] || pfi->dnum[axis]<1) return 1;
+    if (cmpwrd("first",cmd)) result=1;
+    else if (cmpwrd("last",cmd)) result=pfi->dnum[axis];
+    else return 1;
+    *value=pfi->gr2ab[axis](pfi->grvals[axis],(gadouble)result);
+    return 0;
+  }
+  expr.p=cmd; expr.end=end; expr.depth=0; expr.axis=axis;
+  expr.last=((pfi->type==2 || pfi->type==3) && axis<3) ? 0 : pfi->dnum[axis];
+  if (gadimsum(&expr,&result) || expr.p!=end) {
+    gaprnt(0,"SET error: Invalid dimension expression; use last or the matching n-axis name, numbers, + - * / and parentheses (no division by zero or overflow)\n");
+    return 1;
+  }
+  /* Match existing single-index SET rounding, including halfway cases. */
+  *value=floor(result+0.5);
+  return 0;
+}
 
 gaint gaset (char *cmd, char *com, struct gacmn *pcm) {
 struct dt tdef;
@@ -7926,6 +8069,13 @@ static char *kwds[130] = {"X","Y","Z","T","LON","LAT","LEV","TIME",
       gaprnt (2,"Looping is off \n");
     } else goto err;
   }
+  else if (cmpwrd("loopincr",cmd)) {
+    kwrd = 13;
+    if ((cmd=nxtwrd(cmd))==NULL || gaposint(cmd,&i)) goto err;
+    pcm->loopincr=i;
+    snprintf(pout,1255,"Loop increment set to %i\n",i);
+    gaprnt(2,pout);
+  }
   else if (cmpwrd("ens",cmd)) {
     kwrd=112;
     if (pcm->pfid==NULL) goto errf;
@@ -7967,19 +8117,11 @@ static char *kwds[130] = {"X","Y","Z","T","LON","LAT","LEV","TIME",
     if (pcm->pfid==NULL) goto errf;
     pfi = pcm->pfid;
     num = 1;
-    if (cmpwrd("last",cmd)) {
-      v1 = pfi->dnum[4];
-    } else {
-      if (getdbl(cmd,&v1) == NULL) goto err;
-    }
+    if (gasetdimvalue(cmd,pfi,4,0,&v1)) goto err;
     v2 = v1;
     if ((cmd = nxtwrd (cmd)) != NULL) {
       num = 2;
-      if (cmpwrd("last",cmd)) {
-        v2 = pfi->dnum[4];
-      } else {
-        if (getdbl(cmd,&v2) == NULL) goto err;
-      }
+      if (gasetdimvalue(cmd,pfi,4,0,&v2) || nxtwrd(cmd)!=NULL) goto err;
       if (v1==v2) num = 1;
     } 
     pcm->vdim[4] = num-1;
@@ -7998,19 +8140,11 @@ static char *kwds[130] = {"X","Y","Z","T","LON","LAT","LEV","TIME",
     if (pcm->pfid==NULL) goto errf;
     pfi = pcm->pfid;
     num = 1;
-    if (kwrd==3 && cmpwrd("last",cmd)) {
-      v1 = pfi->dnum[3];
-    } else {
-      if (getdbl(cmd,&v1) == NULL) goto err;
-    }
+    if (gasetdimvalue(cmd,pfi,kwrd,0,&v1)) goto err;
     v2 = v1;
     if ((cmd = nxtwrd (cmd)) != NULL) {
       num = 2;
-      if (kwrd==3 && cmpwrd("last",cmd)) {
-        v2 = pfi->dnum[3];
-      } else {
-        if (getdbl(cmd,&v2) == NULL) goto err;
-      }
+      if (gasetdimvalue(cmd,pfi,kwrd,0,&v2) || nxtwrd(cmd)!=NULL) goto err;
       if (dequal(v1,v2,1.0e-8)==0) num=1;
     }
     pcm->vdim[kwrd] = num-1;
@@ -8072,14 +8206,17 @@ static char *kwds[130] = {"X","Y","Z","T","LON","LAT","LEV","TIME",
     if (cmpwrd("lev",cmd)) {kwrd=6; id=2;}
     if ((cmd = nxtwrd (cmd)) == NULL) goto err;
     if (pcm->pfid==NULL) goto errf;
+    pfi = pcm->pfid;
     num = 1;
-    if (getdbl(cmd,&(pcm->dmin[id])) == NULL) goto err;
-    pcm->dmax[id] = pcm->dmin[id];
+    if (gasetdimvalue(cmd,pfi,id,1,&v1)) goto err;
+    v2 = v1;
     if ((cmd = nxtwrd (cmd)) != NULL) {
       num = 2;
-      if (getdbl(cmd,&(pcm->dmax[id])) == NULL) goto err;
-      if (dequal(pcm->dmin[id],pcm->dmax[id],1.0e-8)==0) num=1;
+      if (gasetdimvalue(cmd,pfi,id,1,&v2) || nxtwrd(cmd)!=NULL) goto err;
+      if (dequal(v1,v2,1.0e-8)==0) num=1;
     }
+    pcm->dmin[id] = v1;
+    pcm->dmax[id] = v2;
     pcm->vdim[id] = num-1;
     pfi = pcm->pfid;
     if (pfi->type==1 && num==1) {

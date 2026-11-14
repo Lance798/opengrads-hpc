@@ -72,7 +72,7 @@ serial comparison. ROLL is also used by the periodic paths of
 
 `pytests/TestRoll.sh` checks analytic permutations, masks, coordinates,
 selected domains, singleton axes, nested calls, very large shifts, invalid
-arguments and bitwise copies at 1/4/8 threads. Set `GA_TEST_NUMPY_PYTHON` to a
+arguments and bitwise copies at 1/4 threads. Set `GA_TEST_NUMPY_PYTHON` to a
 Python executable with NumPy installed for an additional independent NumPy
 oracle. `pytests/TestTimeRoll.sh` checks worker values and recovery with
 HDF5, classic/compressed NetCDF and BP5 fixtures.

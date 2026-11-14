@@ -1,3 +1,59 @@
+## opengrads-hpc 1.0.16
+
+This release improves interactive history and completion, adds convenient
+dimension selection and animation steps, and reports the work performed by
+the last analysis command. The GrADS baseline remains `2.2.1.oga.1`.
+
+### Added in 1.0.16
+
+- **Prefix history search.** Up/Down recall commands matching the text from
+  the line start to the cursor, retaining the prefix across repeated arrows
+  and restoring the original draft at the newer end. Empty input keeps
+  ordinary recall. Ctrl-C clears input and search state, and `.inputrc`
+  arrow bindings keep priority. System inputrc defaults no longer restore
+  ordinary arrows over the application default. See [PROMPT.md](PROMPT.md).
+
+- **Dimension endpoints and animation steps.** Indexed SET dimensions accept
+  the corresponding `nx/ny/nz/nt/ne`, `last`, and checked arithmetic expressions
+  with decimal coefficients, rounded once to the nearest integer grid index.
+  `set lon/lat/lev` accept `first` and `last` in file grid order. The expression
+  and script function `dimsize(axis <,file#>)` returns full descriptor sizes.
+  `set loopincr N` samples built-in animation every N grid steps; `c` resets
+  it to 1, while `cc` and `swap` retain it. See [DIMENSIONS.md](DIMENSIONS.md).
+
+- **Last-command diagnostics.** `q performance` reports the last DISPLAY or
+  DEFINE's wall/evaluation/output time, observed input backends and read paths,
+  actual time-worker dispatch and pool reuse, and labeled worker-workspace
+  estimates and parent lifetime RSS. Recording adds no ordinary output and
+  leaves progress/graphics behavior unchanged. See [QUERY_PERFORMANCE.md](QUERY_PERFORMANCE.md).
+
+- **Context-aware completion.** The first Tab offers all matching commands,
+  scripts, directories, files, variables and functions in colored groups.
+  Completion supports scripts along `GASCRP`, shell commands and paths,
+  nested directories and explicit paths, and caches directory listings.
+  Custom Tab bindings remain supported. See [PROMPT.md](PROMPT.md).
+
+### Improved in 1.0.16
+
+- Interactive terminal sessions load and save history automatically, including
+  on Ctrl-D, and start with color enabled. `OPENGRADS_HISTORY=0` and
+  `OPENGRADS_COLOR=0` opt out; explicit history paths retain priority.
+- GitHub release descriptions contain only the matching version's notes.
+  The complete changelog remains in this repository.
+- Release regressions use a four-core budget, and terminal checks wait for
+  prompt output rather than depending on short fixed startup delays.
+
+### Fixed in 1.0.16
+
+- `vvmtopo` restores the caller's X/Y/Z/T/E selection after creating terrain
+  fields, including when explicit grid dimensions were supplied.
+- Ctrl-C clears both visible input and saved history-search state. It does
+  not restore cancelled drafts or consume the next key.
+
+Linux x86_64, Linux aarch64 and macOS arm64 remain supported. Existing
+numeric coordinate selections and data calculations keep their behavior;
+animation steps affect the built-in display loop only.
+
 ## opengrads-hpc 1.0.15
 
 This release expands time-worker expressions to BP5 and cross-file inputs,

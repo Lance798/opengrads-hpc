@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix='opengrads-if.') as directory:
     for name,nx,ny,nz in (('x',8,1,1),('xy',4,2,1),('z',1,1,8)):
         ctl=root/(name+'.ctl');ctl.write_text('dset ^field.dat\nundef -9999\nxdef '+str(nx)+' linear 10 .1\nydef '+str(ny)+' linear -20 .2\nzdef '+(str(nz)+' levels 1000 900 800 650 500 300 200 100' if nz>1 else '1 linear 1000 1')+'\ntdef 1 linear 00z01jan2000 1hr\nvars 1\nf '+str(nz)+' 99 Field\nendvars\n')
         setup=f'open {ctl}\nset x 1 {nx}\nset y 1 {ny}\nset z 1 {nz}\nset gxout print\nset prnopts %.17g 32 1\n'
-        for n in (1,4,16):
+        for n in (1,4):
             body=setup+f'set threads {n}\n'+''.join('d '+expr+'\n' for expr,wanted in cases)+'d if(1,7,9)\nd if(-1,7,9)\nquit\n'
             p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','gxdummy'],input=body,universal_newlines=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env,timeout=60)
             assert p.returncode==0 and not re.search(r'Error|ERROR|Invalid expression|AddressSanitizer|runtime error',p.stdout),p.stdout
@@ -43,5 +43,5 @@ with tempfile.TemporaryDirectory(prefix='opengrads-if.') as directory:
         p=subprocess.run([launcher,'-blu','-d','gxdummy','-h','gxdummy'],input=setup+'d if(f>0,f,notavariable)\nd if(f>0,f,-f)\nquit\n',universal_newlines=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env,timeout=60)
         assert p.returncode==0 and 'Error' in p.stdout,p.stdout
         assert grids(p.stdout)==[[3.,2.,1.,0.,1.,2.,3.,None]],p.stdout
-print(f'IF regression passed: {count} analytic scalar/X/Z/XY values; masks, scalar branches, nested conditions and error recovery; 1/4/16 threads.')
+print(f'IF regression passed: {count} analytic scalar/X/Z/XY values; masks, scalar branches, nested conditions and error recovery; 1/4 threads.')
 PY

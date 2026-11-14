@@ -234,6 +234,12 @@ ga-> set t 1 24
 ga-> d t
 ```
 
+Use `set loopincr 6` to draw every sixth grid step of the looping dimension.
+For example, `set t 1 last` then `set loopincr 6` visits T=1,7,13,... without
+exceeding the endpoint. `c` resets the step to 1; `cc` and `swap` keep it.
+This controls the built-in DISPLAY loop, independently of a script's own
+`while` loop. See [DIMENSIONS.md](DIMENSIONS.md).
+
 ```text
 'set dbuff on'
 t = 1

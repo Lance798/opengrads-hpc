@@ -32,6 +32,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Select manylinux Python 3.11
+        run: |
+          python_dir=/opt/python/cp311-cp311/bin
+          if [ ! -x "$python_dir/python3" ]; then
+            printf 'Required manylinux Python 3.11 is missing: %s\n' "$python_dir" >&2
+            exit 1
+          fi
+          printf '%s\n' "$python_dir" >> "$GITHUB_PATH"
+          "$python_dir/python3" --version
+
       - name: Install build prerequisites
         run: |
           dnf -y install epel-release
@@ -43,6 +53,12 @@ jobs:
             cairo-devel libX11-devel libXext-devel libXmu-devel libICE-devel \
             libSM-devel libgeotiff-devel libtiff-devel hdf5-devel \
             libjpeg-turbo-devel netcdf-devel udunits2-devel zlib-devel
+
+      - name: Check release notes and built-in function catalog
+        run: |
+          python3 -c 'import sys; print(sys.executable); print(sys.version); assert sys.version_info[:2] == (3, 11)'
+          python3 pytests/TestReleaseNotes.py
+          python3 pytests/check_function_catalog.py
 
       - name: Build, test, and package
         env:
@@ -82,6 +98,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
       - name: Install build prerequisites
         env:
           # Without this, brew also upgrades the formulas the runner image
@@ -98,6 +119,12 @@ jobs:
           brew install tmux
           # XQuartz's Xvfb lets the packager draw with the X displays.
           brew install --cask xquartz
+
+      - name: Check release notes and built-in function catalog
+        run: |
+          python3 -c 'import sys; print(sys.executable); print(sys.version); assert sys.version_info[:2] == (3, 11)'
+          python3 pytests/TestReleaseNotes.py
+          python3 pytests/check_function_catalog.py
 
       - name: Build, test, and package
         env:

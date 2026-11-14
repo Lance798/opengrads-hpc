@@ -27,7 +27,9 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <stdio.h>
 
+#include "grads.h"
 #include "gaomp.h"
 #include "gatime.h"
 
@@ -99,6 +101,11 @@ gaint ga_omp_enabled(void) {
 }
 
 gaint ga_omp_parallelize(gaint cells) {
+gaint eligible;
   ga_omp_init();
-  return ga_omp_threads > 1 && cells >= GA_PARALLEL_MIN_CELLS;
+  eligible = ga_omp_threads > 1 && cells >= GA_PARALLEL_MIN_CELLS;
+#if USEOPENMP == 1
+  if (eligible && !omp_in_parallel()) ga_perf_kernel();
+#endif
+  return eligible;
 }

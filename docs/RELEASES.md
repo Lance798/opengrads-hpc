@@ -189,29 +189,40 @@ metadata therefore updates both startup and `--version` output automatically.
 
 Every archive carries a `VERSION` file recording both. To cut a release, bump
 `release/VERSION`, update `docs/RELEASE_NOTES.md`, commit, then tag `vX.Y.Z`.
+The repository retains the complete changelog. The publish workflow uses
+`release/release_notes.py` to extract exactly the tagged version's section
+for the GitHub release description; missing, duplicate or empty sections fail
+publication. Check it with `python3 pytests/TestReleaseNotes.py`, or preview
+the current release body with `python3 release/release_notes.py`.
 
-## Preparing 1.0.15 through a pull request
+## Preparing 1.0.16 through a pull request
 
-The `feature/time-workers-20-functions` branch prepares distribution version
-`1.0.15`, including expanded time workers, fixed-time spatial reductions, ROLL,
-`vvmtopo`, the `x` canvas alias and their release notes. Push the branch and
-open a pull request against the upstream `main`.
-Merging the pull request does not itself publish a release: the existing
-workflow runs on a version-tag push or manual dispatch, and manual dispatch
-builds candidates without creating a GitHub Release.
+The `release/1.0.16` branch prepares distribution version `1.0.16`, including
+prefix history, contextual completion, dimension endpoints and sizes,
+animation steps, last-command diagnostics and the `vvmtopo` dimension fix.
+Its pull request targets `Lance798/opengrads-hpc:main`.
+Pushing a `release/**` branch runs the same Linux x86_64, Linux aarch64 and
+macOS arm64 build/test matrix as the PR. CI keeps binary uploads disabled.
+CI uses Python 3.11 explicitly: Linux selects the manylinux interpreter at
+`/opt/python/cp311-cp311/bin`, and macOS uses `actions/setup-python`. Each
+platform checks the active interpreter before running the regression suite.
+The release publish job also uses Python 3.11 for notes extraction.
+Merging the pull request does not itself publish a release. CI can also be
+started by manual dispatch; pushing a version tag starts the separate release
+workflow and its gated publication step.
 
 After merging, the maintainer can tag the merged upstream commit:
 
 ```bash
 git switch main
 git pull --ff-only upstream main
-git tag -a v1.0.15 -m "opengrads-hpc 1.0.15"
-git push upstream v1.0.15
+git tag -a v1.0.16 -m "opengrads-hpc 1.0.16"
+git push upstream v1.0.16
 ```
 
 Here `upstream` means the remote for the repository receiving the pull request;
 use its actual remote name if different. The tagged commit must contain
-`release/VERSION` set to `1.0.15`. The workflow builds and tests Linux x86_64,
+`release/VERSION` set to `1.0.16`. The workflow builds and tests Linux x86_64,
 Linux aarch64 and macOS arm64 archives. Publication additionally requires the
 existing `BINARY_REDISTRIBUTION_APPROVED=true` repository variable described
 below. The GrADS baseline in `cola/configure.ac` remains `2.2.1.oga.1`.

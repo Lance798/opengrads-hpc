@@ -45,13 +45,22 @@
 #endif
 
 #if READLINE ==1
+#include <limits.h>
 #include <time.h>
 #include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <wchar.h>
 #include <readline/readline.h>
 #include <readline/history.h>
+#include <readline/tilde.h>
 extern gaint history_length;
 void write_command_log(char *logfile);
 static void ga_readline_init(void);
+char *gatxtc(char *);
+/* POSIX on both release targets; expose it without changing feature macros
+   for the rest of this translation unit. */
+extern int wcwidth(wchar_t);
 #endif
 
 static struct gaupb *upba=NULL;     /* Anchor for user defined plug-in */
@@ -124,7 +133,7 @@ int main (int argc, char *argv[])  {
   logfile= "c:\windows\grads.log";
 #else  /* Unix */
   userhome=getenv("HOME");
-  if (userhome==NULL) {
+  if (userhome==NULL || *userhome=='\0') {
     logfile=NULL;
   }
   else {
@@ -220,6 +229,17 @@ int main (int argc, char *argv[])  {
     }
   }
  
+#if READLINE == 1
+  /* Persist ordinary terminal sessions without requiring -H. Set this
+     after parsing so the default cannot consume a positional argument as
+     a history filename. Explicit -H still wins, including in batch use. */
+  if (!wrhstflg && hstflg && !killflg && logfile!=NULL &&
+      isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)) {
+    const char *history_setting = getenv("OPENGRADS_HISTORY");
+    if (history_setting==NULL || strcmp(history_setting,"0")) wrhstflg = 1;
+  }
+#endif
+
   if (txtcs > -2) gatxti(1,txtcs); /* turn on text colorizing */
   
   if (ratioflg==1) printf ("Note: -a option was specified, but no aspect ratio was provided\n");
@@ -430,6 +450,7 @@ gaint i;
   gcmn.hbufsz = 1000000;
   gcmn.g2bufsz = 10000000;
   gcmn.loopdim = 3;
+  gcmn.loopincr = 1;
   gcmn.csmth = 0;
   gcmn.cterp = 1;
   gcmn.cint = 0;
@@ -633,7 +654,8 @@ gaint gaqsig (void) {
 /* Tab completion. What is offered depends on where the cursor is:
 
 
-     at the start            commands
+     empty line              current directory contents
+     at the start            commands, scripts and file names
      set _                   set options; after one, its keywords
                              (on|off, the kinds of gxout, ...)
      q _, draw _, clear _    their options
@@ -642,25 +664,36 @@ gaint gaqsig (void) {
                              inside one's parentheses the dimensions
      run _                   scripts, in the current directory and GASCRP
      open, sdfopen, ...      file names (~ for the home directory)
+     !command, ! command     executables along PATH, then file names
 
    The names come from gahelp.c, which also prints the usage hints. */
 
-static char **cands;                     /* the candidates of this completion */
+enum ga_compkind {
+  GA_COMP_COMMAND, GA_COMP_SCRIPT, GA_COMP_DIRECTORY, GA_COMP_FILE,
+  GA_COMP_VARIABLE, GA_COMP_FUNCTION, GA_COMP_DIMENSION, GA_COMP_OPTION,
+  GA_COMP_FILENUM, GA_COMP_KINDS
+};
+struct ga_candidate {
+  char *word;
+  unsigned int kinds;
+};
+static struct ga_candidate *cands;        /* retained until the next completion */
 static int ncand, maxcand;
 
-static void cand (const char *w, const char *text) {
-int i;
+static void cand (const char *w, const char *text, int kind) {
 size_t n = strlen(text);
-char **more;
+struct ga_candidate *more;
   if (w==NULL || strncmp(w,text,n)) return;
-  for (i=0; i<ncand; i++) if (!strcmp(cands[i],w)) return;
   if (ncand==maxcand) {
-    more = (char **)realloc(cands,sizeof(char *)*(maxcand ? 2*maxcand : 64));
+    more = (struct ga_candidate *)realloc(cands,sizeof(*cands)*(maxcand ? 2*maxcand : 64));
     if (more==NULL) return;
     cands = more;
     maxcand = maxcand ? 2*maxcand : 64;
   }
-  if ((cands[ncand] = strdup(w))!=NULL) ncand++;
+  if ((cands[ncand].word = strdup(w))!=NULL) {
+    cands[ncand].kinds = 1U<<kind;
+    ncand++;
+  }
 }
 
 static void candwords (const char *words, const char *text) {
@@ -672,26 +705,27 @@ int i;
     while (*p==' ') p++;
     for (i=0; *p && *p!=' ' && i<63; p++) w[i++] = *p;
     w[i] = '\0';
-    if (i) cand(w,text);
+    if (i) cand(w,text,GA_COMP_OPTION);
   }
 }
 
 static void candtable (int kind, const char *text) {
 const char *w;
 int i;
-  for (i=0; (w=gahelpname(kind,i))!=NULL; i++) cand(w,text);
+  for (i=0; (w=gahelpname(kind,i))!=NULL; i++)
+    cand(w,text,kind==GAHELP_CMD ? GA_COMP_COMMAND : GA_COMP_OPTION);
 }
 
 static void candfiles (const char *text) {               /* open file numbers */
 struct gafile *pfi;
 char w[16];
 int n=0;
-  for (pfi=gcmn.pfi1; pfi; pfi=pfi->pforw) { snprintf(w,sizeof(w),"%d",++n); cand(w,text); }
+  for (pfi=gcmn.pfi1; pfi; pfi=pfi->pforw) { snprintf(w,sizeof(w),"%d",++n); cand(w,text,GA_COMP_FILENUM); }
 }
 
 static void canddefined (const char *text) {
 struct gadefn *pdf;
-  for (pdf=gcmn.pdf1; pdf; pdf=pdf->pforw) cand(pdf->abbrv,text);
+  for (pdf=gcmn.pdf1; pdf; pdf=pdf->pforw) cand(pdf->abbrv,text,GA_COMP_VARIABLE);
 }
 
 static void candexpr (const char *text, int inparens) {
@@ -703,45 +737,260 @@ static const char *dims[] = {"x=","y=","z=","t=","e=","lon=","lat=","lev=","time
   for (pfi=gcmn.pfi1; pfi; pfi=pfi->pforw) {
     n++;
     for (v=0; v<pfi->vnum; v++) {
-      if (pfi==gcmn.pfid) cand(pfi->pvar1[v].abbrv,text);
-      else { snprintf(w,sizeof(w),"%s.%d",pfi->pvar1[v].abbrv,n); cand(w,text); }
+      if (pfi==gcmn.pfid) cand(pfi->pvar1[v].abbrv,text,GA_COMP_VARIABLE);
+      else { snprintf(w,sizeof(w),"%s.%d",pfi->pvar1[v].abbrv,n); cand(w,text,GA_COMP_VARIABLE); }
     }
   }
   canddefined(text);
   for (i=0; (f=gahelpname(GAHELP_FUNC,i))!=NULL; i++) {
     snprintf(w,sizeof(w),"%s(",f);
-    cand(w,text);
+    cand(w,text,GA_COMP_FUNCTION);
   }
-  if (inparens) for (i=0; dims[i]; i++) cand(dims[i],text);
+  if (inparens) for (i=0; dims[i]; i++) cand(dims[i],text,GA_COMP_DIMENSION);
 }
 
-static void candscripts (const char *text) {             /* .gs files along GASCRP */
-char *path,*dir,*save=NULL,w[300];
-DIR *d;
+static int ga_candcmp(const void *a, const void *b) {
+  return strcmp(((const struct ga_candidate *)a)->word,((const struct ga_candidate *)b)->word);
+}
+
+/* Cache directory names and short-lived file-type checks. Repeated Tabs use a
+   sorted snapshot and a binary prefix lookup. Recheck directory metadata
+   at most once every two seconds, and reread only changed directories.
+   Bound retained directories with LRU eviction; relative paths are keyed
+   by the current working directory. No background threads or shell hooks. */
+#define GA_COMPLETION_DIRS 32
+struct ga_compentry {
+  char *name;
+  unsigned char hint,types;
+};
+struct ga_compdir {
+  char *path;
+  struct ga_compentry *entries;
+  size_t count;
+  struct stat stamp;
+  int valid;
+  time_t checked;
+  unsigned long used;
+};
+static struct ga_compdir compdirs[GA_COMPLETION_DIRS];
+static unsigned long compclock;
+
+static int ga_entrycmp(const void *a, const void *b) {
+  return strcmp(((const struct ga_compentry *)a)->name,((const struct ga_compentry *)b)->name);
+}
+
+static void ga_dirclear(struct ga_compdir *c) {
+size_t i;
+  for (i=0; i<c->count; i++) free(c->entries[i].name);
+  free(c->entries);
+  c->entries = NULL;
+  c->count = 0;
+  c->valid = 0;
+}
+
+static int ga_dirstamp(const struct stat *a, const struct stat *b) {
+  if (a->st_dev!=b->st_dev || a->st_ino!=b->st_ino ||
+      a->st_mtime!=b->st_mtime || a->st_ctime!=b->st_ctime) return 0;
+#if defined(__APPLE__)
+  if (a->st_mtimespec.tv_nsec!=b->st_mtimespec.tv_nsec ||
+      a->st_ctimespec.tv_nsec!=b->st_ctimespec.tv_nsec) return 0;
+#elif defined(__linux__)
+  if (a->st_mtim.tv_nsec!=b->st_mtim.tv_nsec ||
+      a->st_ctim.tv_nsec!=b->st_ctim.tv_nsec) return 0;
+#endif
+  return 1;
+}
+
+static struct ga_compdir *ga_cachedir(const char *dir) {
+char *path,*cwd,*absolute;
+struct ga_compentry *more,*entry;
+const char *setting = getenv("GA_COMPLETION_CACHE");
+struct ga_compdir *c=NULL;
+struct stat st;
 struct dirent *e;
-size_t n;
+DIR *d;
+time_t now = time(NULL);
+size_t size,k,capacity=0;
+int i,slot=0,cache = setting==NULL || strcmp(setting,"0");
+  path = tilde_expand(dir);
+  if (path==NULL) return NULL;
+  if (*path!='/') {
+    cwd = getcwd(NULL,0);
+    if (cwd==NULL) { free(path); return NULL; }
+    size = strlen(cwd)+strlen(path)+2;
+    absolute = (char *)malloc(size);
+    if (absolute) snprintf(absolute,size,"%s/%s",cwd,path);
+    free(cwd);
+    free(path);
+    if (absolute==NULL) return NULL;
+    path = absolute;
+  }
+  for (i=0; i<GA_COMPLETION_DIRS; i++) {
+    if (compdirs[i].path && !strcmp(compdirs[i].path,path)) { c=compdirs+i; break; }
+    if (compdirs[i].used<compdirs[slot].used) slot=i;
+  }
+  if (c) free(path);
+  else {
+    c = compdirs+slot;
+    ga_dirclear(c);
+    free(c->path);
+    c->path = path;
+    c->checked = 0;
+  }
+  c->used = ++compclock;
+  if (cache && c->checked && now>=c->checked && now-c->checked<2) return c;
+  c->checked = now;
+  if (stat(c->path,&st)!=0 || !S_ISDIR(st.st_mode)) { ga_dirclear(c); return c; }
+  if (cache && c->valid && ga_dirstamp(&c->stamp,&st)) {
+    for (k=0; k<c->count; k++) c->entries[k].types = c->entries[k].hint;
+    return c;
+  }
+  ga_dirclear(c);
+  if ((d=opendir(c->path))==NULL) return c;
+  while ((e=readdir(d))!=NULL) {
+    if (!strcmp(e->d_name,".") || !strcmp(e->d_name,"..")) continue;
+    if (c->count==capacity) {
+      size = capacity ? capacity*2 : 64;
+      more = (struct ga_compentry *)realloc(c->entries,size*sizeof(*more));
+      if (more==NULL) break;
+      c->entries = more;
+      capacity = size;
+    }
+    entry = c->entries+c->count;
+    if ((entry->name=strdup(e->d_name))==NULL) break;
+    entry->hint = 0;
+#if defined(DT_DIR) && defined(DT_UNKNOWN) && defined(DT_LNK)
+    /* Use readdir's type hint where available; follow symlinks lazily.
+       This avoids a stat per file just to label a large directory. */
+    if (e->d_type==DT_DIR) entry->hint = 3;
+    else if (e->d_type!=DT_UNKNOWN && e->d_type!=DT_LNK) entry->hint = 1;
+#endif
+    entry->types = entry->hint;
+    c->count++;
+  }
+  closedir(d);
+  if (c->count>1) qsort(c->entries,c->count,sizeof(*c->entries),ga_entrycmp);
+  c->stamp = st;
+  c->valid = 1;
+  return c;
+}
+
+static size_t ga_dirprefix(const struct ga_compdir *c, const char *text) {
+size_t lo=0,hi=c->count,mid;
+  while (lo<hi) {
+    mid = lo+(hi-lo)/2;
+    if (strcmp(c->entries[mid].name,text)<0) lo=mid+1;
+    else hi=mid;
+  }
+  return lo;
+}
+
+static unsigned char ga_entrytype(struct ga_compdir *c, size_t i, int executable) {
+struct ga_compentry *entry=c->entries+i;
+struct stat st;
+char *name;
+size_t size;
+  if (!(entry->types&1) || (executable && !(entry->types&4))) {
+    size = strlen(c->path)+strlen(entry->name)+2;
+    name = (char *)malloc(size);
+    if (name==NULL) return entry->types;
+    snprintf(name,size,"%s/%s",c->path,entry->name);
+    entry->types |= 1;
+    if (executable) entry->types |= 4;
+    if (stat(name,&st)==0) {
+      if (S_ISDIR(st.st_mode)) entry->types |= 2;
+      if (executable && S_ISREG(st.st_mode) && access(name,X_OK)==0) entry->types |= 8;
+    }
+    free(name);
+  }
+  return entry->types;
+}
+
+/* kind: all file names (0), scripts and directories (1), GASCRP scripts
+   (2), or PATH executables (3). Filter names before touching file metadata. */
+static void canddir(const char *dir, const char *prefix, const char *text, int kind) {
+struct ga_compdir *c = ga_cachedir(dir);
+char *word;
+const char *entry;
+size_t i,n=strlen(text),len,size;
+unsigned char type;
+int script,directory,category;
+  if (c==NULL) return;
+  for (i=ga_dirprefix(c,text); i<c->count; i++) {
+    entry = c->entries[i].name;
+    if (strncmp(entry,text,n)) break;
+    if (entry[0]=='.' && text[0]!='.') continue;
+    len = strlen(entry);
+    script = len>3 && !strcmp(entry+len-3,".gs");
+    if (kind==2 && !script) continue;
+    type = ga_entrytype(c,i,kind==3);
+    directory = (type&2)!=0;
+    if ((kind==3 && !(type&8)) || (kind==2 && directory) ||
+        (kind==1 && !script && !directory)) continue;
+    category = kind==3 ? GA_COMP_COMMAND : (directory ? GA_COMP_DIRECTORY :
+               (script ? GA_COMP_SCRIPT : GA_COMP_FILE));
+    size = strlen(prefix)+len+2;
+    word = (char *)malloc(size);
+    if (word==NULL) continue;
+    snprintf(word,size,"%s%s%s",prefix,entry,directory ? "/" : "");
+    cand(word,"",category);
+    free(word);
+  }
+}
+
+static void candscripts(const char *text) {
+char *path,*dir,*save=NULL;
   if (strchr(text,'/')) return;
   path = getenv("GASCRP");
   if (path==NULL || (path=strdup(path))==NULL) return;
-  for (dir=strtok_r(path," :;,",&save); dir; dir=strtok_r(NULL," :;,",&save)) {
-    if ((d=opendir(dir))==NULL) continue;
-    while ((e=readdir(d))!=NULL) {
-      n = strlen(e->d_name);
-      if (n>3 && !strcmp(e->d_name+n-3,".gs")) { snprintf(w,sizeof(w),"%s",e->d_name); cand(w,text); }
-    }
-    closedir(d);
+  for (dir=strtok_r(path," :;,",&save); dir; dir=strtok_r(NULL," :;,",&save))
+    canddir(dir,"",text,2);
+  free(path);
+}
+
+static void candpathkind(const char *text, int scripts) {
+const char *base = strrchr(text,'/');
+char *dir;
+size_t n;
+  if (base) {
+    n = base-text+1;
+    dir = (char *)malloc(n+1);
+    if (dir==NULL) return;
+    memcpy(dir,text,n);
+    dir[n] = '\0';
+    canddir(dir,dir,base+1,scripts);
+    free(dir);
+  }
+  else canddir(".","",text,scripts);
+  rl_filename_completion_desired = 1;
+}
+
+static void candpaths(const char *text) {
+  candpathkind(text,0);
+}
+
+static void candscriptpaths(const char *text) {
+  candscripts(text);
+  candpathkind(text,1);
+}
+
+static void candshellcommands(const char *text) {
+char *path,*dir,*next;
+  if (strchr(text,'/')) return;
+  path = getenv("PATH");
+  if (path==NULL || (path=strdup(path))==NULL) return;
+  for (dir=path; dir; dir=next) {
+    next = strchr(dir,':');
+    if (next) *next++ = '\0';
+    canddir(*dir ? dir : ".","",text,3);
   }
   free(path);
 }
 
-static void candpaths (const char *text) {               /* file names, ~ too */
-char *f;
-int state;
-  for (state=0; (f=rl_filename_completion_function(text,state))!=NULL; state++) {
-    cand(f,text[0]=='~' ? "" : text);
-    free(f);
-  }
-  rl_filename_completion_desired = 1;
+static int ga_shell_start(void) {
+int i=0;
+  while (isspace((unsigned char)rl_line_buffer[i])) i++;
+  return rl_line_buffer[i]=='!' ? i+1 : 0;
 }
 
 
@@ -749,8 +998,173 @@ static char *ga_completion_generator(const char *text, int state) {
 static int index;
   (void)text;
   if (!state) index = 0;
-  if (index<ncand) { char *w = cands[index]; cands[index++] = NULL; return w; }
+  /* Readline owns these copies. Keep our names/types for repeated listing. */
+  if (index<ncand) return strdup(cands[index++].word);
   return NULL;
+}
+
+static unsigned int ga_matchkind(const char *word) {
+int lo=0,hi=ncand,mid,cmp;
+  while (lo<hi) {
+    mid = lo+(hi-lo)/2;
+    cmp = strcmp(cands[mid].word,word);
+    if (!cmp) return cands[mid].kinds;
+    if (cmp<0) lo=mid+1;
+    else hi=mid;
+  }
+  return 1U<<(rl_filename_completion_desired ? GA_COMP_FILE : GA_COMP_OPTION);
+}
+
+/* Measure/print a display name without allowing control bytes in a file
+   name to affect the terminal. Keep matching and inserted text unchanged. */
+static int ga_comptext(const char *text, int print) {
+mbstate_t state;
+wchar_t wc;
+size_t n,left=strlen(text);
+int width=0,w;
+unsigned char ch;
+  memset(&state,0,sizeof(state));
+  while (left) {
+    ch = (unsigned char)*text;
+    if (ch<32 || ch==127) {
+      if (print) { fputc('^',rl_outstream); fputc(ch==127 ? '?' : ch+64,rl_outstream); }
+      width += 2;
+      n = 1;
+      memset(&state,0,sizeof(state));
+    }
+    else {
+      n = mbrtowc(&wc,text,left,&state);
+      if (n==(size_t)-1 || n==(size_t)-2) {
+        if (print) fprintf(rl_outstream,"\\x%02x",ch);
+        width += 4;
+        n = 1;
+        memset(&state,0,sizeof(state));
+      }
+      else if (!n) break;
+      else {
+        w = wcwidth(wc);
+        if (print) {
+          if (w<0) fputc('?',rl_outstream);
+          else fwrite(text,1,n,rl_outstream);
+        }
+        width += w<0 ? 1 : w;
+      }
+    }
+    text += n;
+    left -= n;
+  }
+  return width;
+}
+
+static const char *ga_compname(const char *word, int kind) {
+const char *end,*name;
+  if (kind!=GA_COMP_SCRIPT && kind!=GA_COMP_DIRECTORY && kind!=GA_COMP_FILE) return word;
+  end = word+strlen(word);
+  while (end>word && end[-1]=='/') end--;
+  name = end;
+  while (name>word && name[-1]!='/') name--;
+  return name;
+}
+
+/* A single pager budget spans all categories, without adding blank lines
+   between them. Respect Readline's page-completions setting. */
+static int ga_comppage(int *lines, int height) {
+int key;
+const char *setting=rl_variable_value("page-completions");
+  if (*lines<height || (setting && !strcmp(setting,"off"))) return 1;
+  fputs(gatxtc(NULL),rl_outstream);
+  fputs("--More--",rl_outstream);
+  fflush(rl_outstream);
+  for (;;) {
+    key = rl_read_key();
+    if (key==' ' || key=='y' || key=='Y' || key=='\n' || key=='\r' ||
+        key=='q' || key=='Q' || key=='n' || key=='N' || key==EOF || key==7) break;
+    rl_ding();
+  }
+  fputs("\r        \r",rl_outstream);
+  if (key=='q' || key=='Q' || key=='n' || key=='N' || key==EOF || key==7) return 0;
+  *lines = key=='\n' || key=='\r' ? height-1 : 0;
+  return 1;
+}
+
+/* All matching candidates are shown in compact, colored groups, without
+   headings, a summary footer, or blank lines between categories. */
+static void ga_display_matches(char **matches, int count, int longest) {
+static char *colors[] = {"green","magenta","blue",NULL,
+  "green","magenta","blue","blue","cyan"};
+const char **group;
+unsigned int *kinds;
+int kind,i,n,max,width,key,rows,columns,ncols,nrows,row,col,index,pad,more;
+int lines=0,stop=0,counts[GA_COMP_KINDS] = {0};
+  rl_crlf();
+  if (rl_completion_query_items>0 && count>=rl_completion_query_items) {
+    fprintf(rl_outstream,"Display all %d possibilities by type? (y or n)",count);
+    fflush(rl_outstream);
+    key = rl_read_key();
+    rl_crlf();
+    if (key!='y' && key!='Y' && key!=' ') {
+      rl_on_new_line();
+      rl_forced_update_display();
+      return;
+    }
+  }
+  group = (const char **)malloc(count*sizeof(*group));
+  kinds = (unsigned int *)malloc((count+1)*sizeof(*kinds));
+  if (group==NULL || kinds==NULL) {
+    free(group);
+    free(kinds);
+    rl_display_match_list(matches,count,longest);
+  }
+  else {
+    rl_get_screen_size(&rows,&columns);
+    if (rows<4) rows=24;
+    if (columns<2) columns=80;
+    for (i=1; i<=count; i++) {
+      kinds[i] = ga_matchkind(matches[i]);
+      for (kind=0; kind<GA_COMP_KINDS; kind++) if (kinds[i]&(1U<<kind)) counts[kind]++;
+    }
+    for (kind=0; kind<GA_COMP_KINDS && !stop; kind++) {
+      n = max = 0;
+      for (i=1; i<=count; i++) if (kinds[i]&(1U<<kind)) {
+        group[n] = ga_compname(matches[i],kind);
+        width = ga_comptext(group[n++],0);
+        if (width>max) max=width;
+      }
+      if (!n) continue;
+      ncols = (columns-1)/(max+2);
+      if (ncols<1) ncols=1;
+      if (ncols>n) ncols=n;
+      nrows = (n+ncols-1)/ncols;
+      for (row=0; row<nrows; row++) {
+        fputs(gatxtc(colors[kind]),rl_outstream);
+        for (col=0; col<ncols; col++) {
+          index = row+col*nrows;
+          if (index>=n) break;
+          width = ga_comptext(group[index],1);
+          if (row+(col+1)*nrows<n)
+            for (pad=width; pad<max+2; pad++) fputc(' ',rl_outstream);
+        }
+        rl_crlf();
+        lines += ncols==1 ? 1+(width ? (width-1)/columns : 0) : 1;
+        more = row+1<nrows;
+        for (i=kind+1; !more && i<GA_COMP_KINDS; i++) more = counts[i]!=0;
+        if (more && !ga_comppage(&lines,rows-3)) { stop=1; break; }
+      }
+      fputs(gatxtc(NULL),rl_outstream);
+    }
+    free(group);
+    free(kinds);
+  }
+  fflush(rl_outstream);
+  rl_on_new_line();
+  rl_forced_update_display();
+}
+
+static int ga_tab_complete(int count, int key) {
+  (void)count;
+  (void)key;
+  /* Insert the common prefix and immediately list every ambiguous match. */
+  return rl_complete_internal('!');
 }
 
 /* The words of the line before the cursor, in lower case: how many there
@@ -775,10 +1189,23 @@ char *w;
   return args;
 }
 
+static int ga_knowncommand(const char *word) {
+const char *name;
+int i;
+  for (i=0; (name=gahelpname(GAHELP_CMD,i))!=NULL; i++)
+    if (!strcmp(name,word)) return 1;
+  return 0;
+}
+
 static int ga_isexpr (const char *w1) {
-  return !strcmp(w1,"d") || !strcmp(w1,"display") || !strcmp(w1,"define") ||
-         (strchr(rl_line_buffer,'=') && gahelpwords(GAHELP_CMD,w1)==NULL &&
-          strcmp(w1,"set") && strcmp(w1,"q") && strcmp(w1,"query") && strcmp(w1,"draw"));
+const char *p=rl_line_buffer;
+int n=0;
+  if (!strcmp(w1,"d") || !strcmp(w1,"display") || !strcmp(w1,"define")) return 1;
+  while (isspace((unsigned char)*p)) p++;
+  if (!isalpha((unsigned char)*p)) return 0;
+  while (isalnum((unsigned char)*p) || *p=='_') { p++; if (++n>16) return 0; }
+  while (isspace((unsigned char)*p)) p++;
+  return *p=='=';
 }
 
 /* Inside an expression, a name ends at an operator or a parenthesis; in
@@ -786,6 +1213,7 @@ static int ga_isexpr (const char *w1) {
 
 static char *ga_wordbreaks(void) {
 char w1[32],w2[32];
+  if (ga_shell_start()) return (char *)" \t\n!|&;<>";
   lineargs(rl_point,w1,w2,sizeof(w1));
   if (ga_isexpr(w1)) return (char *)" \t\n,;()=+-*/<>^|&\"'";
   return (char *)" \t\n";
@@ -797,15 +1225,48 @@ static const char *filecmds[] = {"open","sdfopen","xdfopen","bpopen","exec","gxp
 static char **ga_attempted_completion(const char *text, int start, int end) {
 char w1[32],w2[32];
 const char *words,**f;
-int args,depth,i;
+int args,depth,i,j,shell,command;
+unsigned int kinds=0;
   (void)end;
 
-  for (i=0; i<ncand; i++) free(cands[i]);
+  for (i=0; i<ncand; i++) free(cands[i].word);
   ncand = 0;
+  rl_attempted_completion_over = 1;
+  rl_filename_completion_desired = 0;
   rl_completion_append_character = ' ';
   args = lineargs(start,w1,w2,sizeof(w1));
 
-  if (args==0) candtable(GAHELP_CMD,text);
+  shell = ga_shell_start();
+  if (shell) {
+    command = 1;
+    for (i=shell; i<start; i++) {
+      if (strchr("|&;",rl_line_buffer[i])) command = 1;
+      else if (!isspace((unsigned char)rl_line_buffer[i])) command = 0;
+    }
+    if (command) {
+      candshellcommands(text);
+    }
+    candpaths(text);
+  }
+  else if (args==0) {
+    if (*text) {
+      candtable(GAHELP_CMD,text);
+      if (gcmn.impcmd) candscripts(text);
+    }
+    candpaths(text);
+  }
+  else if (ga_isexpr(w1)) {
+    for (depth=0, i=0; i<start; i++) {
+      if (rl_line_buffer[i]=='(') depth++;
+      else if (rl_line_buffer[i]==')' && depth>0) depth--;
+    }
+    if (!strcmp(w1,"define") && args==1) {             /* the new name */
+      rl_attempted_completion_over = 1;
+      return NULL;
+    }
+    candexpr(text,depth>0);
+    rl_completion_append_character = '\0';
+  }
   else if (!strcmp(w1,"set")) {
     if (args==1) candtable(GAHELP_SET,text);
     else if (!strcmp(w2,"dfile")) candfiles(text);
@@ -828,20 +1289,9 @@ int args,depth,i;
     if (args==1) candtable(GAHELP_DRAW,text);
     else if (!strcmp(w2,"shp")) candpaths(text);
   }
-  else if (ga_isexpr(w1)) {
-    for (depth=0, i=0; i<start; i++) {
-      if (rl_line_buffer[i]=='(') depth++;
-      else if (rl_line_buffer[i]==')' && depth>0) depth--;
-    }
-    if (!strcmp(w1,"define") && args==1) {             /* the new name */
-      rl_attempted_completion_over = 1;
-      return NULL;
-    }
-    candexpr(text,depth>0);
-    rl_completion_append_character = '\0';
-  }
   else if (!strcmp(w1,"run")) {
-    if (args==1) { candscripts(text); candpaths(text); }
+    if (args==1) candscriptpaths(text);
+    else candpaths(text);
   }
   else if (!strcmp(w1,"close")) candfiles(text);
   else if (!strcmp(w1,"undefine") || !strcmp(w1,"sdfwrite")) canddefined(text);
@@ -853,32 +1303,173 @@ int args,depth,i;
   else {
     for (f=filecmds; *f && strcmp(*f,w1); f++) ;
     if (*f) candpaths(text);
+    else if (!ga_knowncommand(w1)) candpaths(text);
     else if (args==1) candwords(gahelpwords(GAHELP_CMD,w1),text);
 
   }
   rl_attempted_completion_over = 1;
   if (ncand==0) return NULL;
+  /* Deduplicate once, after sorting, rather than comparing every name
+     with every preceding candidate in a large directory. clear and
+     clear.gs remain distinct choices; duplicate GASCRP names do not. */
+  qsort(cands,ncand,sizeof(*cands),ga_candcmp);
+  for (i=1,j=1; i<ncand; i++) {
+    if (!strcmp(cands[j-1].word,cands[i].word)) {
+      cands[j-1].kinds |= cands[i].kinds;
+      free(cands[i].word);
+    }
+    else cands[j++] = cands[i];
+  }
+  ncand = j;
+  for (i=0; i<ncand; i++) kinds |= cands[i].kinds;
+  if (kinds & ~((1U<<GA_COMP_SCRIPT)|(1U<<GA_COMP_DIRECTORY)|(1U<<GA_COMP_FILE)))
+    rl_filename_completion_desired = 0;
+  if (ncand==1 && (cands[0].kinds&(1U<<GA_COMP_DIRECTORY)))
+    rl_completion_append_character = '\0';
   return rl_completion_matches(text,ga_completion_generator);
 }
 
+/* Readline owns the history and search cursor. Retain only the draft, so
+   reaching the newer end can restore all of it, including text after point.
+   Keeping point at the prefix boundary follows Readline's search commands. */
+static char *ga_history_draft;
+static int ga_history_point, ga_history_mark, ga_history_restart;
+static int ga_history_backward(int, int);
+static int ga_history_forward(int, int);
+
+static int ga_history_browse(int count, int key, int direction) {
+char *before, *draft;
+int continuing, point=rl_point, mark=rl_mark, rc;
+  if (count==0) return 0;
+  if (count==INT_MIN) return rl_ding();
+  if (count<0) { count=-count; direction=-direction; }
+  continuing=ga_history_draft && !ga_history_restart &&
+    (rl_last_func==ga_history_backward || rl_last_func==ga_history_forward);
+  if (!continuing) {
+    draft=rl_copy_text(0,rl_end);
+    if (!draft) return rl_ding();
+    free(ga_history_draft);
+    ga_history_draft=draft;
+    ga_history_point=rl_point;
+    ga_history_mark=rl_mark;
+    ga_history_restart=0;
+  }
+  /* No prefix: retain normal history navigation, including duplicates and
+     Ctrl-P/Ctrl-N interoperability, throughout this run of arrow presses. */
+  if (ga_history_point==0)
+    return direction<0 ? rl_get_previous_history(count,key) : rl_get_next_history(count,key);
+  before=rl_copy_text(0,rl_end);
+  if (!before) return rl_ding();
+  /* The native functions recognize each other, rather than these wrappers,
+     when deciding whether to reuse the initial search prefix. */
+  rl_last_func=continuing ? rl_history_search_backward : NULL;
+  rc=direction<0 ? rl_history_search_backward(count,key) : rl_history_search_forward(count,key);
+  if (rc) {
+    if (direction<0) {
+      rl_replace_line(before,0);
+      rl_point=point;
+      rl_mark=mark;
+    } else {
+      rl_replace_line(ga_history_draft,0);
+      rl_point=ga_history_point;
+      rl_mark=ga_history_mark;
+      using_history();
+      ga_history_restart=1;
+    }
+  }
+  free(before);
+  return rc;
+}
+
+static int ga_history_backward(int count, int key) {
+  return ga_history_browse(count,key,-1);
+}
+
+static int ga_history_forward(int count, int key) {
+  return ga_history_browse(count,key,1);
+}
+
 static void ga_readline_init(void) {
+static const char *maps[] = {"emacs-standard","vi-insert",NULL};
+static const char *up[] = {"\033[A","\033OA",NULL};
+static const char *down[] = {"\033[B","\033OB",NULL};
+Keymap map;
+rl_command_func_t *binding;
+const char *configured;
+char *user_init;
+int i,j,type;
   rl_readline_name = "opengrads";
+  rl_add_defun("opengrads-complete",ga_tab_complete,-1);
+  rl_add_defun("opengrads-history-backward",ga_history_backward,-1);
+  rl_add_defun("opengrads-history-forward",ga_history_forward,-1);
+  rl_initialize();
+  /* System inputrc files often explicitly install ordinary history arrows.
+     Apply application defaults after that fallback, then reapply only the
+     user's selected inputrc so an explicit personal override still wins. */
+  if (isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)) {
+    for (i=0; maps[i]; i++) {
+      map=rl_get_keymap_by_name(maps[i]);
+      if (!map) continue;
+      for (j=0; up[j]; j++) {
+        type=ISFUNC;
+        binding=rl_function_of_keyseq(up[j],map,&type);
+        if (type==ISFUNC && (!binding || binding==rl_get_previous_history || binding==rl_history_search_backward))
+          rl_bind_keyseq_in_map(up[j],ga_history_backward,map);
+        type=ISFUNC;
+        binding=rl_function_of_keyseq(down[j],map,&type);
+        if (type==ISFUNC && (!binding || binding==rl_get_next_history || binding==rl_history_search_forward))
+          rl_bind_keyseq_in_map(down[j],ga_history_forward,map);
+      }
+    }
+    configured=getenv("INPUTRC");
+    user_init=tilde_expand(configured && *configured ? configured : "~/.inputrc");
+    if (user_init && access(user_init,R_OK)==0) rl_read_init_file(user_init);
+    free(user_init);
+  }
   rl_attempted_completion_function = ga_attempted_completion;
   rl_completion_word_break_hook = ga_wordbreaks;
+  rl_completion_display_matches_hook = ga_display_matches;
+  /* Read inputrc first and replace only the ordinary completion binding.
+     Explicit user bindings such as menu-complete remain intact. */
+  for (i=0; maps[i]; i++) {
+    map = rl_get_keymap_by_name(maps[i]);
+    if (map==NULL) continue;
+    binding = rl_function_of_keyseq("\t",map,&type);
+    if (binding==rl_complete && type==ISFUNC) rl_bind_key_in_map('\t',ga_tab_complete,map);
+  }
 }
 
 /* write command history to log file */
 void write_command_log(char *logfile) {
    char QuitLabel[60];
+   char *last;
+   HIST_ENTRY **entries,*entry;
+   int status;
    time_t thetime;
    struct tm *ltime;
+   if (logfile==NULL) return;
    if ((thetime=time(NULL))!=0) {  
       ltime=localtime(&thetime);
       strftime(QuitLabel,59,"quit # (End of session: %d%h%Y, %T)",ltime);
-      remove_history(where_history());
+      /* Only replace an actual trailing quit command. The history cursor
+         can still be at zero after -c quit; removing at that position
+         would delete the first command loaded from the previous session. */
+      entries = history_list();
+      if (history_length>0 && entries) {
+        last = entries[history_length-1]->line;
+        if (!strncmp(last,"quit",4)) {
+          last += 4;
+          while (isspace((unsigned char)*last)) last++;
+          if (!*last) {
+            entry = remove_history(history_length-1);
+            if (entry) free_history_entry(entry);
+          }
+        }
+      }
       add_history(QuitLabel);
    }
-   write_history(logfile);  
+   status = write_history(logfile);
+   if (status) fprintf(stderr,"Could not save command history to %s: %s\n",logfile,strerror(status));
    return;
 }
 #endif

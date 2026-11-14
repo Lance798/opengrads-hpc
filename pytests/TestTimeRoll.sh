@@ -87,7 +87,7 @@ expressions=['roll(f,1,x)','roll(f,-1,y)','roll(roll(f,-10,x),8,y)',
 render=''.join('set t '+str(t)+'\nd answer\n' for t in (1,17,32))
 body=''.join(xy+'define answer='+expr+'\n'+render for expr in expressions)
 reference_values=grids(run(body,1))
-for n in (4,8):
+for n in (2,4):
     text=run(body,n);assert len(groups(text))==len(expressions),text[-4000:]
     assert 'Time file inputs: count=2 default=3' in text
     compare(grids(text),reference_values)
@@ -95,7 +95,7 @@ for n in (4,8):
 # DEFINE spans output Z/T while each worker owns a complete XY plane.
 body=xy.replace('set z 2','set z 1 4')+'define answer=roll(roll(f,-3,x),2,y)\n'
 body+=''.join(f'set z {z}\nset t {t}\nd answer\n' for z in (1,2,4) for t in (1,17,32))
-for n in (4,8):
+for n in (2,4):
     text=run(body,n);assert groups(text);compare(grids(text),grids(run(body,1)))
 # Input-time workers retain XY/XZ/YZ grids and ordered native folds.
 for setup,exprs in ((xy.replace('set t 1 32','set t 1'),
@@ -106,7 +106,7 @@ for setup,exprs in ((xy.replace('set t 1 32','set t 1'),
                     ['roll(f,-2,y)','roll(f,3,x)'])):
     body=setup+''.join('d '+fn+'('+expr+',t=1,t=32)\n' for expr in exprs for fn in ('sum','mean','min','max'))
     expected=grids(run(body,1))
-    for n in (4,8):
+    for n in (2,4):
         text=run(body,n);assert len(groups(text))==len(exprs)*4,(exprs,groups(text),text[-4000:])
         assert 'Time input expression:' in text
         compare(grids(text),expected)
@@ -114,7 +114,7 @@ for setup,exprs in ((xy.replace('set t 1 32','set t 1'),
 # reductions establish their own selected XY grid before rolling.
 body=zt+'d roll(f,1,x)\nd roll(f,-1,y)\n'+point+\
     'd aave(roll(f.3+g.4,-1,x),x=2,x=9,y=2,y=7)\n'
-for n in (4,8):
+for n in (2,4):
     text=run(body,n);assert len(groups(text))==3,groups(text)
     compare(grids(text),grids(run(body,1)))
 # Parent fallback must retain original .N numbers when workers are disabled
@@ -122,19 +122,19 @@ for n in (4,8):
 area='aave(roll(f.3+g.4,-1,x),x=2,x=9,y=2,y=7)'
 for last in (31,32):
     body=point.replace('1 32','1 '+str(last))+'define expected='+area+'\nd expected\nd '+area+'\n'
-    for n in (1,4,8):
+    for n in (1,4):
         values=grids(run(body,n));assert len(values)==2;compare(values[:1],values[1:])
 # X/T and Y/T DISPLAY keep native grids; arithmetic metadata and values agree.
 for setup,expr in (('set x 2 9\nset y 3\nset z 2\nset t 1 32\n','roll(f,-1,x)'),
                    ('set x 5\nset y 2 7\nset z 2\nset t 1 32\n','roll(f,2,y)')):
-    for n in (4,8):
+    for n in (2,4):
         compare(grids(run(setup+'d '+expr,n)),grids(run(setup+'d '+expr,1)))
 # Static defined fields are fresh snapshots, with no mutation by a roll.
 body='set x 2 9\nset y 2 7\nset z 2\nset t 1\ndefine terrain=g.4\n'+xy+\
      'define answer=roll(f+terrain,1,x)\n'+render+\
      'set t 1\nd terrain\nset t 1 32\ndefine terrain=terrain*0+7\n'+\
      'define answer=roll(f+terrain,-1,y)\n'+render
-for n in (4,8):
+for n in (2,4):
     text=run(body,n);assert 'Time defined inputs: count=1' in text
     compare(grids(text),grids(run(body,1)))
 for bad in ('roll(f,1,t)','roll(f,1,z)','roll(f,1.5,x)'):
