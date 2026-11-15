@@ -255,6 +255,32 @@ class VectorExportTests(unittest.TestCase):
                            settings={'OPENGRADS_VECTOR_COMPACT':compact})
         self.assertEqual((self.work/'legacy.svg').read_bytes(),(self.work/'compact.svg').read_bytes())
 
+    def test_unite_removes_internal_edges_and_keeps_hole_rings(self):
+        for mode in ('grfill','shaded','shade2b'):
+            for alpha in (255,125):
+                with self.subTest(mode=mode,alpha=alpha):
+                    commands=self.grid(True).replace('set gxout grfill','set gxout '+mode)
+                    values=[1.+.01*x for y in range(8) for x in range(8)]
+                    for y in (3,4):
+                        for x in (3,4):values[8*y+x]=-9999
+                    (self.work/'grid.dat').write_bytes(struct.pack('<64f',*values))
+                    commands+=f'set rgb 30 40 80 120 {alpha}\nset ccols 30 30 30 30\nd f\n'
+                    for name,unite in (('compound','0'),('united','1')):
+                        self.run_grads(commands+self.export(name,'svg','white')+self.export(name,'png','white'),
+                                       settings={'OPENGRADS_VECTOR_UNITE':unite})
+                    old=svg_polygons(self.work/'compound.svg');new=svg_polygons(self.work/'united.svg')
+                    def rings(shapes):
+                        return [p for fill,a,polygons in shapes[1:] for p in polygons if len(p)>2]
+                    a,b=rings(old),rings(new)
+                    self.assertLess(sum(map(len,b)),sum(map(len,a)))
+                    self.assertEqual(len(b),2,'Unite must produce the outer ring and the hole')
+                    areas=[sum(x1*y2-x2*y1 for (x1,y1),(x2,y2) in zip(p,p[1:]+p[:1])) for p in b]
+                    self.assertLess(areas[0]*areas[1],0,'Hole winding must oppose outer winding')
+                    for x in range(23,790,13):
+                        for y in range(17,610,13):
+                            self.assertEqual(svg_rgba_at(old,x+.13,y+.21),svg_rgba_at(new,x+.13,y+.21),(mode,alpha,x,y))
+                    self.assertEqual((self.work/'compound.png').read_bytes(),(self.work/'united.png').read_bytes())
+
     def test_grfill_reversed_axes_and_layer_order(self):
         setups=[self.grid(True)+'set xflip on\nset yflip on\nd f\n',
                 self.grid()+'d f\nset line 6\ndraw recf 3 3 7 6\n'

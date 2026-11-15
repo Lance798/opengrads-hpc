@@ -26,6 +26,7 @@
 #include "gatypes.h"
 #include "gx.h"
 #include "gxC.h"
+#include "gxCunite.h"
 
 #define SX 800                              /* default X dimension of the image output */
 
@@ -135,6 +136,7 @@ static void gxCshadeflush(void) {
   if (!shadefill.pending) return;
   cairo_save(cr);
   cairo_set_antialias(cr,CAIRO_ANTIALIAS_NONE);
+  gxCunite(cr);
   cairo_fill(cr);
   cairo_restore(cr);
   shadefill.pending=0;
@@ -186,7 +188,7 @@ struct gxCrect *r;
   for (i=0;i<gridfill.count;i++) {
     r=gridfill.rect+i;
     if (color!=r->color) {
-      if (combine && color!=-1) cairo_fill(cr);
+      if (combine && color!=-1) { gxCunite(cr); cairo_fill(cr); }
       color=r->color;
       rgba=gridfill.color+color;
       cairo_set_source_rgba(cr,rgba->r/255.0,rgba->g/255.0,rgba->b/255.0,rgba->a/255.0);
@@ -194,7 +196,7 @@ struct gxCrect *r;
     cairo_rectangle(cr,r->x0,r->y0,r->x1-r->x0,r->y1-r->y0);
     if (!combine) cairo_fill(cr);
   }
-  if (combine) cairo_fill(cr);
+  if (combine) { gxCunite(cr); cairo_fill(cr); }
   cairo_restore(cr);
 }
 

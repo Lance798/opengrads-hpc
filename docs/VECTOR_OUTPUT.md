@@ -39,9 +39,24 @@ buffer is capped at 64 MiB; unsupported states or allocation limits replay
 the accumulated cells in their original order. Cairo may use additional
 memory while writing paths.
 
+`grfill`, `shaded`/`shade2` and `shade2b` also unite compatible same-color
+partitions before filling: shared interior edges are removed, remaining
+edges are traced into outer and hole rings, and exactly collinear vertices
+are removed. This uses the vertices Cairo actually stores, with no contour
+smoothing, coordinate tolerance or boundary approximation. Missing areas
+and the winding of hole rings are retained. Separate display passes are
+never united. This is a boundary union of the non-overlapping partitions
+these renderers produce, not a general Boolean operation on overlapping
+arbitrary polygons.
+
+Unite's working arrays are limited to 96 MiB; Cairo may allocate additional
+path memory. Unsupported paths, degenerate topology or allocation limits
+retain the original compound path. `OPENGRADS_VECTOR_UNITE=0` disables only
+this boundary union, retaining the earlier object/path compaction.
+
 Opaque `shaded`/`shade2` and `shade2b` combine consecutive same-color
-polygons into compound paths. Every original contour vertex and hole is
-retained; boundaries are not simplified. Pending paths are flushed at
+polygons into compound paths. Contour shape and holes are retained; Unite
+can remove cut edges and exactly collinear vertices. Pending paths are flushed at
 262,144 vertices and at changes of drawing state. Legacy `shade1` keeps its
 existing rendering because its polygons may overlap.
 
@@ -92,5 +107,7 @@ an existing `~/.grads/color.gs`, retain priority over the bundled copy.
 `pytests/TestVectorExport.sh` checks page bounds, uniform margins, custom and
 transparent backgrounds, data-color isolation and recovery after failed
 exports, color coverage, holes, layer compositing and character strokes with
-Python 3.11 and no additional Python packages. Both release
+Python 3.11 and no additional Python packages. It also compiles a Cairo
+fill oracle with the configured C compiler to check random partitions,
+T-junctions, holes, point contacts and allocation-failure fallback. Both release
 builders run it after compiling the Cairo plug-ins.
