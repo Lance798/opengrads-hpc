@@ -228,7 +228,7 @@ class VectorExportTests(unittest.TestCase):
                 elif projection=='sps':
                     commands=commands.replace('d f\n','set lat -81 -60\nd const(f,1,-a)\n')
                 elif projection=='orthogr':
-                    commands=commands.replace('d f\n','set lon -90 90\nset lat -90 90\nset frame 2\nd f\n')
+                    commands=commands.replace('d f\n','set lon -90 90\nset lat -90 90\nset frame circle\nd f\n')
                 for name,compact in (('legacy','0'),('compact','1')):
                     output=self.run_grads(commands+self.export(name,'svg','white')+self.export(name,'png','white'),
                                           settings={'OPENGRADS_VECTOR_COMPACT':compact})
