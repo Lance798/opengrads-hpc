@@ -85,11 +85,11 @@ Screen and PNG gridlines keep their original drawing behavior.
 the original geometry. It does not change the new page/background behavior.
 
 For one 1024 by 1024 test field, a white-background `grfill` SVG decreased
-from 205.47 MiB to 4.74 MiB (1,048,576 filled cell paths to 12 color paths).
+from 205.47 MiB to 4.03 MiB (1,048,576 filled cell paths to 12 color paths).
 The corresponding PDF decreased from 4.37 MiB to 0.69 MiB. A second
 alpha-125 terrain layer reduced the combined SVG from 423.87 MiB to
-5.75 MiB. `shaded` retained all contour vertices while reducing that field's
-SVG from 8.91 MiB to 7.91 MiB. Results depend on the field: fewer objects do
+4.71 MiB. `shaded` retained the contour shape while reducing that field's
+SVG from 8.91 MiB to 7.26 MiB. Results depend on the field: fewer objects do
 not guarantee a smaller compressed PDF for every sparse or irregular plot.
 
 Transparent PS/EPS pages leave unpainted areas for the importing application

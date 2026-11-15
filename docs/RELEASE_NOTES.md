@@ -51,9 +51,13 @@ use fewer objects for filled grids and text. The GrADS baseline remains
   prompt output rather than depending on short fixed startup delays.
 - Vector `grfill` combines adjacent same-color cells and groups disconnected
   regions into compound paths. `shaded`/`shade2` and `shade2b` group regions
-  without simplifying contour vertices or holes. PDF/SVG also compact
+  and unite shared interior boundaries into outer/hole rings, removing only
+  exactly collinear vertices while preserving contour shape. PDF/SVG also compact
   positive partial-alpha fills within each display pass. Unsupported states
   retain their original rendering; PNG and screen plotting are unchanged.
+- Each complete coordinate gridline uses one stroked vector path, preserving
+  its dashed segments, projected curve vertices and clipped gaps. Different
+  gridlines remain separate, including when their colors are partially transparent.
 - Hershey vector text uses one path per visible character, with disconnected
   strokes as subpaths. Partially transparent crossing strokes within a
   character share one opacity. Native Cairo fonts retain their representation.

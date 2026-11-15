@@ -137,8 +137,22 @@ int main(void) {
   cairo_new_path(c); cairo_move_to(c,1,1); cairo_curve_to(c,2,30,40,20,60,60);
   check(c,0,255);
   cairo_new_path(c); cairo_rectangle(c,300000,300000,20,20); check(c,0,255);
+  /* A long run exercises a single line with many collinear endpoint events. */
+  cairo_new_path(c);
+  for (i=0;i<10000;i++) cairo_rectangle(c,5+i,5,1,20);
+  check(c,0,125);
+  /* Large paths hit the working-array limit before making any allocations. */
+  {
+    cairo_path_t *a,*b;
+    cairo_new_path(c);
+    for (i=0;i<100000;i++) cairo_rectangle(c,(i%500)*2,(i/500)*2,1,1);
+    a=cairo_copy_path(c); allocations=0;
+    assert(!gxCunite(c) && allocations==0);
+    b=cairo_copy_path(c); same_path(a,b);
+    cairo_path_destroy(a); cairo_path_destroy(b);
+  }
   assert(compacted>100);
-  printf("Unite topology passed: %d Cairo fill comparisons, %d compacted, holes/T-junctions/point contacts, allocation fallback; Cairo %s\n",cases,compacted,version);
+  printf("Unite topology passed: %d Cairo fill comparisons, %d compacted, holes/T-junctions/point contacts, allocation and size-limit fallback; Cairo %s\n",cases,compacted,version);
   cairo_destroy(c); cairo_surface_destroy(s);
   return 0;
 }
