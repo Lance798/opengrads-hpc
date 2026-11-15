@@ -59,6 +59,13 @@ once, so crossing strokes within that character share its opacity instead
 of becoming darker at their intersection. Negative-alpha mask rendering
 keeps its existing behavior. PNG and screen text are unchanged.
 
+Each complete coordinate gridline uses one stroked vector path, retaining
+all software-dashed segments as subpaths. Projected curves and clipped gaps
+retain their original vertices. Different gridlines remain separate so
+their crossings keep the original layer order. Positive alpha is applied
+once within each line; negative-alpha masks retain their previous rendering.
+Screen and PNG gridlines keep their original drawing behavior.
+
 `OPENGRADS_VECTOR_COMPACT=0` disables vector compaction for comparisons with
 the original geometry. It does not change the new page/background behavior.
 

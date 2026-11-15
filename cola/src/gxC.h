@@ -50,6 +50,7 @@ void gxCflush (gaint);
 void gxCgrid (gaint);
 void gxCshade (gaint);
 void gxCcharacter (gaint);
+void gxCgridline (gaint);
 void gxCfrm (void);
 void gxCftinit (void);
 void gxCftend (void);

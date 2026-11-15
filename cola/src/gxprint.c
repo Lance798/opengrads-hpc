@@ -118,6 +118,8 @@ void gxpsignal (gaint sig) {
   if (sig==GX_SHADE_END) gxCshade(0);
   if (sig==GX_CHARACTER_BEGIN) gxCcharacter(1);
   if (sig==GX_CHARACTER_END) gxCcharacter(0);
+  if (sig==GX_GRIDLINE_BEGIN) gxCgridline(1);
+  if (sig==GX_GRIDLINE_END) gxCgridline(0);
   if (sig==GX_BACKGROUND_BEGIN) { gxCflush(1); background=1; }
   if (sig==GX_BACKGROUND_END) { background=0; gxCcol(background_color); }
   if (sig==1) gxCflush(1);   /* finish drawing */

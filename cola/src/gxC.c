@@ -87,6 +87,25 @@ static struct {
 } gridfill;
 static struct { gaint active,pending; size_t points; } shadefill;
 static struct { gaint active,pending; } character;
+static struct { gaint active,pending; } gridline;
+
+static void gxCgridlineflush(void) {
+  if (!gridline.pending) return;
+  cairo_stroke(cr);
+  gridline.pending=0;
+  drawing=0;
+}
+
+void gxCgridline(gaint begin) {
+  if (begin) {
+    if (!vectorcompact || surftype<=2 || maskflag) return;
+    gxCflush(1);
+    gridline.active=1;
+  } else {
+    gxCgridlineflush();
+    gridline.active=0;
+  }
+}
 
 /* PS/EPS retain Cairo's existing partial-alpha fallback. Negative alpha
    uses a separate mask context and must not enter either collector. */
@@ -488,6 +507,7 @@ static void gxChrestore (void) {
   shadefill.active=shadefill.pending=0;
   shadefill.points=0;
   character.active=character.pending=0;
+  gridline.active=gridline.pending=0;
   Hsurface=NULL;
   Hcr=NULL;
   rotate=0;
@@ -888,6 +908,7 @@ void gxCrsiz (gaint dw, gaint dh) {
 /*  opt=0 discard everything. opt=1 finish rendering. */
 
 void gxCflush (gaint opt) {
+  gxCgridlineflush();
   gxCcharacterflush();
   gxCgridabort();
   gxCshadeflush();
@@ -917,6 +938,7 @@ void gxCcol (gaint clr) {
 struct gxdbquery dbq;
 gaint bcol;
 
+  gxCgridlineflush();
   gxCcharacterflush();
   if (drawing) cairo_stroke(cr);
   drawing = 0;
@@ -986,6 +1008,7 @@ gaint bcol;
 
 void gxCwid (gaint wid) {                 
 struct gxdbquery dbq;
+  gxCgridlineflush();
   gxCcharacterflush();
   gxCgridabort();
   gxCshadeflush();
@@ -1020,7 +1043,7 @@ void gxCxycnv (gadouble x, gadouble y, gadouble *nx, gadouble *ny) {
 void gxCmov (gadouble x, gadouble y) {
   if (!filflg) gxCgridabort();
   if (!filflg) gxCshadeflush();
-  if (drawing && !character.active) cairo_stroke(cr);
+  if (drawing && !character.active && !gridline.active) cairo_stroke(cr);
   drawing = 0;
   gxCxycnv (x,y,&xxx,&yyy);
 }
@@ -1033,6 +1056,7 @@ gadouble di, dj;
   gxCxycnv (x,y,&di,&dj);
   if (!filflg) {           /* we're not filling a polygon */
     if (character.active) character.pending=1;
+    if (gridline.active) gridline.pending=1;
     if (!drawing) {        /* this is the start of a line */
       drawing = 1;
       cairo_move_to(cr,xxx,yyy);
@@ -1051,6 +1075,7 @@ gadouble di, dj;
 
 void gxCclip (gadouble x1, gadouble x2, gadouble y1, gadouble y2) {
 gadouble di1,di2,dj1,dj2;
+  gxCgridlineflush();
   gxCcharacterflush();
   gxCgridabort();
   gxCshadeflush();
@@ -1068,6 +1093,7 @@ gadouble di1,di2,dj1,dj2;
 
 void gxCrec (gadouble x1, gadouble x2, gadouble y1, gadouble y2) {
 gadouble di1,di2,dj1,dj2;
+  gxCgridlineflush();
   gxCcharacterflush();
   gxCgridabort();
   gxCshadeflush();
@@ -1106,6 +1132,7 @@ void gxCfil (gadouble *xy, gaint n) {
 gadouble *pt,x,y;
 gaint i,combine;
 
+  gxCgridlineflush();
   gxCcharacterflush();
   if (gridfill.active && !gridfill.disabled) {
     if (gxCgridadd(xy,n)) { filflg=0; return; }
@@ -1157,6 +1184,7 @@ gaint i,combine;
 */
 
 void gxCaa (gaint flag) {
+  gxCgridlineflush();
   gxCcharacterflush();
   gxCgridabort();
   gxCshadeflush();
@@ -1184,6 +1212,7 @@ cairo_text_extents_t te;
 gadouble usize,awidth,swidth,fontsize=100.0;
 char str[2];
 char *astr = "A";
+  gxCgridlineflush();
   gxCcharacterflush();
 
   gxCselfont (fn);
@@ -1495,6 +1524,7 @@ void gxCftend (void) {
 }
 
 void gxCpush (void) {
+  gxCgridlineflush();
   gxCcharacterflush();
   gxCgridabort();
   gxCshadeflush();
@@ -1502,6 +1532,7 @@ void gxCpush (void) {
 }
 
 void gxCpop (void) {
+  gxCgridlineflush();
   gxCcharacterflush();
   gxCgridabort();
   gxCshadeflush();

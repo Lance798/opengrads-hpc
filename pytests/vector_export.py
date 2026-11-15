@@ -9,6 +9,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 import zlib
+from collections import Counter
 
 ROOT = Path(__file__).resolve().parent.parent
 LAUNCHER = os.environ.get('OPENGRADS_LAUNCHER', str(ROOT/'opengrads'))
@@ -118,6 +119,19 @@ def svg_polygons(path):
     return result
 
 
+def svg_strokes(path):
+    result=[]
+    def visit(item,parent,definition=False):
+        props=svg_properties(item,parent)
+        tag=item.tag.rsplit('}',1)[-1]
+        definition=definition or tag=='defs'
+        if not definition and tag=='path' and props.get('stroke','none')!='none':
+            result.append(props)
+        for child in item:visit(child,props,definition)
+    visit(ET.parse(path).getroot(),{})
+    return result
+
+
 def svg_layers_at(shapes,x,y):
     layers=[]
     for fill,alpha,polygons in shapes:
@@ -199,6 +213,39 @@ class VectorExportTests(unittest.TestCase):
                 for x in range(23,790,19):
                     for y in range(17,610,19):
                         self.assertEqual(svg_color_at(legacy,x+.13,y+.21),svg_color_at(compact,x+.13,y+.21),(missing,x,y))
+                self.assertEqual((self.work/'legacy.png').read_bytes(),(self.work/'compact.png').read_bytes())
+
+    def test_each_gridline_keeps_dash_geometry_in_one_path(self):
+        cases=[(p,255,3) for p in ('scaled','latlon','nps','sps','lambert','orthogr','robinson','mollweide')]
+        cases += [('scaled',125,3)]+[('scaled',255,s) for s in (1,2,4,5,6,7)]
+        for projection,alpha,style in cases:
+            with self.subTest(projection=projection,alpha=alpha,style=style):
+                commands=(self.grid()+f'set rgb 30 21 73 119 {alpha}\nset grid on {style} 30\n'
+                          f'set mproj {projection}\nset xlab on\nset ylab on\n'
+                          'set xlint 10\nset ylint 6\nd f\n')
+                if projection=='robinson':
+                    commands=commands.replace('d f\n','set lon -180 180\nset lat -90 90\nd f\n')
+                elif projection=='sps':
+                    commands=commands.replace('d f\n','set lat -81 -60\nd const(f,1,-a)\n')
+                elif projection=='orthogr':
+                    commands=commands.replace('d f\n','set lon -90 90\nset lat -90 90\nset frame 2\nd f\n')
+                for name,compact in (('legacy','0'),('compact','1')):
+                    output=self.run_grads(commands+self.export(name,'svg','white')+self.export(name,'png','white'),
+                                          settings={'OPENGRADS_VECTOR_COMPACT':compact})
+                    self.assertNotIn('Map Projection Error',output)
+                def lines(name):
+                    return [p for p in svg_strokes(self.work/(name+'.svg')) if '8.23529' in p['stroke']]
+                old,new=lines('legacy'),lines('compact')
+                self.assertGreater(len(new),0)
+                if style==1:self.assertEqual(len(new),len(old))
+                else:self.assertLess(len(new),len(old)/3)
+                def pieces(paths):
+                    return Counter(part.strip() for p in paths for part in p['d'].split('M') if 'L' in part)
+                self.assertEqual(pieces(old),pieces(new))
+                if projection=='scaled':
+                    for p in new:
+                        coords=list(map(float,re.findall(r'[-\d.]+',p['d'])))
+                        self.assertTrue(len(set(coords[::2]))==1 or len(set(coords[1::2]))==1,p['d'])
                 self.assertEqual((self.work/'legacy.png').read_bytes(),(self.work/'compact.png').read_bytes())
 
     def test_grfill_projection_fallback_keeps_geometry(self):
