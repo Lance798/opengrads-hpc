@@ -74,13 +74,19 @@ class Terminal:
             result += block
         return result.decode('utf-8', 'replace')
 
-    def prompt(self):
+    def prompt(self, after_probe=False):
         result = ''
         deadline = time.monotonic()+15
-        while 'ga-> ' not in result and time.monotonic()<deadline:
+        while time.monotonic()<deadline:
             result += self.pump(0.05)
-        assert 'ga-> ' in result, result
-        return result
+            if after_probe:
+                plain=re.sub(r'\x1b\[[0-9;?]*[A-Za-z@]', '',result.replace('\r',''))
+                match=re.search(r'^HISTORY_BEGIN<.*>HISTORY_END$',plain,re.MULTILINE)
+                if match and 'ga-> ' in plain[match.end():]:
+                    return plain
+            elif 'ga-> ' in result:
+                return result
+        raise AssertionError((self.home.name,'prompt timed out',result))
 
     def keys(self, text):
         os.write(self.fd, text.encode())
@@ -97,7 +103,9 @@ class Terminal:
             self.keys('@')
             expected = expected[:cursor]+'@'+expected[cursor:]
         os.write(self.fd, (self.bol+"! printf 'HISTORY_BEGIN<%s>HISTORY_END\\n' '"+self.eol+"'\r").encode())
-        result = self.prompt().replace('\r','')
+        # A Readline redisplay can echo "ga-> " before the shell probe has
+        # run. Wait for the probe's output and its subsequent prompt.
+        result = self.prompt(after_probe=True).replace('\r','')
         result = re.sub(r'\x1b\[[0-9;?]*[A-Za-z@]', '', result)
         matches = re.findall(r'^HISTORY_BEGIN<(.*)>HISTORY_END$', result, re.MULTILINE)
         assert matches == [expected], (self.home.name, expected, result)
@@ -120,7 +128,9 @@ class Terminal:
                     break
             assert self.done, 'GrADS did not exit'
             lines = self.log.read_text().splitlines()
-            assert lines[:len(self.seed)] == self.seed, 'recall changed saved history'
+            assert lines[:len(self.seed)] == self.seed, (
+                self.home.name, 'recall changed saved history',
+                'expected', self.seed, 'actual', lines[:len(self.seed)])
             if not self.enabled:
                 assert lines == self.seed, 'history=0 wrote history'
         finally:
@@ -162,6 +172,10 @@ for mode, config in [('emacs',''), ('vi','set editing-mode vi\n')]:
         ('ctrl-p', 'open '+'\x10', 'q threads', len('q threads')),
         ('ctrl-n', 'open '+'\x10\x0e', 'open ', len('open ')),
         ('edit-prefix', 'open '+UP+KILL+'b'+UP, 'open b.ctl', 6),
+        ('undo-after-recall', 'open '+UP+'X'+'\x1f', 'open c.ctl', 5),
+        ('clear-after-recall', 'open '+UP+BOL+KILL+UP+DOWN, '', 0),
+        ('prefix-ctrl-p', 'open '+UP+'\x10', 'q threads', len('q threads')),
+        ('ordinary-to-prefix', '\x10'+BOL+KILL+'open '+UP, 'open c.ctl', 5),
         ('cursor-prefix', 'open KEEP'+BOL+RIGHT*5+UP, 'open c.ctl', 5),
         ('restore-suffix', 'open KEEP'+BOL+RIGHT*5+UP+DOWN, 'open KEEP', 5),
         ('no-match-suffix', 'missing KEEP'+BOL+RIGHT*8+UP, 'missing KEEP', 8),
@@ -171,7 +185,7 @@ for mode, config in [('emacs',''), ('vi','set editing-mode vi\n')]:
         ('ctrl-c-new-prefix', 'open '+UP+'\x03set x '+UP, 'set x 1 8', 6),
     ]
     for name, keys, expected, cursor in cases:
-        if mode=='vi' and name in ('ctrl-p','ctrl-n'):
+        if mode=='vi' and name in ('ctrl-p','ctrl-n','prefix-ctrl-p','ordinary-to-prefix'):
             continue  # vi insertion uses these keys for menu completion.
         # Deliver Ctrl-C separately so the terminal driver cannot discard
         # the following keys while flushing input for the signal.

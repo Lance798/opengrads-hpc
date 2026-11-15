@@ -1329,17 +1329,22 @@ unsigned int kinds=0;
   return rl_completion_matches(text,ga_completion_generator);
 }
 
-/* Readline owns the history and search cursor. Retain only the draft, so
-   reaching the newer end can restore all of it, including text after point.
-   Keeping point at the prefix boundary follows Readline's search commands. */
+/* Prefix recall reads history entries without making them editable history
+   lines. Readline 8.3's native prefix search uses ordinary history navigation,
+   which can save an edited match over an earlier command on the next search.
+   Keep a separate search position and copy matches through public text/undo
+   APIs; the ordinary history cursor and its undo ownership remain Readline's.
+   Retain the complete draft, including text after the prefix boundary. */
 static char *ga_history_draft;
-static int ga_history_point, ga_history_mark, ga_history_restart;
+static int ga_history_point, ga_history_mark, ga_history_restart, ga_history_pos;
 static int ga_history_backward(int, int);
 static int ga_history_forward(int, int);
 
 static int ga_history_browse(int count, int key, int direction) {
-char *before, *draft;
-int continuing, point=rl_point, mark=rl_mark, rc;
+char *draft;
+const char *previous;
+HIST_ENTRY **entries;
+int continuing, pos, found=-1;
   if (count==0) return 0;
   if (count==INT_MIN) return rl_ding();
   if (count<0) { count=-count; direction=-direction; }
@@ -1353,32 +1358,47 @@ int continuing, point=rl_point, mark=rl_mark, rc;
     ga_history_point=rl_point;
     ga_history_mark=rl_mark;
     ga_history_restart=0;
+    ga_history_pos=where_history();
   }
   /* No prefix: retain normal history navigation, including duplicates and
      Ctrl-P/Ctrl-N interoperability, throughout this run of arrow presses. */
   if (ga_history_point==0)
     return direction<0 ? rl_get_previous_history(count,key) : rl_get_next_history(count,key);
-  before=rl_copy_text(0,rl_end);
-  if (!before) return rl_ding();
-  /* The native functions recognize each other, rather than these wrappers,
-     when deciding whether to reuse the initial search prefix. */
-  rl_last_func=continuing ? rl_history_search_backward : NULL;
-  rc=direction<0 ? rl_history_search_backward(count,key) : rl_history_search_forward(count,key);
-  if (rc) {
-    if (direction<0) {
-      rl_replace_line(before,0);
-      rl_point=point;
-      rl_mark=mark;
-    } else {
-      rl_replace_line(ga_history_draft,0);
-      rl_point=ga_history_point;
-      rl_mark=ga_history_mark;
-      using_history();
-      ga_history_restart=1;
-    }
+  entries=history_list();
+  pos=ga_history_pos;
+  previous=entries && continuing && pos>=0 && pos<history_length ? entries[pos]->line:NULL;
+  while (entries && count>0) {
+    pos+=direction;
+    if (pos<0 || pos>=history_length) break;
+    if (strncmp(entries[pos]->line,ga_history_draft,(size_t)ga_history_point)) continue;
+    if (previous && !strcmp(entries[pos]->line,previous)) continue;
+    found=pos;
+    previous=entries[pos]->line;
+    count--;
   }
-  free(before);
-  return rc;
+  if (found>=0) {
+    ga_history_pos=found;
+    rl_begin_undo_group();
+    rl_delete_text(0,rl_end);
+    rl_point=0;
+    rl_insert_text(entries[found]->line);
+    rl_end_undo_group();
+    rl_point=ga_history_point;
+    rl_mark=rl_end;
+    return 0;
+  }
+  if (direction>0) {
+    rl_begin_undo_group();
+    rl_delete_text(0,rl_end);
+    rl_point=0;
+    rl_insert_text(ga_history_draft);
+    rl_end_undo_group();
+    rl_point=ga_history_point;
+    rl_mark=ga_history_mark;
+    using_history();
+    ga_history_restart=1;
+  }
+  return rl_ding();
 }
 
 static int ga_history_backward(int count, int key) {

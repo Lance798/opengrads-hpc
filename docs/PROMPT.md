@@ -34,8 +34,11 @@ arrow press; later text does not restrict the match.
 Consecutive Up/Down presses retain that initial prefix. Down moves toward
 newer matches, then restores the original draft and cursor, including any
 text after the cursor. Up at the oldest match, or with no match, keeps the
-current input. Readline skips consecutive identical matching lines during
+current input. Consecutive identical matching commands appear once during
 prefix search. Recall only changes the input line; Enter executes it.
+Editing a recalled match and searching again preserves the earlier command
+in history, including with Readline 8.3. Prefix search uses its own read-only
+position and supports normal input undo.
 
 Editing or moving the cursor starts a new search on the next arrow press.
 An empty prefix keeps ordinary history navigation. Ctrl-P/Ctrl-N keep their

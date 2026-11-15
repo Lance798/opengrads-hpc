@@ -70,6 +70,9 @@ use fewer objects for filled grids and text. The GrADS baseline remains
   not restore cancelled drafts or consume the next key.
 - Source and out-of-tree build launchers support color-disabled startup with
   macOS system Bash 3.2, including the headless release regressions.
+- Editing a recalled prefix and searching again preserves earlier history
+  entries with Readline 8.3, including Homebrew builds on macOS. Prefix recall
+  reads matching entries independently of Readline's editable history cursor.
 - PDF, PS and EPS follow the canvas orientation. Page margins scale both axes
   uniformly and center the figure; PS/EPS bounds include transparent margins.
 - Export backgrounds cover the full page, including margins. Explicit white
