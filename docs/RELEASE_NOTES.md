@@ -49,6 +49,9 @@ use fewer objects for filled grids and text. The GrADS baseline remains
   The complete changelog remains in this repository.
 - Release regressions use a four-core budget, and terminal checks wait for
   prompt output rather than depending on short fixed startup delays.
+- macOS packaging reports signing and smoke-test progress, limits their run
+  time, and retains logs and timeout stack samples as CI failure artifacts.
+  Terminal smoke tests use nonblocking position queries.
 - Vector `grfill` combines adjacent same-color cells and groups disconnected
   regions into compound paths. `shaded`/`shade2` and `shade2b` group regions
   and unite shared interior boundaries into outer/hole rings, removing only

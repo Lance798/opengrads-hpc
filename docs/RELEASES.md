@@ -122,6 +122,18 @@ shell escapes, which would fail to relocate against the host loader.
 macOS archives are native builds, not cross-compiled Linux archives, and
 start with `./opengrads`.
 
+macOS packaging uses the CI-selected Python 3.11 interpreter to supervise
+signing and the packaged application's smoke tests. Each command reports its
+label, elapsed time and log path, with progress every 15 seconds. Signing is
+limited to 60 seconds per binary; smoke tests allow 30–90 seconds, and the
+compression regression and archive creation allow 300 seconds each. Expected
+no-X-server exits are accepted, but their timeouts still fail the build.
+On timeout, the supervisor records the process group and macOS `sample`
+stacks before terminating that group. Logs remain outside the archive under
+`release-dist/packaging-logs/`; failed CI jobs upload them as
+`packaging-diagnostics-macos-arm64`. This helper is used during builds and
+adds no Python dependency to the downloaded archive.
+
 ### Graphics drivers per platform
 
 GrADS graphics plug-ins are loaded with `dlopen()` and call back into

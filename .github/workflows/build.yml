@@ -59,6 +59,7 @@ jobs:
           python3 -c 'import sys; print(sys.executable); print(sys.version); assert sys.version_info[:2] == (3, 11)'
           python3 pytests/TestReleaseNotes.py
           python3 pytests/TestLaunchers.py
+          python3 pytests/TestPackageRunner.py
           python3 pytests/check_function_catalog.py
 
       - name: Build, test, and package
@@ -126,12 +127,22 @@ jobs:
           python3 -c 'import sys; print(sys.executable); print(sys.version); assert sys.version_info[:2] == (3, 11)'
           python3 pytests/TestReleaseNotes.py
           OPENGRADS_TEST_BASH=/bin/bash python3 pytests/TestLaunchers.py
+          python3 pytests/TestPackageRunner.py
           python3 pytests/check_function_catalog.py
 
       - name: Build, test, and package
         env:
           OPENGRADS_BUILD_JOBS: 4
         run: ./release/build-release-macos.sh
+
+      - name: Upload macOS packaging diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: packaging-diagnostics-${{ matrix.artifact }}
+          path: release-dist/packaging-logs/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Verify archive
         run: |
