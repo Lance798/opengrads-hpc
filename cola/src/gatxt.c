@@ -160,6 +160,16 @@ static char *ga_color_sequence(char *color) {
   return NULL;
 }
 
+/* Bare sequence for streamed output, respecting the same color switch as
+   prompts and messages. NULL restores the terminal's default foreground. */
+char *gatxtc(char *color) {
+  char *seq;
+  if (!color_on) return "";
+  if (color==NULL) return reset;
+  seq = ga_color_sequence(color);
+  return seq ? seq : "";
+}
+
 /* Colorize a line editor prompt. \001 and \002 are readline's
    RL_PROMPT_START_IGNORE and RL_PROMPT_END_IGNORE: they tell it the enclosed
    bytes occupy no screen columns, and readline strips them before printing.

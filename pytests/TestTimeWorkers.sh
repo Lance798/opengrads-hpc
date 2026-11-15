@@ -91,7 +91,7 @@ for ctl in ctls:
     for expression,setup in cases:
         command=setup+'define answer='+expression+'\nd answer\n'
         reference=parse(run(ctl,command,1,True))
-        for n in (2,4,8):
+        for n in (2,4):
             text=run(ctl,command,n);assert groups(text),(ctl,expression,'no workers')
             try:compare(parse(text),reference)
             except AssertionError as exc:raise AssertionError((ctl.name,expression,n,exc)) from exc
@@ -185,6 +185,10 @@ def terminal(cancel=False,fail=False,off=False):
         if cancel or fail:assert acted,'test did not reach active workers'
         if not cancel and not fail:assert 'DISPLAY error' not in current,current[-1000:]
         if fail:assert 'DISPLAY error' in current,current[-1000:]
+        command('q performance')
+        report=output[begin:].decode('utf-8','replace')
+        status='interrupted' if cancel else 'error' if fail else 'success'
+        assert 'Performance report' in report and 'Status: '+status in report,report[-4000:]
         command('set threads 1');command('set t 1');command('set z 1');command('d aave(f,x=1,x=256,y=1,y=256)')
         command('quit');pump(.1);os.waitpid(pid,0)
         text=output.decode('utf-8','replace');assert_dead(text)

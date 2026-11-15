@@ -316,9 +316,11 @@ if [[ -r "$repo_root/libexec/opengrads-version" ]]; then
   bash "$repo_root/libexec/opengrads-version" "$repo_root" --banner
 fi
 
-color_args=()
-if [[ "${OPENGRADS_COLOR:-1}" != 0 ]]; then
-  color_args=(-C "${OPENGRADS_COLOR_SCHEME:-1}")
+export OPENGRADS_COLOR="${OPENGRADS_COLOR:-1}"
+# Bash 3.2 treats an empty array as unset under nounset. Prepend optional
+# flags to the positional arguments so color-disabled startup works there.
+if [[ "$OPENGRADS_COLOR" != 0 ]]; then
+  set -- -C "${OPENGRADS_COLOR_SCHEME:-1}" "$@"
 fi
 
 # Start through the bundled loader only where the host glibc is too old to
@@ -331,7 +333,7 @@ if (( ${need_bundled_glibc:-0} )); then
   export GA_TIME_LIBRARY_PATH="$bundled_library_path"
   exec "$repo_root/glibc/$loader_name" \
     --library-path "$bundled_library_path" \
-    "$grads_binary" "${color_args[@]}" "$@"
+    "$grads_binary" "$@"
 fi
 
-exec "$grads_binary" "${color_args[@]}" "$@"
+exec "$grads_binary" "$@"

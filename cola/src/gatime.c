@@ -617,19 +617,26 @@ void ga_time_prepare_worker(void) {
 #endif
 }
 
-static int time_workers(struct time_config *c,int nt) {
+static int time_workers(struct time_config *c,int nt,double *workspace,double *budget) {
   double available=8.0*1024*1024*1024,memory=time_available_memory()/4,per;
   int n=ga_omp_get_threads();const char *v=getenv("GA_TIME_WORKERS");
-  if(time_child || !time_executable[0] || n<2 || nt<(c->reads ? 2 : 32) ||
-     (v && (!strcmp(v,"off") || !strcmp(v,"0"))))return 0;
+  if(time_child)return 0;
+  if(!time_executable[0]) { ga_perf_note("worker executable unavailable");return 0; }
+  if(n<2) { ga_perf_note("CPU budget below two");return 0; }
+  if(nt<(c->reads ? 2 : 32)) { ga_perf_note("too few times for this worker path");return 0; }
+  if(v && (!strcmp(v,"off") || !strcmp(v,"0"))) {
+    ga_perf_note("time workers disabled by GA_TIME_WORKERS");return 0;
+  }
   if(memory<available)available=memory;
   per=32.0*1024*1024+4.0*c->nx*c->ny*(c->z2-c->z1+1)*9;
   /* Include two worst-case dataset caches; all estimates are command-local. */
   per+=2.0*c->cache_bytes;
   per+=(double)c->definition_bytes+c->definitions*(sizeof(struct gafile)+sizeof(struct gadefn));
-  if(n>TIME_MAX_WORKERS)n=TIME_MAX_WORKERS;
-  if(n>nt)n=nt;
-  if(n>available/per)n=(int)(available/per);
+  if(n>TIME_MAX_WORKERS) { n=TIME_MAX_WORKERS;ga_perf_note("128-worker implementation limit"); }
+  if(n>nt) { n=nt;ga_perf_note("worker count limited by times in this batch"); }
+  if(n>available/per) { n=(int)(available/per);ga_perf_note("worker count limited by available-memory estimate"); }
+  *workspace=n>1 ? n*per : 0;
+  *budget=available;
   return n>1 ? n : 0;
 }
 
@@ -639,12 +646,15 @@ static int time_parallel(struct time_config *c,int t1,int t2,int incr,double *va
   struct time_inputs inputs;struct time_sources sources;
   struct time_source paths[TIME_MAX_SOURCES-1];int j;
   size_t count=(size_t)c->nx*c->ny*(c->z2-c->z1+1),payload=count*(sizeof(double)+1),part,offset;
-  int nt=(t2-t1)/incr+1,n,i,done=0,rc;int64_t next=t1;
+  int nt=(t2-t1)/incr+1,n,i,done=0,rc,reused;int64_t next=t1;
+  double setup,workspace=0,budget=0;
   ssize_t got;char *dest;char trace[4096];
   inputs.count=0;inputs.bytes=0;
   c->sources=0;
   if(pst) {
-    if(!time_expression(c->expression,pst,&inputs,&sources))return -1;
+    if(!time_expression(c->expression,pst,&inputs,&sources)) {
+      ga_perf_note("expression or inputs outside time-worker support");return -1;
+    }
     for(j=1;j<sources.count;j++) {
       if(!time_source_path(paths+j-1,sources.files[j]))return -1;
       c->cache_bytes+=(double)c->cachesf*sources.files[j]->cachesize;
@@ -653,8 +663,11 @@ static int time_parallel(struct time_config *c,int t1,int t2,int incr,double *va
     c->sources=sources.count-1;
   }
   c->definitions=inputs.count;c->definition_bytes=inputs.bytes;
-  n=time_workers(c,nt);if(!n)return -1;
-  if(time_spawn(n))return -1;
+  n=time_workers(c,nt,&workspace,&budget);if(!n)return -1;
+  reused=pool_count>=n;setup=ga_perf_clock();
+  if(time_spawn(n)) { ga_perf_note("worker startup failed; ordinary evaluator retained");return -1; }
+  ga_perf_workers(n,reused,ga_perf_clock()-setup,workspace,budget);
+  if(pst)for(j=0;j<sources.count;j++)ga_perf_source(sources.files[j]);
   /* Parent profile fallbacks still evaluate against the original file list.
      Publish compact child ordinals only after committing to worker execution. */
   if(pst)memcpy(c->expression,sources.expression,strlen(sources.expression)+1);
@@ -710,7 +723,7 @@ static int time_parallel(struct time_config *c,int t1,int t2,int incr,double *va
         if(slots[i].received==sizeof(struct time_reply) &&
            (slots[i].reply.rc || slots[i].reply.t!=slots[i].t || slots[i].reply.size!=count))goto error;
         if(slots[i].received==sizeof(struct time_reply)+payload) {
-          done++;slots[i].t=0;
+          done++;ga_perf_completed();slots[i].t=0;
           if(next<=t2) {
             job.operation=TIME_JOB;job.t=next;next+=incr;slots[i].t=job.t;slots[i].received=0;
             if(time_write_parent(slots[i].fd,&job,sizeof(job)))goto error;
@@ -853,6 +866,7 @@ gadouble ga_time_batch_bytes(struct gafile *file) {
 gaint ga_time_readsteps(struct gagrid *grid,gaint t0,gaint n,gaint incr,
                         gadouble *values,char *mask,long cachesf) {
   struct gafile *file=grid->pfile;struct time_config c;int d;
+  ga_perf_source(file);
   if(!ga_time_can_read(file) || !grid->pvar || grid->toff || n<2 ||
      incr<1 || t0<1 || t0>file->dnum[3] || (n-1)>(file->dnum[3]-t0)/incr ||
      grid->idim>1 || grid->jdim>1 || grid->isiz<1 || grid->jsiz<1 ||
@@ -939,7 +953,9 @@ static int time_configure(struct time_config *c,char *expr,struct gacmn *pcm,
 gaint ga_time_define(char *expr,struct gacmn *pcm,gaint z1,gaint z2,gaint t1,gaint t2,
                      gaint e,struct gagrid *shape,gadouble *values,char *mask,gadouble undef) {
   struct time_config c;struct gastat *pst;int rc=-1;
-  if(t2-t1+1<32 || ga_omp_get_threads()<2 || time_child)return -1;
+  if(time_child)return -1;
+  if(t2-t1+1<32) { ga_perf_note("output-time DEFINE needs at least 32 times");return -1; }
+  if(ga_omp_get_threads()<2) { ga_perf_note("CPU budget below two");return -1; }
   pst=getpst(pcm);if(!pst)return 1;
   if(time_configure(&c,expr,pcm,pst,z1,z2,e,shape) && t1>=1 && t2<=pst->pfid->dnum[3] &&
      (double)pst->pfid->dnum[0]*pst->pfid->dnum[1]*pst->pfid->dnum[2]*(t2-t1+1)>=8388608.0) {

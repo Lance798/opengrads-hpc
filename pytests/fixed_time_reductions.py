@@ -108,7 +108,7 @@ base=run(reference,1,'off')
 assert len(base)==len(labels), ('baseline grid count',len(base),len(labels))
 print('baseline grids',len(base),flush=True)
 count=0;error=0.
-for n in (1,4,8):
+for n in (1,4):
     for mode in ('force','on','off'):
         actual=run(launcher,n,mode)
         assert len(actual)==len(base),(n,mode,len(actual),len(base))

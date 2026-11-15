@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read-only VVMex HDF5 regression at 1, 4, 8 and 16 calculation cores.
+# Read-only VVMex HDF5 regression at 1 and 4 calculation cores.
 # The descriptor must expose the RCEMIP th/pibar/rhobar/qv/u/v fields.
 # GPL-2.0-only; see COPYING.
 set -euo pipefail
@@ -58,7 +58,7 @@ def run(n):
     return grids(p.stdout),time.monotonic()-start
 reference,seconds=run(1)
 print(f'HDF5 baseline: cores=1 seconds={seconds:.2f} grids={len(reference)}',flush=True)
-for n in (4,8,16):
+for n in (4,):
     actual,seconds=run(n);assert len(actual)==len(reference)
     samples=0;max_abs=0.
     for a,b in zip(actual,reference):

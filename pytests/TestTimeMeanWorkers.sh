@@ -116,7 +116,7 @@ expressions+=['ave(f+g,t=1,t=320)','mean(f+g,t=1,t=320)',
 commands=setup+'\n'.join('d '+expr for expr in expressions)
 for ctl in ctls:
     reference=parse(run(ctl,commands,1,True));assert len(reference)==len(expressions)
-    for n in (4,8,16):
+    for n in (2,4):
         text=run(ctl,commands,n);assert len(groups(text))>=len(expressions),'input times not dispatched'
         compare(parse(text),reference)
     print('Time mean values passed:',ctl.name,flush=True)
@@ -124,20 +124,25 @@ for ctl in ctls:
 # Available-memory estimates include reclaimable cache, but must still bound
 # concurrency and fall back safely when the reported available memory is low.
 reference=parse(run(ctls[0],setup+'d mean(f,t=1,t=320)',1,True))
-limited=run(ctls[0],setup+'d mean(f,t=1,t=320)',16,mem_kib=1024*1024)
-assert groups(limited) and all(1<int(n)<16 for n,_ in groups(limited))
+limited=run(ctls[0],setup+'d mean(f,t=1,t=320)',4,mem_kib=512*1024)
+assert groups(limited) and all(1<int(n)<4 for n,_ in groups(limited))
 compare(parse(limited),reference)
-limited=run(ctls[0],setup+'d mean(f,t=1,t=320)',16,mem_kib=128*1024)
+limited=run(ctls[0],setup+'d mean(f,t=1,t=320)',4,mem_kib=128*1024)
 assert not groups(limited),'low-memory execution incorrectly started workers'
 compare(parse(limited),reference)
 print('Time mean memory caps passed: bounded workers and serial fallback',flush=True)
 
-# A 256-time batch followed by 14 times must reuse a larger existing pool.
-text=run(ctls[0],setup+'d mean(f,t=1,t=272)\nd ave(f,t=1,t=272)',16)
-g=groups(text);assert [int(n) for n,_ in g]==[16,14,16,14],g
-assert g[0][1]==g[2][1] and g[1][1]==g[3][1]
-assert set(g[1][1].split(','))<=set(g[0][1].split(','))
-compare(parse(text),parse(run(ctls[0],setup+'d mean(f,t=1,t=272)\nd ave(f,t=1,t=272)',1,True)))
+# A 256-time batch and its 14-time tail both exceed the native-reader work
+# threshold. With 1 GiB reported available, a 1024x cache scale bounds the
+# active team to two workers; restoring the cache must reuse all four PIDs.
+command=setup+'d mean(f,t=1,t=272)\nset cachesf 1024\nd ave(f,t=1,t=272)\n'+\
+        'set cachesf 2\nd mean(f,t=1,t=272)'
+text=run(ctls[0],command,4,mem_kib=1024*1024)
+g=groups(text);assert [int(n) for n,_ in g]==[4,4,2,2,4,4],g
+assert g[0][1]==g[1][1]==g[4][1]==g[5][1]
+assert g[2][1]==g[3][1]
+assert set(g[2][1].split(','))<=set(g[0][1].split(','))
+compare(parse(text),parse(run(ctls[0],command,1,True)))
 
 # DEFINE must also retain all Z planes when only its input times vary.
 command='set x 1 16\nset y 1 16\nset z 1 4\nset t 1\ndefine answer=mean(f,t=1,t=320)\n'+\

@@ -35,6 +35,7 @@ This is a mature, global-state-heavy C codebase. Prefer small, well-tested seams
 8. The core is not generally thread-safe. `gaio.c`, graphics scaling, and other modules use file-scope mutable state. Do not introduce parallel calls into them until the relevant state has been moved into an explicit request/context object.
 9. Avoid unrelated formatting churn. Much of the code uses older C style, and large mechanical changes make scientific behavior difficult to review.
 10. Before handing off, report the exact build/test command, enabled optional features, and any untested hardware/backend.
+11. For a new built-in expression function, follow [ADDING_FUNCTIONS.md](ADDING_FUNCTIONS.md) and run `python3 pytests/check_function_catalog.py`. Update evaluator registration, the shared Tab/usage catalog, numerical tests, and user documentation together; acceleration allowlists need separate equivalence validation.
 
 
 ## Repository map

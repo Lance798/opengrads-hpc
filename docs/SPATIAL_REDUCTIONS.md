@@ -79,7 +79,7 @@ GA_TEST_TIME_FORMAT=bp5 pytests/TestSpatialReductions.sh
 ```
 
 The default fixture needs only Python. Other formats use the existing fixture
-writer and corresponding development libraries. Each suite compares 1/4/8
+writer and corresponding development libraries. Each suite compares 1/4
 threads in forced, default and disabled modes, including complete printed
 doubles, masks/nonfinite values, bounds, locations, DEFINE, and safe fallback.
 `GA_SPATIAL_REFERENCE` optionally supplies an older executable for an independent

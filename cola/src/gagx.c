@@ -3597,21 +3597,25 @@ char *rmask,*mmask=NULL,lab[20];
   if (pcm->gridln != -1) {
     if (pcm->gridln > -1) gxcolr(pcm->gridln);
     for (i=1; i<=pgr->isiz; i++) {
+      gxsignal(GX_GRIDLINE_BEGIN);
       for (j=1; j<=pgr->jsiz; j++) {
         gxconv ((gadouble)(i)+0.5,(gadouble)(j)-0.5,&xlo,&ylo,3);
         gxconv ((gadouble)(i)+0.5,(gadouble)(j)+0.5,&xhi,&yhi,3);
         gxplot (xlo,ylo,3);
         gxplot (xhi,yhi,2);
       }
+      gxsignal(GX_GRIDLINE_END);
     }
 
     for (j=1; j<=pgr->jsiz; j++) {
+      gxsignal(GX_GRIDLINE_BEGIN);
       for (i=1; i<=pgr->isiz; i++) {
         gxconv ((gadouble)(i)-0.5,(gadouble)(j)+0.5,&xlo,&ylo,3);
         gxconv ((gadouble)(i)+0.5,(gadouble)(j)+0.5,&xhi,&yhi,3);
         gxplot (xlo,ylo,3);
         gxplot (xhi,yhi,2);
       }
+      gxsignal(GX_GRIDLINE_END);
     }
   }
 
@@ -5420,6 +5424,7 @@ size_t sz;
   rrb = irb+1;
   if (filflg) {
     gaselc (pcm,pgr->rmin,pgr->rmax);
+    if (!shpflg && (filflg==4 || filflg==5)) gxsignal(GX_SHADE_BEGIN);
     if (smooth) {
       if (filflg==1) {
 	gxshad (rrr,isz,jsz,pcm->shdlvs,pcm->shdcls,pcm->shdcnt,rrrmask);
@@ -5448,6 +5453,7 @@ size_t sz;
         gxshad2b (pgr->grid,pgr->isiz,pgr->jsiz,pcm->shdlvs,pgr->rmax,pcm->shdcls,pcm->shdcnt,pgr->umask);
       }
     }
+    if (!shpflg && (filflg==4 || filflg==5)) gxsignal(GX_SHADE_END);
     if (pgr->idim==0 && pgr->jdim==1 && shpflg==0) gawmap (pcm, 0);
   } 
   else {
@@ -5917,8 +5923,10 @@ char lab[30],olab[30],*chlb=NULL;
           gxwide (pcm->grthck); 
           gxstyl (pcm->grstyl);
           gxcolr (pcm->grcolr);
+          gxsignal(GX_GRIDLINE_BEGIN);
           gxplot (x,pcm->ysiz1,3);
           gxplot (x,pcm->ysiz2,2);
+          gxsignal(GX_GRIDLINE_END);
 	  gxcolr(colr);
           gxwide(thck);
           gxstyl(1);
@@ -5950,8 +5958,10 @@ char lab[30],olab[30],*chlb=NULL;
           gxwide (pcm->grthck);
           gxstyl (pcm->grstyl);
           gxcolr (pcm->grcolr);
+          gxsignal(GX_GRIDLINE_BEGIN);
           gxplot (pcm->xsiz1,y,3);
           gxplot (pcm->xsiz2,y,2);
+          gxsignal(GX_GRIDLINE_END);
           gxwide(thck);
           gxcolr(colr);
           gxstyl(1);
@@ -6001,8 +6011,10 @@ char lab[30],olab[30],*chlb=NULL;
           gxwide (pcm->grthck);
           gxstyl (pcm->grstyl);
           gxcolr (pcm->grcolr);
+          gxsignal(GX_GRIDLINE_BEGIN);
           gxplot (x,pcm->ysiz1,3);
           gxplot (x,pcm->ysiz2,2);
+          gxsignal(GX_GRIDLINE_END);
           gxwide(thck);
           gxcolr(colr);
           gxstyl(1);
@@ -6058,8 +6070,10 @@ char lab[30],olab[30],*chlb=NULL;
           gxwide (pcm->grthck);
           gxstyl (pcm->grstyl);
           gxcolr (pcm->grcolr);
+          gxsignal(GX_GRIDLINE_BEGIN);
           gxplot (pcm->xsiz1,y,3);
           gxplot (pcm->xsiz2,y,2);
+          gxsignal(GX_GRIDLINE_END);
           gxwide(thck);
           gxcolr(colr);
           gxstyl(1);
@@ -6806,11 +6820,13 @@ gadouble v,s,plincr,lndif,ln,lt,cs;
         gxwide (pcm->grthck);
       }
       gxconv (ln,ltmin,&x1,&y1,2);
+      gxsignal(GX_GRIDLINE_BEGIN);
       gxplot (x1,y1,3);
       for (lt=ltmin; lt<ltmax+1.0; lt+=2.0) {
         gxconv (ln,lt,&x1,&y1,2);
         gxplot (x1,y1,2);
       }
+      gxsignal(GX_GRIDLINE_END);
     }
     /* draw latitude lines */
     for (lt=ltmin; lt<ltmax+10.0; lt+=30.0) {
@@ -6826,11 +6842,13 @@ gadouble v,s,plincr,lndif,ln,lt,cs;
         gxwide (pcm->grthck);
       }
       gxconv (lnmin,lt,&x1,&y1,2);
+      gxsignal(GX_GRIDLINE_BEGIN);
       gxplot (x1,y1,3);
       for (ln=lnmin; ln<lnmax+1.0; ln+=2.0) {
         gxconv (ln,lt,&x1,&y1,2);
         gxplot (x1,y1,2);
       }
+      gxsignal(GX_GRIDLINE_END);
     }
     return;
   }  /* end of robinson projection case */
@@ -6895,8 +6913,10 @@ gadouble v,s,plincr,lndif,ln,lt,cs;
   for (v=lnstrt; v<lnend+lnincr*0.5; v+=lnincr) {
     gxconv (v,ltmin,&x1,&y1,2);
     gxconv (v,ltmax,&x2,&y2,2);
+    gxsignal(GX_GRIDLINE_BEGIN);
     gxplot (x1,y1,3);
     gxplot (x2,y2,2);
+    gxsignal(GX_GRIDLINE_END);
   }
 
   if (lndif>180.0) plincr = lndif/100.0;
@@ -6904,11 +6924,13 @@ gadouble v,s,plincr,lndif,ln,lt,cs;
   else plincr = lndif/25.0;
   for (v=ltstrt; v<ltend+ltincr*0.5; v+=ltincr) {
     gxconv (lnmin,v,&x1,&y1,2);
+    gxsignal(GX_GRIDLINE_BEGIN);
     gxplot (x1,y1,3);
     for (s=lnmin+plincr; s<lnmax+plincr*0.5; s+=plincr) {
       gxconv (s,v,&x1,&y1,2);
       gxplot (x1,y1,2);
     }
+    gxsignal(GX_GRIDLINE_END);
   }
 
   /* Plot circular frame if user requested such a thing */
@@ -7098,6 +7120,7 @@ char *vu;
 
   v = r;
   vu = ru;
+  gxsignal(GX_GRID_BEGIN);
   for (j=1; j<=js; j++) {
     for (i=1; i<=is; i++) {
       if (*vu != 0) {
@@ -7138,6 +7161,7 @@ char *vu;
       v++; vu++;
     } 
   }
+  gxsignal(GX_GRID_END);
 }
 
 /* Direct image map to X display.  Bypasses metafile (ie, no refresh on

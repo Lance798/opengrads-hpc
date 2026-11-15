@@ -153,6 +153,7 @@ char *cdat;
   yc = y + d*sin(ang);
   cdat += 5;
   ipen = 3;
+  gxsignal(GX_CHARACTER_BEGIN);
   for (i=1; i<cnt; i++) {
     ic = (gaint)*cdat;
     jc = (gaint)*(cdat+1);
@@ -176,6 +177,7 @@ char *cdat;
     }
     cdat += 2;
   }
+  gxsignal(GX_CHARACTER_END);
   return(w);
 }
 

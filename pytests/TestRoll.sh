@@ -69,7 +69,7 @@ for name,setup,shape,axes in cases:
         requests.append(dict(data=base,shape=shape,axis=axes[axis],shift=str(s)))
     command=setup+'\n'+''.join(f'd roll(f,{s},{axis})\n' for axis,s in specs)+'d roll(roll(f,-2,x),3,y)\nd f\n'
     nested=expected(expected(base,shape,axes['x'],-2),shape,axes['y'],3)
-    for n in (1,4,8):
+    for n in (1,4):
         actual=run(command,n);assert len(actual)==len(wanted)+2
         for a,b in zip(actual,wanted+[nested,base]):same(a,b);samples+=len(a)
     print('ROLL analytic values/masks/extent passed:',name,flush=True)
@@ -95,7 +95,7 @@ raw=[float((i*37)%8192)/16 for i in range(513*129)];raw[:8]=values[:8]
 (root/'large.dat').write_bytes(struct.pack('='+str(len(raw))+'f',*raw))
 large_specs=[('f',None,0),('roll(f,1,x)',1,1),('roll(f,-19,x)',1,-19),('roll(f,7,y)',0,7),('roll(f,-130,y)',0,-130)]
 reference=None
-for n in (1,4,8):
+for n in (1,4):
     body='set x 1 513\nset y 1 129\nset z 1\nset t 1\n'
     paths=[]
     for i,(expr,axis,shift) in enumerate(large_specs):
@@ -125,5 +125,5 @@ json.dump(out,sys.stdout)
     print('NumPy oracle passed:',len(requests),'value/mask permutations',flush=True)
 print(f'ROLL passed: {samples} analytic values, masks/nonfinite/signed-zero, '
       'selected extent, metadata, nesting, arbitrary integer shifts, error recovery; '
-      '1/4/8 threads and complete parallel-grid float32 bit comparisons.')
+      '1/4 threads and complete parallel-grid float32 bit comparisons.')
 PY

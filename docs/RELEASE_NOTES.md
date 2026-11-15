@@ -1,3 +1,95 @@
+## opengrads-hpc 1.0.16
+
+This release improves interactive history and completion, adds convenient
+dimension selection and animation steps, and reports the work performed by
+the last analysis command. Vector exports follow the canvas orientation and
+use fewer objects for filled grids and text. The GrADS baseline remains
+`2.2.1.oga.1`.
+
+### Added in 1.0.16
+
+- **Prefix history search.** Up/Down recall commands matching the text from
+  the line start to the cursor, retaining the prefix across repeated arrows
+  and restoring the original draft at the newer end. Empty input keeps
+  ordinary recall. Ctrl-C clears input and search state, and `.inputrc`
+  arrow bindings keep priority. System inputrc defaults no longer restore
+  ordinary arrows over the application default. See [PROMPT.md](PROMPT.md).
+
+- **Dimension endpoints and animation steps.** Indexed SET dimensions accept
+  the corresponding `nx/ny/nz/nt/ne`, `last`, and checked arithmetic expressions
+  with decimal coefficients, rounded once to the nearest integer grid index.
+  `set lon/lat/lev` accept `first` and `last` in file grid order. The expression
+  and script function `dimsize(axis <,file#>)` returns full descriptor sizes.
+  `set loopincr N` samples built-in animation every N grid steps; `c` resets
+  it to 1, while `cc` and `swap` retain it. See [DIMENSIONS.md](DIMENSIONS.md).
+
+- **Last-command diagnostics.** `q performance` reports the last DISPLAY or
+  DEFINE's wall/evaluation/output time, observed input backends and read paths,
+  actual time-worker dispatch and pool reuse, and labeled worker-workspace
+  estimates and parent lifetime RSS. Recording adds no ordinary output and
+  leaves progress/graphics behavior unchanged. See [QUERY_PERFORMANCE.md](QUERY_PERFORMANCE.md).
+
+- **Context-aware completion.** The first Tab offers all matching commands,
+  scripts, directories, files, variables and functions in colored groups.
+  Completion supports scripts along `GASCRP`, shell commands and paths,
+  nested directories and explicit paths, and caches directory listings.
+  Custom Tab bindings remain supported. See [PROMPT.md](PROMPT.md).
+
+- **Background-only transparency.** `gxprint plot.svg transparent` omits the
+  page background while retaining black/white data and text. It also works
+  with PDF, PS, EPS and Cairo PNG. The existing `-t color#` continues to make
+  that color transparent wherever it is drawn. See [VECTOR_OUTPUT.md](VECTOR_OUTPUT.md).
+
+### Improved in 1.0.16
+
+- Interactive terminal sessions load and save history automatically, including
+  on Ctrl-D, and start with color enabled. `OPENGRADS_HISTORY=0` and
+  `OPENGRADS_COLOR=0` opt out; explicit history paths retain priority.
+- GitHub release descriptions contain only the matching version's notes.
+  The complete changelog remains in this repository.
+- Release regressions use a four-core budget, and terminal checks wait for
+  prompt output rather than depending on short fixed startup delays.
+- macOS packaging reports signing and smoke-test progress, limits their run
+  time, and retains logs and timeout stack samples as CI failure artifacts.
+  Terminal smoke tests use nonblocking position queries.
+- Vector `grfill` combines adjacent same-color cells and groups disconnected
+  regions into compound paths. `shaded`/`shade2` and `shade2b` group regions
+  and unite shared interior boundaries into outer/hole rings, removing only
+  exactly collinear vertices while preserving contour shape. PDF/SVG also compact
+  positive partial-alpha fills within each display pass. Unsupported states
+  retain their original rendering; PNG and screen plotting are unchanged.
+- Each complete coordinate gridline uses one stroked vector path, preserving
+  its dashed segments, projected curve vertices and clipped gaps. Different
+  gridlines remain separate, including when their colors are partially transparent.
+- Hershey vector text uses one path per visible character, with disconnected
+  strokes as subpaths. Partially transparent crossing strokes within a
+  character share one opacity. Native Cairo fonts retain their representation.
+
+### Fixed in 1.0.16
+
+- `vvmtopo` restores the caller's X/Y/Z/T/E selection after creating terrain
+  fields, including when explicit grid dimensions were supplied.
+- Ctrl-C clears both visible input and saved history-search state. It does
+  not restore cancelled drafts or consume the next key.
+- Source and out-of-tree build launchers support color-disabled startup with
+  macOS system Bash 3.2, including the headless release regressions.
+- Editing a recalled prefix and searching again preserves earlier history
+  entries with Readline 8.3, including Homebrew builds on macOS. Prefix recall
+  reads matching entries independently of Readline's editable history cursor.
+- PDF, PS and EPS follow the canvas orientation. Page margins scale both axes
+  uniformly and center the figure; PS/EPS bounds include transparent margins.
+- Export backgrounds cover the full page, including margins. Explicit white
+  or black overrides custom backgrounds, and failed exports restore temporary
+  transparency and drawing state. Interactive output supports separate
+  display and printing contexts.
+- `color.gs` reports invalid palettes, including `-kind shaded`, before
+  changing plot settings. Use a gradient such as `-kind black->white` with
+  `-alpha 125` for partially transparent shading.
+
+Linux x86_64, Linux aarch64 and macOS arm64 remain supported. Existing
+numeric coordinate selections and data calculations keep their behavior;
+animation steps affect the built-in display loop only.
+
 ## opengrads-hpc 1.0.15
 
 This release expands time-worker expressions to BP5 and cross-file inputs,

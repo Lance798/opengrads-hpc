@@ -38,6 +38,11 @@ everything, runs the BP5, SDF, OpenMP, and undo regression tests, and writes a
 relocatable archive to `release-dist`. It is the same script CI runs, so it is
 the best-tested path.
 
+Regression suites use at most four calculation cores to match the CI CPU
+budget, retaining serial references and two-/four-core worker checks.
+`OPENGRADS_BUILD_JOBS` controls compilation parallelism separately; it does
+not select the core counts exercised by the tests.
+
 Use the steps below instead if you want a development build you can rebuild
 incrementally.
 

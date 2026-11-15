@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix='opengrads-binary-halo.') as directory:
         ctl.write_text('dset ^'+endian+'.dat\n'+('options byteswapped\n' if endian=='swapped' else '')+
             'undef -9999\nxdef 256 linear 10 .1\nydef 256 linear -60 .25\n'
             'zdef 4 levels 50 150 400 1000\ntdef 3 linear 00z01jan2000 1hr\nvars 1\nf 4 99 Field\nendvars\n')
-        for threads in (1,8):
+        for threads in (1,4):
             env=dict(os.environ,OPENGRADS_BUILD_ROOT=build,GA_PROGRESS='off',OPENGRADS_COLOR='0')
             result=subprocess.run([launcher,'-bl','-d','gxdummy','-h','gxdummy'],
                 input='open '+str(ctl)+'\nset threads '+str(threads)+'\nset gxout print\nset prnopts %.17g 32 1\n'+commands,

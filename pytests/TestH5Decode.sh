@@ -84,20 +84,19 @@ for name in variants+['corrupt','badzip']:
        'set x 17 241\nset y 9 119\nd zint(f,125.25,5378.75)\n'+\
        'set x 0 259\nset y 0 131\nd zint(f)\n'
     _,reference=run(ctl,command,1,True)
-    for n in (4,16):
+    for n in (2,4):
         text,actual=run(ctl,command,n);compare(actual,reference)
         assert ('HDF5 parallel chunks=' in text)==(name in eligible),(name,n,text[-1000:])
     print('HDF5 decode passed:',ctl.name,flush=True)
 
-# A larger team, a single varying dimension, and byte-identical graphics.
+# Explicit fallback, a single varying dimension, and byte-identical graphics.
 ctl=ctls['float',False]
-compare(run(ctl,'d zint(f)',128)[1],run(ctl,'d zint(f)',1,True)[1])
-text,a=run(ctl,'d zint(f)',16,True);assert 'HDF5 parallel chunks=' not in text
+text,a=run(ctl,'d zint(f)',4,True);assert 'HDF5 parallel chunks=' not in text
 compare(a,run(ctl,'d zint(f)',1,True)[1])
-text,a=run(ctl,'set y 3\nd zint(f)',16);assert 'HDF5 parallel chunks=' not in text
+text,a=run(ctl,'set y 3\nd zint(f)',4);assert 'HDF5 parallel chunks=' not in text
 compare(a,run(ctl,'set y 3\nd zint(f)',1,True)[1])
 image=root/'parallel.png';reference=root/'native.png'
-run(ctl,'set gxout shaded\nd zint(f)\nprintim '+str(image)+' x640 y480',16,graphics=True)
+run(ctl,'set gxout shaded\nd zint(f)\nprintim '+str(image)+' x640 y480',4,graphics=True)
 run(ctl,'set gxout shaded\nd zint(f)\nprintim '+str(reference)+' x640 y480',1,True,graphics=True)
 assert image.read_bytes()==reference.read_bytes(),'decoded graphic differs'
 

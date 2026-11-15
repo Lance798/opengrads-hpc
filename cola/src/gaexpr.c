@@ -892,6 +892,10 @@ size_t sz;
   defined=0;
   if (!dotflg) {
     pfi = getdfn(name,pst);
+    if (pfi) {
+      ga_perf_source(pfi);
+      ga_perf_path("defined-array lookup");
+    }
     if (pfi!=NULL) defined=1;
   }
 

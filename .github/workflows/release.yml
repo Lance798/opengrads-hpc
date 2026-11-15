@@ -24,6 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
       - uses: actions/download-artifact@v8
         with:
           pattern: opengrads-*
@@ -39,11 +43,17 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare notes for this version only
+        run: |
+          python3 release/release_notes.py \
+            --version "$(cat release/VERSION)" \
+            --output "${RUNNER_TEMP}/release-notes.md"
+
       - name: Create release and upload archives
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" artifacts/* \
             --title "opengrads-hpc $(cat release/VERSION)" \
-            --notes-file docs/RELEASE_NOTES.md \
+            --notes-file "${RUNNER_TEMP}/release-notes.md" \
             --repo "${GITHUB_REPOSITORY}"

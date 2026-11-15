@@ -109,7 +109,7 @@ for ctl in ctls:
         if expr.endswith('(f*rhop)'):assert 'count=1 ' in text,'duplicate profile copied twice'
     command=init+xy+'define answer=qvsat((150+f/200)*pi,pp)*scale\n'+\
         '\n'.join(f'set z {z}\nd answer' for z in range(1,5))
-    for n in (2,8):check(ctl,command,n=n)
+    for n in (2,4):check(ctl,command,n=n)
     expr='aave(zint(f*rhop),x=1,x=16,y=1,y=12)'
     check(ctl,init+point+'define answer='+expr+'\nd answer\nd '+expr+'\n',2)
     # All input-time selectors dispatch the full expression with definitions.

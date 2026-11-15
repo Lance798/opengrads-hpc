@@ -27,6 +27,20 @@ archive_base="opengrads-hpc-$dist_version-macos-$machine"
 bundle_root="$output_root/$archive_base"
 lib_root="$bundle_root/lib"
 plugin_root="$bundle_root/plugins"
+package_python="$(command -v python3)"
+package_log_root="$output_root/packaging-logs"
+mkdir -p "$package_log_root"
+
+# Keep progress on stderr: most smoke tests capture stdout for assertions.
+# Logs live outside the archive and survive the temporary smoke directory.
+checked()
+{
+  local label="$1" limit="$2"
+  shift 2
+  "$package_python" "$repo_root/release/run-checked.py" \
+    --label "$label" --timeout "$limit" --log-dir "$package_log_root" "$@"
+}
+printf '[package] Collecting macOS bundle and dependencies.\n' >&2
 
 rm -rf -- "$bundle_root"
 mkdir -p "$bundle_root/bin" "$lib_root" "$plugin_root" "$bundle_root/etc" \
@@ -239,6 +253,8 @@ relocate()
   local rpath="$2"
   local install_name reference soname
 
+  printf '[package] Relocating %s\n' "$binary" >&2
+
   install_name="$(otool -D "$binary" | awk 'NR > 1 { print; exit }')"
   if [[ -n "$install_name" ]]; then
     install_name_tool -id "@rpath/$(basename -- "$binary")" "$binary"
@@ -257,7 +273,7 @@ relocate()
   done < <(otool -L "$binary" | awk 'NR > 1 { print $1 }')
 
   install_name_tool -add_rpath "$rpath" "$binary" 2>/dev/null || true
-  codesign --force --sign - "$binary" >/dev/null 2>&1
+  checked "sign-$(basename -- "$binary")" 60 -- codesign --force --sign - "$binary"
 }
 
 relocate "$bundle_root/bin/grads" "@executable_path/../lib"
@@ -273,7 +289,7 @@ done
 smoke_root="$(mktemp -d /tmp/opengrads-macos-smoke.XXXXXX)"
 trap 'rm -rf -- "$smoke_root"' EXIT
 
-smoke_output="$(env -i HOME="$smoke_root" PATH=/usr/bin:/bin \
+smoke_output="$(checked headless-cairo 90 -- env -i HOME="$smoke_root" PATH=/usr/bin:/bin \
   OPENGRADS_COLOR=0 "$bundle_root/opengrads" -bl -d gxdummy -h Cairo <<GRADS
 q config
 q threads
@@ -293,7 +309,7 @@ grep -Fq 'clevs= 0 1 2 3 4 5 6 7 8 9 10' <<< "$smoke_output"
 # A script of the user's own by the same name comes before the bundled one.
 mkdir -p "$smoke_root/mine"
 printf "function main(args)\nsay 'user color 'args\n" > "$smoke_root/mine/color.gs"
-user_output="$(env -i HOME="$smoke_root" PATH=/usr/bin:/bin GASCRP="$smoke_root/mine" \
+user_output="$(checked user-script 60 -- env -i HOME="$smoke_root" PATH=/usr/bin:/bin GASCRP="$smoke_root/mine" \
   OPENGRADS_COLOR=0 "$bundle_root/opengrads" -bl -d gxdummy -h gxdummy <<'GRADS'
 color 0 10
 quit
@@ -313,8 +329,8 @@ fi
 # The X displays load with the bundled X libraries alone: with no X server
 # they get as far as connecting to it.
 for display in Cairo X11; do
-  smoke_output="$(env -i HOME="$smoke_root" PATH=/usr/bin:/bin \
-    OPENGRADS_COLOR=0 "$bundle_root/opengrads" -l -d "$display" 2>&1 <<< quit || true)"
+  smoke_output="$(checked "no-x-$display" 60 --allow-failure -- env -i HOME="$smoke_root" PATH=/usr/bin:/bin \
+    OPENGRADS_COLOR=0 "$bundle_root/opengrads" -l -d "$display" <<< quit)"
   if ! grep -Fq 'Unable to connect to X server' <<< "$smoke_output"; then
     printf 'The %s display plug-in did not load from the macOS bundle.\n' "$display" >&2
     printf '%s\n' "$smoke_output" >&2
@@ -329,14 +345,15 @@ done
 for how in file inline picked; do
   case "$how" in
     file) term_args=(-l -d Term -g 400x300); term_env=(GA_TERM_MODE=file) ;;
-    inline) term_args=(-l -d Term -g 400x300); term_env=(GA_TERM_MODE=inline) ;;
+    inline) term_args=(-l -d Term -g 400x300); term_env=(GA_TERM_MODE=inline GA_TERM_PROTOCOL=iterm2) ;;
     picked) term_args=(); term_env=(GA_TERM_MODE=file OPENGRADS_TERM=1) ;;
   esac
-  smoke_output="$(env -i HOME="$smoke_root" PATH=/usr/bin:/bin TMPDIR="$smoke_root" \
-    OPENGRADS_COLOR=0 GA_TERM_DIR="$smoke_root/term-$how" GA_TERM_SYNC=1 "${term_env[@]}" \
-    "$bundle_root/opengrads" ${term_args[@]+"${term_args[@]}"} 2>&1 <<GRADS || true
+  smoke_output="$(checked "term-$how" 90 -- env -i HOME="$smoke_root" PATH=/usr/bin:/bin TMPDIR="$smoke_root" \
+    OPENGRADS_COLOR=0 GA_TERM_DIR="$smoke_root/term-$how" GA_TERM_SYNC=1 \
+    GA_TERM_LOG="$package_log_root/term-$how.driver.log" "${term_env[@]}" \
+    "$bundle_root/opengrads" ${term_args[@]+"${term_args[@]}"} <<GRADS
 draw recf 1 1 6 5
-q pos
+q pos nowait
 quit
 GRADS
 )"
@@ -355,25 +372,30 @@ printf 'The Term display drew from the macOS bundle.\n'
 
 # Read all supported Blosc codecs through the relocated archive, not the
 # build prefix. This proves the packaged ADIOS2 and Blosc2 work together.
-OPENGRADS_ADIOS2_ROOT="$adios2_root" \
-OPENGRADS_DEPS_ROOT="$deps_root" \
-OPENGRADS_LAUNCHER="$bundle_root/opengrads" \
+checked bp5-compression 300 -- env OPENGRADS_ADIOS2_ROOT="$adios2_root" \
+  OPENGRADS_DEPS_ROOT="$deps_root" OPENGRADS_LAUNCHER="$bundle_root/opengrads" \
   "$repo_root/pytests/TestBP5Compression.sh"
 
 # Where XQuartz is installed, draw in a window on its virtual X server and
 # print from that session.
 xvfb=/opt/X11/bin/Xvfb
 if [[ -x "$xvfb" ]]; then
-  "$xvfb" :73 -nolisten tcp -screen 0 1280x1024x24 > "$smoke_root/xvfb.log" 2>&1 &
+  printf '[package] Starting XQuartz Xvfb.\n' >&2
+  "$xvfb" :73 -nolisten tcp -screen 0 1280x1024x24 > "$package_log_root/xvfb.log" 2>&1 &
   xvfb_pid=$!
   trap 'kill "$xvfb_pid" 2>/dev/null || true; rm -rf -- "$smoke_root"' EXIT
   for i in $(seq 1 50); do
     [[ -S /tmp/.X11-unix/X73 ]] && break
     sleep 0.2
   done
+  if [[ ! -S /tmp/.X11-unix/X73 ]] || ! kill -0 "$xvfb_pid" 2>/dev/null; then
+    printf 'XQuartz Xvfb did not start.\n' >&2
+    cat "$package_log_root/xvfb.log" >&2
+    exit 1
+  fi
   for display in Cairo X11; do
-    smoke_output="$(env -i HOME="$smoke_root" PATH=/usr/bin:/bin DISPLAY=:73 \
-      OPENGRADS_COLOR=0 "$bundle_root/opengrads" -l -d "$display" 2>&1 <<GRADS || true
+    smoke_output="$(checked "window-$display" 90 -- env -i HOME="$smoke_root" PATH=/usr/bin:/bin DISPLAY=:73 \
+      OPENGRADS_COLOR=0 "$bundle_root/opengrads" -l -d "$display" <<GRADS
 draw recf 1 1 6 5
 draw string 2 6 $display window
 printim $smoke_root/window-$display.png x800 y600
@@ -394,13 +416,13 @@ else
 fi
 
 mkdir -p "$output_root"
-version_output="$(env -i PATH=/usr/bin:/bin "$bundle_root/opengrads" --version)"
+version_output="$(checked version 30 -- env -i PATH=/usr/bin:/bin "$bundle_root/opengrads" --version)"
 if [[ "$version_output" != "$(cat "$bundle_root/VERSION")" ]]; then
   printf 'Packaged --version does not match VERSION metadata:\n%s\n' "$version_output" >&2
   exit 1
 fi
 
-tar -C "$output_root" -czf "$output_root/$archive_base.tar.gz" "$archive_base"
+checked archive 300 -- tar -C "$output_root" -czf "$output_root/$archive_base.tar.gz" "$archive_base"
 (
   cd "$output_root"
   shasum -a 256 "$archive_base.tar.gz" > "$archive_base.tar.gz.sha256"

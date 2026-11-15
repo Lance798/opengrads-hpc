@@ -57,4 +57,10 @@ case "$library_variable" in
   *) export LD_LIBRARY_PATH="$runtime_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
 esac
 
+export OPENGRADS_COLOR="${OPENGRADS_COLOR:-1}"
+# Bash 3.2 treats an empty array as unset under nounset. Prepend optional
+# flags to the positional arguments so color-disabled startup works there.
+if [[ "$OPENGRADS_COLOR" != 0 ]]; then
+  set -- -C "${OPENGRADS_COLOR_SCHEME:-1}" "$@"
+fi
 exec "$grads_binary" "$@"

@@ -7,6 +7,20 @@
 
 #define COLORMAX 2048
 
+/* Export-only background selection and semantic replay boundaries. Older
+   display backends ignore these signals and keep their existing rendering. */
+#define GX_BG_TRANSPARENT (-998)
+#define GX_BACKGROUND_BEGIN 64
+#define GX_BACKGROUND_END 65
+#define GX_GRID_BEGIN 66
+#define GX_GRID_END 67
+#define GX_SHADE_BEGIN 68
+#define GX_SHADE_END 69
+#define GX_CHARACTER_BEGIN 70
+#define GX_CHARACTER_END 71
+#define GX_GRIDLINE_BEGIN 72
+#define GX_GRIDLINE_END 73
+
 /* HBUFSZ is the size of the metafile output buffer in
    number of short integers.  The metafile buffer should be as
    large as is convenient for the target system.  Frames larger

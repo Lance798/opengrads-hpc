@@ -47,6 +47,7 @@ gaint gxprint (char *fnout, gaint xin, gaint yin, gaint bwin, gaint fmtflg,
 
   /* Make sure we don't try to print an unsupported format */
   if (fmtflg!=5 && fmtflg!=6 && fmtflg!=7) return(9);
+  if (bwin==GX_BG_TRANSPARENT) return(12);
 
   /* initialize the image output */
   rc = gxGDinit(xrsize, yrsize, xin, yin, bwin, bgImage);

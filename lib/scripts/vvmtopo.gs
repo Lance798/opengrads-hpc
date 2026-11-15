@@ -5,7 +5,8 @@
 * Results: topou, topov, topow and the corrected working copy toposrc.
 * Every input zero is treated as 1; other values are preserved in toposrc.
 * topou=max(this,right), topov=max(this,next-row), topow=toposrc.
-* Uses the full native default-file grid at Z=1,T=1 and leaves that domain set.
+* Uses the full native default-file grid at Z=1,T=1, then restores X/Y/Z/T/E.
+* The original dimension environment is also restored after calculation errors.
 * Input must be finite, fully defined terrain elevations/level indices.
 * Periodic neighbors are copied exactly by ROLL. Closed boundaries use
 * forward CDIFF, validated on small integer VVM terrain indices.
@@ -36,6 +37,33 @@ function main(args)
     say 'Error: could not determine Xsize/Ysize from q file.'
     return
   endif
+  'q dims'
+  if (rc != 0)
+    say 'Error: could not save the dimension environment.'
+    return
+  endif
+  dims = result
+  i = 1
+  while (i <= 5)
+    line = sublin(dims,i+1)
+    axis = subwrd(line,1)
+    if (subwrd(line,3) = 'varying')
+      saved.i = 'set 'axis' 'subwrd(line,11)' 'subwrd(line,13)
+    else
+      saved.i = 'set 'axis' 'subwrd(line,9)
+    endif
+    i = i+1
+  endwhile
+  status = build(fld,px,py,nx,ny)
+  i = 1
+  while (i <= 5)
+    saved.i
+    i = i+1
+  endwhile
+  return
+
+* Keep calculation returns inside this function so main always restores dims.
+function build(fld,px,py,nx,ny)
   'set x 1 'nx
   'set y 1 'ny
   'set z 1'

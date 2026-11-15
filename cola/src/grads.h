@@ -311,6 +311,7 @@ struct gacmn {
   char xgeom[100];           /* geometry string for size of X window on startup */
   char gxdopt[16];           /* Name of graphics display back end     */
   char gxpopt[16];           /* Name of graphics printing back end    */
+  gaint loopincr;            /* Animation step; appended for ABI offsets */
 };
 
 /* Sructure for string substitution in templating -- the %ch template.  
@@ -878,6 +879,9 @@ gaint gadraw (char *, struct gacmn *);
 gaint gardrw (char *, struct gacmn *);
 gaint gaexec (char *, struct gacmn *);
 char *gagsdo (char *, gaint *);
+gaint gagsdimsize (const char *, const char *, gaint *);
+gaint gadimsize (struct gafile *, struct gafile *, const char *, const char *, gaint *);
+gaint gaposint (const char *, gaint *);
 gaint gadef (char *, struct gacmn *, gaint);
 gaint gaudef (char *, struct gacmn *);
 gaint gamodf (char *, struct gacmn *);
@@ -914,6 +918,23 @@ void gaprogpulse (void);
 void gaprogend (gaint);
 void gaprogpause (void);
 void gaprogreset (void);
+
+/* Last completed analysis command; diagnostic counters stay in the parent. */
+#define GA_PERF_EVAL 0
+#define GA_PERF_PLOT 1
+gaint ga_perf_begin (const char *, gadouble);
+void ga_perf_end (gaint, gaint);
+void ga_perf_start (gaint);
+void ga_perf_stop (gaint);
+void ga_perf_query (void);
+void ga_perf_source (struct gafile *);
+void ga_perf_note (const char *);
+void ga_perf_path (const char *);
+void ga_perf_workers (gaint, gaint, gadouble, gadouble, gadouble);
+void ga_perf_completed (void);
+void ga_perf_spatial (void);
+void ga_perf_kernel (void);
+gadouble ga_perf_clock (void);
 #if READLINE == 1
 gaint gahistory(char*, char *, struct gacmn *);
 #endif /* READLINE == 1 */

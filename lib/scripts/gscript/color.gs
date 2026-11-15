@@ -201,6 +201,11 @@ function color( args )
 
 *** special kind
   kind = spcol( kind )
+  kinderror = checkkind( kind )
+  if( kinderror != '' )
+    say 'error in color.gs: 'kinderror
+    return
+  endif
 
 ***** Parameter check *****
 
@@ -451,6 +456,35 @@ return ( kind2 )
 *   num  : order
 *
 **********************************************
+function checkkind( kind )
+  count = 0
+  while( 1 )
+    color = getcol( kind, count+1 )
+    if( color = '' ) ; break ; endif
+* Strip an optional -(n) interval suffix, keeping direct RGB(A) tuples.
+    l = math_strlen( color )
+    if( substr(color,l,1) = ')' )
+      while( l > 1 & substr(color,l,1) != '(' )
+        l = l - 1
+      endwhile
+      if( l > 1 ) ; color = substr(color,1,l-2) ; endif
+    endif
+    r = colornum(color,'r')
+    g = colornum(color,'g')
+    b = colornum(color,'b')
+    if( valnum(r) = 0 | valnum(g) = 0 | valnum(b) = 0 )
+      return 'invalid color in -kind: 'color
+    endif
+    if( r < 0 | r > 255 | g < 0 | g > 255 | b < 0 | b > 255 )
+      return 'unknown or invalid color in -kind: 'color
+    endif
+    count = count + 1
+  endwhile
+  if( count < 2 )
+    return '-kind requires a color-list name or at least two colors joined with ->'
+  endif
+return ''
+
 function getcol( kind, num )
   ret = ''
   length = math_strlen( kind );
