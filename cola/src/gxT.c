@@ -180,6 +180,7 @@ static gaint iterm=0;                       /* the terminal is iTerm2 */
 static gaint progressopt=1;                 /* 0=off 1=auto 2=on */
 static char pane[64];                       /* tmux pane id of the viewer */
 static gaint panefd=-1;                     /* the viewer pane's terminal */
+static char panetty[256];                   /* and its name, to read clicks from */
 static gaint tmuxkeeps=-1;                  /* tmux never drops passthrough (3.3+):
                                                1 yes, 0 no, -1 not asked yet */
 static gaint tmuxall=0;                     /* the pane has allow-passthrough all (3.4+) */
@@ -455,6 +456,7 @@ gaint i,rc,sizearg;
     return (1);
   }
   cloexec(panefd);
+  snprintf(panetty,sizeof(panetty),"%s",tty);
 
   /* Everything shown in the pane comes from here, in order; the viewer
      only keeps the pane open. */
@@ -2796,8 +2798,12 @@ char fn[700];
       9 -- flush the request buffer
    There are no events here, so only clearing matters. */
 
+static struct { gaint on,type,mb; gadouble xlo,ylo,xhi,yhi; } rbands[32];
+
 void gxdfrm (gaint iact) {
+gaint i;
   if (iact==0 || iact==1 || iact==7) {
+    for (i=0; i<32; i++) rbands[i].on = 0;   /* as X forgets its widgets */
     frameend(0);                             /* the drawn page is a finished frame */
     gxCfrm();
     dirty = 1;
@@ -2805,13 +2811,85 @@ void gxdfrm (gaint iact) {
   }
 }
 
-/* There is no mouse. When asked to wait for a click, show the picture and
-   wait for Enter instead, so scripts that pause on "q pos" still pause. */
+/* Clicks. In a tmux pane (GA_TERM_MODE=tmux) a script waiting on "q pos"
+   gets a click in the picture: tmux passes a click in the picture pane to
+   that pane once the pane asks for mouse reports (whatever tmux's own mouse
+   option), and GrADS reads them from the pane's terminal, which the viewer
+   there never reads. A report gives the cell clicked; the picture fills
+   the pane as the page fits the pane's cells, from its top left corner, so
+   the centre of the cell is a point on the page, good to a cell. A press
+   inside a rubber band (set rband) waits for the release and gives both
+   corners, as X does, without the band drawn while dragging. Enter at the
+   prompt answers too, as does anything where there is no pane: then there
+   is no mouse, and only Enter. */
+
+static gaint mousepoint (gaint col, gaint row, gadouble *x, gadouble *y) {
+struct winsize ws;
+gadouble ca,w,h,a;
+  if (ioctl(panefd,TIOCGWINSZ,&ws) || ws.ws_col<1 || ws.ws_row<2) return (1);
+  ca = (cellw>0 && cellh>0) ? (gadouble)cellh/cellw : 2.0;   /* cell height / width */
+  a = xsize/ysize;
+  w = ws.ws_col;                            /* the page in cells, fitted to the pane */
+  h = w/(a*ca);
+  if (h > ws.ws_row-1) { h = ws.ws_row-1; w = h*a*ca; }
+  *x = (col-0.5)/w*xsize;
+  *y = ysize - (row-0.5)/h*ysize;
+  return (0);
+}
+
+/* The next mouse report from fd within t seconds (t<0: no limit): 1 for a
+   press, 0 for a release, -1 for none; b is GrADS's button (1 left, 2
+   middle, 3 right). Motion and wheel reports are skipped. A newline from
+   stdin (sin>=0) ends the wait too, returning 2. */
+
+static gaint mousenext (gaint fd, gaint sin, double t, gaint *b, gaint *col, gaint *row) {
+char buf[64],c;
+gaint n=0,cb,cx,cy;
+fd_set rd;
+struct timeval tv;
+double end;
+  end = now()+t;
+  while (1) {
+    FD_ZERO(&rd);
+    FD_SET(fd,&rd);
+    if (sin>=0) FD_SET(sin,&rd);
+    if (t>=0) {
+      if (now()>=end) return (-1);
+      tv.tv_sec = (long)(end-now());
+      tv.tv_usec = (long)(((end-now())-tv.tv_sec)*1e6);
+    }
+    if (select((fd>sin ? fd : sin)+1,&rd,NULL,NULL,t>=0 ? &tv : NULL)<0) {
+      if (errno==EINTR) { if (intr) return (-1); continue; }
+      return (-1);
+    }
+    if (sin>=0 && FD_ISSET(sin,&rd)) {
+      if (read(sin,&c,1)!=1 || c=='\n' || c=='\r') return (2);
+      continue;
+    }
+    if (!FD_ISSET(fd,&rd) || read(fd,&c,1)!=1) continue;
+    if (n==0 && c!='\033') continue;
+    if (n<(gaint)sizeof(buf)-1) buf[n++] = c;
+    if (n>=2 && buf[1]!='[') { n = 0; continue; }
+    if (n>=3 && buf[2]!='<') { n = 0; continue; }
+    if (c!='M' && c!='m') continue;
+    buf[n] = '\0';
+    n = 0;
+    if (sscanf(buf+3,"%d;%d;%d",&cb,&cx,&cy)!=3) continue;
+    if (cb & (32|64)) continue;              /* motion, wheel */
+    *b = (cb&3)==0 ? 1 : ((cb&3)==1 ? 2 : 3);
+    *col = cx;
+    *row = cy;
+    return (c=='M');
+  }
+}
 
 void gxdbtn (gaint flag, gadouble *xpos, gadouble *ypos,
 	     gaint *mbtn, gaint *type, gaint *info, gadouble *rinfo) {
-char line[256];
-gaint i;
+static const char on[] = "\033[?1000h\033[?1006h", off[] = "\033[?1006l\033[?1000l";
+char line[256],*argv[6],*p;
+gaint i,fd,got,clicked,b=0,col=0,row=0,b2,col2,row2;
+struct termios saved,raw;
+gadouble x,y,x2,y2;
 
   *xpos = -999.9;
   *ypos = -999.9;
@@ -2821,9 +2899,67 @@ gaint i;
   for (i=0; i<4; i++) *(rinfo+i) = 0.0;
   if (batch || !flag) return;
   gxdidle();
-  printf("Terminal display has no mouse; press Enter to continue ");
+
+  /* commands from a file or pipe: the next line answers, as before */
+  fd = (mode==1 && panefd>=0 && panetty[0] && isatty(0)) ?
+       open(panetty,O_RDONLY|O_NOCTTY|O_NONBLOCK) : -1;
+  if (fd>=0 && tcgetattr(fd,&saved)) { close(fd); fd = -1; }
+  if (fd<0) {
+    printf("Terminal display has no mouse here; press Enter to continue ");
+    fflush(stdout);
+    if (fgets(line,sizeof(line),stdin)) *mbtn = 1;
+    return;
+  }
+  cloexec(fd);
+  raw = saved;
+  raw.c_lflag &= ~(ICANON|ECHO);
+  raw.c_cc[VMIN] = 1;
+  raw.c_cc[VTIME] = 0;
+  tcsetattr(fd,TCSANOW,&raw);
+  tcflush(fd,TCIFLUSH);
+  waitworker();                             /* the picture first, then the request */
+  if (write(panefd,on,sizeof(on)-1)<0) { /* then no clicks come; Enter still does */ }
+  printf("Click in the picture (or press Enter) ");
   fflush(stdout);
-  if (fgets(line,sizeof(line),stdin)) *mbtn = 1;
+
+  got = mousenext(fd,0,-1.0,&b,&col,&row);
+  clicked = got==1;
+  if (got==1 && !mousepoint(col,row,&x,&y)) {
+    *xpos = x;
+    *ypos = y;
+    *mbtn = b;
+    *type = 0;
+    for (i=0; i<32; i++)                    /* a rubber band: until the release */
+      if (rbands[i].on && (rbands[i].mb<0 || rbands[i].mb==b) &&
+          x>=rbands[i].xlo && x<=rbands[i].xhi && y>=rbands[i].ylo && y<=rbands[i].yhi) break;
+    if (i<32) {
+      *type = 2;
+      *info = i;
+      x2 = x; y2 = y;
+      while ((got=mousenext(fd,-1,-1.0,&b2,&col2,&row2))==1) ;
+      if (got==0 && !mousepoint(col2,row2,&x2,&y2)) {
+        if (x2<rbands[i].xlo) x2 = rbands[i].xlo;
+        if (x2>rbands[i].xhi) x2 = rbands[i].xhi;
+        if (y2<rbands[i].ylo) y2 = rbands[i].ylo;
+        if (y2>rbands[i].yhi) y2 = rbands[i].yhi;
+      }
+      *rinfo = x2;
+      *(rinfo+1) = y2;
+    } else while (mousenext(fd,-1,0.5,&b2,&col2,&row2)==1) ;   /* its release */
+  } else if (got==2) *mbtn = 1;
+  printf("\n");
+
+  if (write(panefd,off,sizeof(off)-1)<0) { /* the pane closes with GrADS anyway */ }
+  tcflush(fd,TCIFLUSH);
+  tcsetattr(fd,TCSANOW,&saved);
+  close(fd);
+  /* with tmux's mouse on, the click made the picture pane the active one:
+     give the keyboard back to GrADS */
+  p = getenv("TMUX_PANE");
+  if (clicked && p && *p) {
+    argv[0] = "tmux"; argv[1] = "select-pane"; argv[2] = "-t"; argv[3] = p; argv[4] = NULL;
+    runcmd(argv,NULL,0);
+  }
 }
 
 /* Drawing changes the visible picture, or in double-buffer mode the
@@ -2928,8 +3064,15 @@ void gxdrmu (gaint mnum, struct gdmu *pmu, gaint redraw, gaint nstat) {
   printf("Warning: The terminal display does not support drop menus\n");
 }
 
+/* A rubber band: a press inside it, in "q pos", gives both corners */
+
 void gxdrbb (gaint num, gaint type, gadouble xlo, gadouble ylo, gadouble xhi, gadouble yhi, gaint mbc) {
-  printf("Warning: The terminal display does not support rubber band widgets\n");
+  if (num<0 || num>31 || xlo>=xhi || ylo>=yhi) return;
+  rbands[num].on = 1;
+  rbands[num].type = type;
+  rbands[num].mb = mbc;
+  rbands[num].xlo = xlo; rbands[num].ylo = ylo;
+  rbands[num].xhi = xhi; rbands[num].yhi = yhi;
 }
 
 char *gxdlg (struct gdlg *qry) {
@@ -2938,6 +3081,7 @@ char *gxdlg (struct gdlg *qry) {
 }
 
 void gxrs1wd (int wdtyp, int wdnum) {
+  if (wdtyp==2 && wdnum>=0 && wdnum<32) rbands[wdnum].on = 0;   /* clear rband */
 }
 
 void gxdssv (int frame) {

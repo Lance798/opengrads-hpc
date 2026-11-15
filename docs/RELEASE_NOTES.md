@@ -6,6 +6,14 @@ the last analysis command. Vector exports follow the canvas orientation and
 use fewer objects for filled grids and text. The GrADS baseline remains
 `2.2.1.oga.1`.
 
+### Added since 1.0.16 (not yet released)
+
+- **Clicks in the terminal display.** In tmux, a script waiting on `q pos`
+  takes a click in the picture pane, and a drag inside a rubber band
+  (`set rband`), so the zoom scripts (`zoom`, `zoomin`, `zoomout`) work in
+  `-d Term` as with a window. The point is good to a character cell; Enter
+  still answers as before. See [TERMINAL.md](TERMINAL.md#limits).
+
 ### Added in 1.0.16
 
 - **Prefix history search.** Up/Down recall commands matching the text from

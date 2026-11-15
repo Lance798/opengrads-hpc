@@ -340,12 +340,18 @@ protocol. Pictures in parts need iTerm2 3.5 or newer.
 
 ## Limits
 
-- **No mouse.** `q pos` shows the picture and waits for Enter instead of a
-  click, so scripts that use it to pause still pause. It reports position
-  `-999.9 -999.9`.
-- **No widgets.** Buttons, drop menus, rubber bands, dialog boxes, and the
-  `screen` command need a window. They print a warning and do nothing, as
-  they do with the Cairo X display.
+- **The mouse, in the tmux pane only.** When a script waits on `q pos`,
+  click in the picture: GrADS reads the click in the picture pane and gives
+  the point on the page, to the nearest character cell. A press inside a
+  rubber band (`set rband`) gives both corners of the drag, though the band
+  is not drawn while dragging. So `zoom`, `zoomin`, `zoomout` and the like
+  work as with a window. Enter at the prompt answers too (position
+  `-999.9 -999.9`), and is the only answer inline and in file mode, where
+  there is no pane. With tmux's `mouse on` the click makes the picture pane
+  active; GrADS gives the keyboard back to its own pane.
+- **No other widgets.** Buttons, drop menus, dialog boxes, and the `screen`
+  command need a window. They print a warning and do nothing, as they do
+  with the Cairo X display.
 - `gxout imap` is not supported, as with the Cairo X display.
 - tmux redraws a pane from what it knows, and it does not know about an
   iTerm2 picture, or a sixel one it did not draw itself. After switching

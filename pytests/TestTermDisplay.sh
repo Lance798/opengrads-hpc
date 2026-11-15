@@ -1161,4 +1161,85 @@ width="$(sed -n 's/^sixel \([0-9]*\)x[0-9]* colours.*/\1/p' <<< "$result" | head
 printf '  pictures by terminal: kitty, Konsole, sixel, iTerm2, none; in tmux too (sixel: %s)\n' \
   "${how:-passed through}"
 
+# 14. Clicks: in the tmux pane, a script waiting on "q pos" takes a click in
+#     the picture, the cell's centre on the page; a press inside a rubber
+#     band and its release give both corners, so zoomin.gs zooms; Enter
+#     still answers; and with tmux's mouse on, the keyboard goes back to
+#     the GrADS pane. A terminal stand-in sends the clicks as SGR reports.
+cat > "$test_root/pos.gs" <<'GRADS_SCRIPT'
+'q pos'
+say 'POS 'result
+'set rband 21 box 0.25 0.25 10.75 7.75'
+'q pos'
+say 'BAND 'result
+GRADS_SCRIPT
+cat > "$test_root/click.py" <<'PYTHON'
+import os, pty, fcntl, termios, struct, subprocess, time, select, sys
+launcher, ctl, root, viewer, build, tmux = sys.argv[1:7]
+env = dict(os.environ, TERM='xterm-256color', OPENGRADS_COLOR='0', OPENGRADS_BUILD_ROOT=build,
+           GA_TERM_VIEWER=viewer, GA_TERM_PROTOCOL='iterm2', GA_TERM_LOG=root + '/term-click.log')
+for k in ('TMUX', 'TMUX_PANE', 'LC_TERMINAL', 'GA_TERM_TMUX_STEP'):
+    env.pop(k, None)
+if os.sep in tmux:
+    env['PATH'] = os.path.dirname(os.path.abspath(tmux)) + os.pathsep + env['PATH']
+tm = [tmux, '-S', root + '/tmux-click.sock', '-f', '/dev/null']
+subprocess.run(tm + ['new-session', '-d', '-s', 'c', '-x', '160', '-y', '45',
+               'cd ' + root + ' && ' + launcher + ' -l -d Term; sleep 30'], env=env, check=True)
+subprocess.run(tm + ['set', '-g', 'mouse', 'on'], env=env, check=True)
+m, s = pty.openpty()
+fcntl.ioctl(s, termios.TIOCSWINSZ, struct.pack('HHHH', 45, 160, 0, 0))
+c = subprocess.Popen(tm + ['attach', '-t', 'c'], stdin=s, stdout=s, stderr=s, env=env,
+                     start_new_session=True)
+def pump(t):
+    end = time.time() + t
+    while time.time() < end:
+        r, _, _ = select.select([m], [], [], 0.05)
+        if r:
+            os.read(m, 1 << 16)
+def keys(*k):
+    subprocess.run(tm + ['send-keys', '-t', 'c:0.0'] + list(k), env=env, check=True)
+pump(3)
+L, T = map(int, subprocess.run(tm + ['list-panes', '-t', 'c', '-F', '#{pane_left} #{pane_top}'],
+                               capture_output=True, text=True, env=env).stdout.split()[2:4])
+def click(col, row, release=None):          # within the picture pane, 1-based
+    os.write(m, b'\x1b[<0;%d;%dM' % (L + col, T + row)); pump(0.3)
+    if release:
+        col, row = release
+    os.write(m, b'\x1b[<0;%d;%dm' % (L + col, T + row)); pump(1.5)
+keys('open ' + ctl, 'Enter'); pump(1)
+keys('d ts', 'Enter'); pump(3)
+keys('run pos.gs', 'Enter'); pump(2)
+click(40, 10)
+click(10, 5, release=(60, 25))
+keys('zoomin ts', 'Enter'); pump(2)
+click(20, 8, release=(50, 22))
+keys('q dims', 'Enter'); pump(1)
+keys('q pos', 'Enter'); pump(1.5)
+keys('', 'Enter'); pump(1.5)
+active = subprocess.run(tm + ['display', '-p', '-t', 'c', '#{pane_index}'], capture_output=True,
+                        text=True, env=env).stdout.strip()
+print(subprocess.run(tm + ['capture-pane', '-p', '-J', '-t', 'c:0.0', '-S', '-300'],
+                     capture_output=True, text=True, env=env).stdout)
+print('active', active)
+keys('quit', 'Enter'); pump(1)
+c.terminate()
+subprocess.run(tm + ['kill-server'], capture_output=True, env=env)
+PYTHON
+result="$(cd "$test_root" && python3 "$test_root/click.py" "$launcher" "$model_ctl" "$test_root" \
+  "$viewer" "$build_root" "$tmux_bin" 2>&1)"
+result="$result"$'\n'"$(cat "$test_root/term-click.log" 2>/dev/null || true)"
+# an 80-column pane of cells twice as tall as wide: the page is 80 cells
+# across, 30.9 down; column 40 row 10 is 5.43 inches across, 5.89 up
+grep -q '^POS Position = 5.431[0-9]* 5.887[0-9]* 1 0$' <<< "$result" ||
+  fail 'a click in the picture did not give its point on the page' "$result"
+grep -q '^BAND Position = 1.306[0-9]* 7.262[0-9]* 1 2 21 8.181[0-9]* 1.762[0-9]*$' <<< "$result" ||
+  fail 'a drag inside a rubber band did not give both corners' "$result"
+grep -Eq 'Lon = 78\.5[0-9]* to 227\.0[0-9]*' <<< "$result" ||
+  fail 'zoomin.gs did not zoom to the box dragged in the picture' "$result"
+grep -q '^Position = -999.9 -999.9 1 -1$' <<< "$result" ||
+  fail 'Enter did not answer q pos' "$result"
+grep -qx 'active 0' <<< "$result" ||
+  fail 'with tmux mouse on, the keyboard did not go back to the GrADS pane' "$result"
+printf '  clicks in the picture: q pos, rubber band, zoomin, Enter\n'
+
 printf 'Terminal display checks passed\n'
